@@ -164,6 +164,9 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [context, setContext] = useState<UsageRecord | null>(null);
   const generation = useRef(0);
+  const inFlight = useRef<number | null>(null);
+  const pendingRefresh = useRef(false);
+  const connected = useRef(true);
   const current = useRef<UsageResult | null>(null);
   const choices = useRef<Pick<UsageResult, "agents" | "models">>({
     agents: [],
@@ -186,8 +189,14 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   };
 
   const load = useCallback(
-    async (refresh = false) => {
+    async function read(refresh = false) {
+      if (!connected.current) return;
+      if (inFlight.current !== null) {
+        pendingRefresh.current = true;
+        return;
+      }
       const request = ++generation.current;
+      inFlight.current = request;
       setLoading(true);
       setError(null);
       try {
@@ -209,6 +218,7 @@ export function UsagePage({ agentId }: { agentId?: number }) {
             failure.code !== "usage_changed"
           )
             throw failure;
+          if (request !== generation.current) return;
           data = await backend.usageQuery({
             ...filters,
             limit,
@@ -228,8 +238,17 @@ export function UsagePage({ agentId }: { agentId?: number }) {
         setLoading(false);
       } catch (failure) {
         if (request !== generation.current) return;
+        pendingRefresh.current = false;
         setError(failure instanceof Error ? failure.message : String(failure));
         setLoading(false);
+      } finally {
+        if (request === generation.current) {
+          inFlight.current = null;
+          if (pendingRefresh.current) {
+            pendingRefresh.current = false;
+            void read(true);
+          }
+        }
       }
     },
     [filters, limit, cursor],
@@ -239,8 +258,18 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     void load();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = backend.onEvent((event) => {
+      if (event.type.startsWith("connection.")) {
+        generation.current += 1;
+        inFlight.current = null;
+        pendingRefresh.current = false;
+        clearTimeout(timer);
+        connected.current = event.type === "connection.restored";
+        setLoading(false);
+        if (connected.current) void load(true);
+        else setError("Connection unavailable");
+        return;
+      }
       if (
-        event.type === "connection.restored" ||
         event.type.startsWith("agent.") ||
         event.type.startsWith("turn.") ||
         event.type.startsWith("organization.")
@@ -252,6 +281,8 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     const polling = setInterval(() => void load(true), 5000);
     return () => {
       generation.current += 1;
+      inFlight.current = null;
+      pendingRefresh.current = false;
       clearTimeout(timer);
       clearInterval(polling);
       stop();
@@ -781,22 +812,60 @@ function UsageModal({
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const generation = useRef(0);
-  const load = useCallback(async () => {
-    const request = ++generation.current;
-    setError(null);
-    try {
-      const data = await backend.usageRead(recordId);
-      if (request === generation.current) setDetail(data);
-    } catch (failure) {
-      if (request === generation.current)
-        setError(failure instanceof Error ? failure.message : String(failure));
-    }
-  }, [recordId]);
+  const inFlight = useRef<number | null>(null);
+  const pendingRefresh = useRef(false);
+  const connected = useRef(true);
+  const load = useCallback(
+    async function read() {
+      if (!connected.current) return;
+      if (inFlight.current !== null) {
+        pendingRefresh.current = true;
+        return;
+      }
+      const request = ++generation.current;
+      inFlight.current = request;
+      setError(null);
+      try {
+        const data = await backend.usageRead(recordId);
+        if (request === generation.current) setDetail(data);
+      } catch (failure) {
+        if (request === generation.current) {
+          pendingRefresh.current = false;
+          setError(
+            failure instanceof Error ? failure.message : String(failure),
+          );
+        }
+      } finally {
+        if (request === generation.current) {
+          inFlight.current = null;
+          if (pendingRefresh.current) {
+            pendingRefresh.current = false;
+            void read();
+          }
+        }
+      }
+    },
+    [recordId],
+  );
   useEffect(() => {
-    void load();
+    const stop = backend.onEvent((event) => {
+      if (!event.type.startsWith("connection.")) return;
+      generation.current += 1;
+      inFlight.current = null;
+      pendingRefresh.current = false;
+      connected.current = event.type === "connection.restored";
+      if (connected.current) void load();
+      else setError("Connection unavailable");
+    });
     return () => {
       generation.current += 1;
+      inFlight.current = null;
+      pendingRefresh.current = false;
+      stop();
     };
+  }, [load]);
+  useEffect(() => {
+    void load();
   }, [load, revision]);
   return (
     <Modal

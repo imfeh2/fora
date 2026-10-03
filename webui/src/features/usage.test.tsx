@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import {
   afterAll,
   afterEach,
@@ -9,7 +10,12 @@ import {
   vi,
 } from "vitest";
 import { pageKeyOf, RouterProvider, useRouter } from "@/app/router";
-import { BackendError, backend, type UsageResult } from "@/lib/backend";
+import {
+  BackendError,
+  backend,
+  type UsageDetail,
+  type UsageResult,
+} from "@/lib/backend";
 
 let testing: typeof import("@testing-library/react");
 let UsagePage: typeof import("./usage")["UsagePage"];
@@ -127,6 +133,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await testing.act(async () => testing.cleanup());
+  vi.useRealTimers();
   await new Promise((resolve) => setTimeout(resolve, 0));
   vi.restoreAllMocks();
 });
@@ -174,7 +181,242 @@ async function renderPage(agentId?: number) {
   );
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function detail(total = "1234"): UsageDetail {
+  return {
+    ...result(total).records[0],
+    dataset_revision: 3,
+    usage_json: `{"input_tokens":${total},"cache_read_tokens":500}`,
+    turn_summary: null,
+    turn_summary_json: null,
+    summary_mismatch: false,
+    traceable_requests: 1,
+    provider_field_presence: "unknown",
+  };
+}
+
+function fakeClock() {
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+}
+
 describe("usage records", () => {
+  it("shows slow polling results and merges updates into one pending read", async () => {
+    fakeClock();
+    const reads: ReturnType<typeof deferred<UsageResult>>[] = [];
+    vi.mocked(backend.usageQuery).mockImplementation(() => {
+      const read = deferred<UsageResult>();
+      reads.push(read);
+      return read.promise;
+    });
+    await renderPage();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(reads).toHaveLength(1);
+    await testing.act(async () => reads[0].resolve(result()));
+    expect(testing.screen.getAllByText("1,234").length).toBeGreaterThan(0);
+    expect(reads).toHaveLength(2);
+    const listener = vi.mocked(backend.onEvent).mock.calls[0][0];
+    for (let index = 0; index < 5; index += 1) {
+      await testing.act(async () => {
+        listener({ type: "turn.progress", agent_id: 3 });
+        await vi.advanceTimersByTimeAsync(200);
+      });
+    }
+    expect(reads).toHaveLength(2);
+    await testing.act(async () =>
+      reads[1].resolve({ ...result("2345"), dataset_revision: 4 }),
+    );
+    expect(testing.screen.getAllByText("2,345").length).toBeGreaterThan(0);
+    expect(reads).toHaveLength(3);
+    await testing.act(async () =>
+      reads[2].resolve({ ...result("3456"), dataset_revision: 5 }),
+    );
+    expect(testing.screen.getAllByText("3,456").length).toBeGreaterThan(0);
+    expect(reads).toHaveLength(3);
+  });
+
+  it("retains failures and retries the reading target after queued updates", async () => {
+    fakeClock();
+    const read = deferred<UsageResult>();
+    vi.mocked(backend.usageQuery).mockReturnValueOnce(read.promise);
+    await renderPage(2);
+    await testing.act(async () => vi.advanceTimersByTimeAsync(6000));
+    await testing.act(async () =>
+      read.reject(new BackendError("offline", "Read failed")),
+    );
+    expect(testing.screen.getByRole("alert").textContent).toContain(
+      "Read failed",
+    );
+    expect(backend.usageQuery).toHaveBeenCalledTimes(1);
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Retry" }),
+      ),
+    );
+    expect(backend.usageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agent_id: 2 }),
+    );
+    expect(testing.screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps details visible while revisions change during a pending read", async () => {
+    fakeClock();
+    const reads: ReturnType<typeof deferred<UsageDetail>>[] = [];
+    vi.spyOn(backend, "usageRead").mockImplementation(() => {
+      const read = deferred<UsageDetail>();
+      reads.push(read);
+      return read.promise;
+    });
+    await renderPage();
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Inspect" }),
+      ),
+    );
+    const listener = vi.mocked(backend.onEvent).mock.calls[0][0];
+    for (let revision = 4; revision < 8; revision += 1) {
+      vi.mocked(backend.usageQuery).mockResolvedValue({
+        ...result(),
+        dataset_revision: revision,
+      });
+      await testing.act(async () => {
+        listener({ type: "turn.progress", agent_id: 3 });
+        await vi.advanceTimersByTimeAsync(200);
+      });
+    }
+    expect(reads).toHaveLength(1);
+    await testing.act(async () => reads[0].resolve(detail()));
+    const modal = testing.screen.getByRole("dialog");
+    expect(modal.textContent).toContain("cache_read_tokens");
+    expect(reads).toHaveLength(2);
+    await testing.act(async () => reads[1].resolve(detail("2345")));
+    expect(testing.within(modal).getAllByText("2,345").length).toBeGreaterThan(
+      0,
+    );
+    expect(reads).toHaveLength(2);
+  });
+
+  it("invalidates page and detail reads across connection identities", async () => {
+    fakeClock();
+    const oldQuery = deferred<UsageResult>();
+    const oldDetail = deferred<UsageDetail>();
+    vi.spyOn(backend, "usageRead")
+      .mockReturnValueOnce(oldDetail.promise)
+      .mockResolvedValue(detail("2345"));
+    await renderPage();
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Inspect" }),
+      ),
+    );
+    vi.mocked(backend.usageQuery).mockReturnValueOnce(oldQuery.promise);
+    await testing.act(async () => vi.advanceTimersByTimeAsync(5000));
+    const listeners = vi
+      .mocked(backend.onEvent)
+      .mock.calls.map(([listener]) => listener);
+    await testing.act(async () => {
+      for (const listener of listeners)
+        listener({ type: "connection.reconnecting" });
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(backend.usageQuery).toHaveBeenCalledTimes(2);
+    vi.mocked(backend.usageQuery).mockResolvedValue({
+      ...result("2345"),
+      dataset_revision: 4,
+    });
+    await testing.act(async () => {
+      for (const listener of listeners)
+        listener({ type: "connection.restored" });
+    });
+    await testing.act(async () => {
+      oldQuery.resolve({ ...result("999999"), dataset_revision: 9 });
+      oldDetail.resolve(detail("999999"));
+    });
+    expect(testing.screen.queryByText("999,999")).toBeNull();
+    expect(testing.screen.getAllByText("2,345").length).toBeGreaterThan(0);
+    expect(testing.screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+
+  it("cleans pending reads and subscriptions in StrictMode and on unmount", async () => {
+    fakeClock();
+    const stop = vi.fn();
+    vi.mocked(backend.onEvent).mockReturnValue(stop);
+    const reads: ReturnType<typeof deferred<UsageResult>>[] = [];
+    vi.mocked(backend.usageQuery).mockImplementation(() => {
+      const read = deferred<UsageResult>();
+      reads.push(read);
+      return read.promise;
+    });
+    const mounted = await testing.act(async () =>
+      testing.render(
+        <StrictMode>
+          <RouterProvider>
+            <TooltipProvider>
+              <UsagePage />
+            </TooltipProvider>
+          </RouterProvider>
+        </StrictMode>,
+      ),
+    );
+    expect(reads).toHaveLength(2);
+    await testing.act(async () => reads[0].resolve(result("999999")));
+    expect(testing.screen.queryByText("999,999")).toBeNull();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(6000));
+    await testing.act(async () => mounted.unmount());
+    await testing.act(async () => reads[1].resolve(result()));
+    await testing.act(async () => vi.advanceTimersByTimeAsync(10000));
+    expect(reads).toHaveLength(2);
+    expect(stop).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards a closed record's response and pending revision refresh", async () => {
+    fakeClock();
+    const oldDetail = deferred<UsageDetail>();
+    vi.spyOn(backend, "usageRead")
+      .mockReturnValueOnce(oldDetail.promise)
+      .mockResolvedValue(detail("2345"));
+    await renderPage();
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Inspect" }),
+      ),
+    );
+    vi.mocked(backend.usageQuery).mockResolvedValue({
+      ...result(),
+      dataset_revision: 4,
+    });
+    await testing.act(async () => vi.advanceTimersByTimeAsync(5000));
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing
+          .within(testing.screen.getByRole("dialog"))
+          .getAllByRole("button", { name: "Close" })[0],
+      ),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Inspect" }),
+      ),
+    );
+    await testing.act(async () => oldDetail.resolve(detail("999999")));
+    const modal = testing.screen.getByRole("dialog");
+    expect(testing.within(modal).queryByText("999,999")).toBeNull();
+    expect(testing.within(modal).getAllByText("2,345").length).toBeGreaterThan(
+      0,
+    );
+    expect(backend.usageRead).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps exact integers beyond Number precision and distinguishes missing values", () => {
     expect(usageNumber("9007199254740993")).toBe("9,007,199,254,740,993");
     expect(usageNumber("0")).toBe("0");
