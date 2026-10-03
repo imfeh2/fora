@@ -89,13 +89,19 @@ beforeEach(() => {
   vi.spyOn(backend, "readLibrary").mockResolvedValue(initial);
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   clearToasts();
+  await act(async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  });
   vi.restoreAllMocks();
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await act(async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  });
   closeDom();
   vi.unstubAllGlobals();
 });

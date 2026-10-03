@@ -372,6 +372,10 @@ class LockedConnection:
         with db._lock:
             return db._connection.executemany(sql, parameters)
 
+    def create_aggregate(self, name: str, arguments: int, factory: type[Any]) -> None:
+        with self._lock:
+            self._connection.create_aggregate(name, arguments, factory)
+
     def executescript(self, sql: str) -> None:
         if self.current is not self:
             raise RuntimeError("Cannot execute a script in a read context")

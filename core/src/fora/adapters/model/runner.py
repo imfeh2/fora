@@ -597,6 +597,16 @@ class LiveModel(WrapperModel):
         self.current_response = response
         if any(isinstance(part, ToolCallPart) for part in response.parts):
             self.tool_response = (response, handle)
+        provided_cost = response.usage.cost is not None
+        fill_response_cost(response)
+        response.metadata = {
+            **(response.metadata or {}),
+            "fora_usage": {
+                "cost_source": "sdk_response" if provided_cost else "genai-prices",
+                "currency": "USD",
+                "field_source": "sdk_serialized",
+            },
+        }
         if handle is None or self._request_recorder is None:
             return
         try:
@@ -1178,7 +1188,6 @@ class PydanticModelRunner:
             request_context: ModelRequestContext,
             response: ModelResponse,
         ) -> ModelResponse:
-            fill_response_cost(response)
             _persist_history(request, _settle_tool_calls([*ctx.messages, response]))
             return response
 
@@ -1246,6 +1255,10 @@ class PydanticModelRunner:
                     agents_instructions,
                     request.request_recorder,
                     {
+                        "provider_id": config.provider_id,
+                        "provider_name": config.provider_name,
+                        "registered_model_id": config.registered_model_id,
+                        "display_name": config.display_name,
                         "api_type": config.api_type,
                         "provider_id": config.provider_id,
                         "model": config.model,

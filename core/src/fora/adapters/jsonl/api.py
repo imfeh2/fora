@@ -534,7 +534,7 @@ class Api:
 
         def agent_history(params: dict[str, Any]) -> Any:
             agent_id = _required_integer(params, "agent_id")
-            self._human().authorize_agent_history(agent_id)
+            self._human().authorize_agent_history(agent_id, include_deleted=True)
             limit = _integer_param(params, "limit", default=30, maximum=50)
             windows_after = _integer_param(params, "windows_after", maximum=2**63 - 1)
             windows_limit = _integer_param(
@@ -569,7 +569,7 @@ class Api:
 
         def agent_history_read_data(params: dict[str, Any]) -> Any:
             agent_id = _required_integer(params, "agent_id")
-            self._human().authorize_agent_history(agent_id)
+            self._human().authorize_agent_history(agent_id, include_deleted=True)
             sequence = _required_integer(params, "sequence")
             message_offset = _integer_param(
                 params, "message_offset", default=0, maximum=2**63 - 1
@@ -765,7 +765,7 @@ class Api:
 
         def agent_history_text_data(params: dict[str, Any]) -> Callable[[], Any]:
             agent_id = _required_integer(params, "agent_id")
-            self._human().authorize_agent_history(agent_id)
+            self._human().authorize_agent_history(agent_id, include_deleted=True)
             sequence = _required_integer(params, "sequence")
             source = params.get("source")
             if source not in (
@@ -826,7 +826,7 @@ class Api:
 
         def agent_history_image_data(params: dict[str, Any]) -> Any:
             agent_id = _required_integer(params, "agent_id")
-            self._human().authorize_agent_history(agent_id)
+            self._human().authorize_agent_history(agent_id, include_deleted=True)
             sequence = _required_integer(params, "sequence")
             source = params.get("source")
             if source not in ("run", "input", "response", "related"):
@@ -1105,6 +1105,16 @@ class Api:
                 params, writing=True, directory=True, moving=True
             ),
         )
+        register(
+            "usage.query",
+            lambda params: self._human().usage_query(params),
+            scope=lambda params: RequestScope(reads=(member_set, Resource("history"))),
+        )
+        register(
+            "usage.read",
+            lambda params: self._human().usage_read(params["record_id"]),
+            scope=lambda params: RequestScope(reads=(member_set, Resource("history"))),
+        )
         register("agent.detail", agent_detail, scope=detail_scope)
         register("agent.history", agent_history, scope=agent_query)
         register("agent.history.read", agent_history_read, scope=agent_query)
@@ -1122,3 +1132,4 @@ class Api:
             settings_test_model,
             scope=lambda params: RequestScope(reads=(model_settings,)),
         )
+

@@ -1,3 +1,93 @@
+export type UsageFilters = {
+  agent_id?: number | null;
+  model_key?: string | null;
+  coverage?: string | null;
+  start_at?: string | null;
+  end_at?: string | null;
+};
+
+export type UsageMetrics = {
+  records: number;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  total_tokens: string | null;
+  requests: string | null;
+  input_known: number;
+  output_known: number;
+  total_known: number;
+  requests_known: number;
+  cache_read_tokens: string | null;
+  cache_write_tokens: string | null;
+  cache_read_known: number;
+  cache_write_known: number;
+  estimated_cost: string | null;
+  cost_known: number;
+  last_active: string | null;
+  model_count: number;
+};
+
+export type UsageRecord = {
+  record_id: string;
+  source_kind: "request" | "turn_summary";
+  agent_id: number;
+  agent_name: string;
+  agent_deleted: boolean;
+  sequence: number;
+  ordinal: number | null;
+  request_id: string | null;
+  started_at: string;
+  completed_at: string | null;
+  status: string;
+  coverage: string;
+  model_key: string;
+  model: Record<string, string | number | null>;
+  model_identity_source: string;
+  field_source: string;
+  input_tokens: string | null;
+  output_tokens: string | null;
+  total_tokens: string | null;
+  requests: string | null;
+  cost: string | null;
+  cost_source: string;
+  currency: string;
+  partial_history: boolean;
+};
+
+export type UsageQuery = UsageFilters & {
+  limit?: number;
+  cursor?: string | null;
+  dataset_revision?: number;
+  anchor?: string;
+};
+
+export type UsageResult = {
+  filters: UsageFilters;
+  dataset_revision: number;
+  index: { ready: number; revision: number };
+  summary: UsageMetrics;
+  coverage: Record<string, number>;
+  groups: {
+    agent_id: (UsageMetrics & { agent_id: number })[];
+    model_key: (UsageMetrics & { model_key: string })[];
+  };
+  records: UsageRecord[];
+  has_more: boolean;
+  next_cursor: string | null;
+  previous_cursor: string | null;
+  agents: { id: number; name: string; deleted: number }[];
+  models: { key: string; model: UsageRecord["model"] }[];
+};
+
+export type UsageDetail = UsageRecord & {
+  dataset_revision: number;
+  usage_json: string;
+  turn_summary: Record<string, unknown> | null;
+  turn_summary_json: string | null;
+  summary_mismatch: boolean;
+  traceable_requests: number;
+  provider_field_presence: string;
+};
+
 export type Thinking =
   | "default"
   | "none"
@@ -1266,6 +1356,14 @@ export class Backend {
 
   searchMessages(query: string) {
     return this.call<FoundMessage[]>("discussion.search", { query });
+  }
+
+  usageQuery(params: UsageQuery) {
+    return this.call<UsageResult>("usage.query", params);
+  }
+
+  usageRead(record_id: string) {
+    return this.call<UsageDetail>("usage.read", { record_id });
   }
 
   agentDetail(agent_id: number) {

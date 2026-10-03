@@ -4,6 +4,7 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -18,6 +19,7 @@ export type Route =
   | { name: "discussions" }
   | { name: "discussion"; id: number }
   | { name: "members" }
+  | { name: "usage"; agentId?: number }
   | { name: "member"; id: number }
   | { name: "library"; path?: string }
   | { name: "document"; path: string }
@@ -29,6 +31,7 @@ const NAV_OF: Record<Route["name"], NavId> = {
   discussions: "discussions",
   discussion: "discussions",
   members: "members",
+  usage: "members",
   member: "members",
   library: "library",
   document: "library",
@@ -40,32 +43,57 @@ export function navIdOf(route: Route): NavId {
 }
 
 export function pageKeyOf(route: Route): string {
+  if (route.name === "usage") return `usage:${route.agentId ?? "all"}`;
   if ("id" in route) return `${route.name}:${route.id}`;
   if ("path" in route && route.path) return `${route.name}:${route.path}`;
   return route.name;
 }
 
-type Router = { route: Route; navigate: (next: Route) => void };
+export type NavigationBlocker = (next: Route, proceed: () => void) => boolean;
+
+type Router = {
+  route: Route;
+  navigate: (next: Route) => void;
+  registerNavigationBlocker: (blocker: NavigationBlocker) => () => void;
+};
 
 const RouterContext = createContext<Router | null>(null);
 
 export function RouterProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<Route[]>([{ name: "discussions" }]);
 
+  const currentRoute = useRef(stack[stack.length - 1]);
+  currentRoute.current = stack[stack.length - 1];
+  const navigationBlocker = useRef<NavigationBlocker | null>(null);
+  const registerNavigationBlocker = useCallback(
+    (blocker: NavigationBlocker) => {
+      navigationBlocker.current = blocker;
+      return () => {
+        if (navigationBlocker.current === blocker)
+          navigationBlocker.current = null;
+      };
+    },
+    [],
+  );
+
   const navigate = useCallback((next: Route) => {
-    setStack((current) => {
-      const top = current[current.length - 1];
-      if (top.name === next.name && sameParams(top, next)) return current;
-      return [...current, next].slice(-24);
-    });
+    const top = currentRoute.current;
+    if (top.name === next.name && sameParams(top, next)) return;
+    const proceed = () => {
+      currentRoute.current = next;
+      setStack((current) => [...current, next].slice(-24));
+    };
+    if (navigationBlocker.current?.(next, proceed)) return;
+    proceed();
   }, []);
 
   const value = useMemo<Router>(
     () => ({
       route: stack[stack.length - 1],
       navigate,
+      registerNavigationBlocker,
     }),
-    [stack, navigate],
+    [stack, navigate, registerNavigationBlocker],
   );
 
   return (
@@ -74,6 +102,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 }
 
 function paramOf(route: Route): string | number | null {
+  if (route.name === "usage") return route.agentId ?? null;
   if ("id" in route) return route.id;
   if ("path" in route) return route.path ?? null;
   if ("section" in route) return route.section;

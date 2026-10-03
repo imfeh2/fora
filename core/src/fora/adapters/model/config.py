@@ -633,6 +633,9 @@ class ModelCatalog(ConfigurationRecord):
             thinking_budget_tokens=model.thinking_budget_tokens,
             extra_body=validate_request_body(provider.extra_body, provider.api_type),
             provider_id=provider.id,
+            provider_name=provider.name,
+            registered_model_id=model.id,
+            display_name=model.name,
         )
 
 
@@ -646,6 +649,9 @@ class ModelConfig:
     thinking_budget_tokens: int | None = None
     extra_body: dict[str, JsonValue] = field(default_factory=dict)
     provider_id: str | None = None
+    provider_name: str | None = None
+    registered_model_id: str | None = None
+    display_name: str | None = None
 
 
 def model_settings(config: ModelConfig) -> dict[str, Any]:

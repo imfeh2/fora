@@ -2103,3 +2103,29 @@ def test_runner_persists_attachment_results_on_success_and_failure(
         assert isinstance(image, BinaryContent) and image.data == data
     finally:
         restored.close()
+
+
+def test_usage_access_follows_human_history_permissions_and_deleted_members(world):
+    run = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN,
+        run.sequence,
+        status="completed",
+        messages_json="[]",
+        usage_json='{"input_tokens":10,"output_tokens":2,"requests":3}',
+    )
+    record_id = f"turn:{MAIN}:{run.sequence}"
+    for actor in (MAIN, OTHER):
+        with pytest.raises(DomainError) as query_error:
+            tools_for(world, actor).usage_query({})
+        assert query_error.value.code == "not_permitted"
+        with pytest.raises(DomainError) as read_error:
+            tools_for(world, actor).usage_read(record_id)
+        assert read_error.value.code == "not_permitted"
+    with world.store._db:
+        world.store._db.execute("UPDATE members SET deleted = 1 WHERE id = ?", (MAIN,))
+    human = tools_for(world, HUMAN)
+    assert human.usage_query({"agent_id": MAIN})["summary"]["requests"] == "3"
+    record = human.usage_read(record_id)
+    assert record["agent_deleted"]
+    assert record["total_tokens"] == "12"

@@ -100,12 +100,32 @@ class AgentTools:
                 "not_a_member", f"You do not belong to Discussion {discussion_id}"
             )
 
-    def authorize_agent_history(self, agent_id: int) -> None:
+    def usage_query(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self._actor.is_agent:
+            raise DomainError("not_permitted", "Agent history is restricted to Humans")
+        for member in self._deps.store.list_members(include_deleted=True):
+            if member.is_agent:
+                self.authorize_agent_history(member.id, include_deleted=True)
+        return self._deps.history.usage_query(params)
+
+    def usage_read(self, record_id: str) -> dict[str, Any]:
+        with self._deps.history.transaction():
+            record = self._deps.history.usage_read(record_id)
+            self.authorize_agent_history(record["agent_id"], include_deleted=True)
+            return record
+
+    def authorize_agent_history(
+        self, agent_id: int, *, include_deleted: bool = False
+    ) -> None:
         self._check("agent.history", agent_id)
         if self._actor.is_agent:
             raise DomainError("not_permitted", "Agent history is restricted to Humans")
         member = self._deps.store.get_member(agent_id)
-        if member is None or not member.is_agent or member.deleted:
+        if (
+            member is None
+            or not member.is_agent
+            or (member.deleted and not include_deleted)
+        ):
             raise DomainError("not_found", f"Agent {agent_id} does not exist")
 
     def list_member_records(

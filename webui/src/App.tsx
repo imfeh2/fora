@@ -48,6 +48,7 @@ import {
   SettingsSaveProvider,
   useSettingsSaving,
 } from "@/features/settings/saver";
+import { UsagePage } from "@/features/usage";
 import {
   BackendError,
   backend,
@@ -89,6 +90,8 @@ function View({
       );
     case "members":
       return <MembersPage tokenLimit={tokenLimit} />;
+    case "usage":
+      return <UsagePage agentId={route.agentId} />;
     case "member":
       return <MemberPage id={route.id} />;
     case "library":
@@ -297,7 +300,13 @@ function Chrome({ loaded }: { loaded: Loaded }) {
               label="Members"
               active={active === "members"}
               onSelect={() => selectRoute({ name: "members" })}
-            />
+            >
+              <NavSubItem
+                label="Token Usage"
+                active={route.name === "usage"}
+                onSelect={() => selectRoute({ name: "usage" })}
+              />
+            </NavItem>
             <NavItem
               icon={<BookText size={16} />}
               label="Library"

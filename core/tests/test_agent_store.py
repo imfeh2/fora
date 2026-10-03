@@ -811,13 +811,12 @@ def test_summary_index_tracks_commits_and_rollbacks(agent_store) -> None:
 
 def test_summary_index_preserves_invalid_usage_errors(agent_store) -> None:
     run = agent_store.start_run(AGENT)
-    agent_store.finish_run(
-        AGENT,
-        run.sequence,
-        status="failed",
-        messages_json="[]",
-        usage_json="{invalid",
-    )
+    with agent_store._db:
+        agent_store._db.execute(
+            "UPDATE agent_runs SET status = 'failed', usage_json = ?"
+            " WHERE agent_id = ? AND sequence = ?",
+            ("{invalid", AGENT, run.sequence),
+        )
     assert agent_store.run_summaries(AGENT)[0].usage_json == "{invalid"
     with pytest.raises(sqlite3.OperationalError, match="malformed JSON"):
         agent_store.usage_total(AGENT)

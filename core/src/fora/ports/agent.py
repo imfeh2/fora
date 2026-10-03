@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -170,6 +170,10 @@ class ModelRequestRecorder(Protocol):
 
 
 class HistoryStore(Protocol):
+    def usage_query(self, params: dict[str, Any]) -> dict[str, Any]: ...
+
+    def usage_read(self, record_id: str) -> dict[str, Any]: ...
+
     def transaction(self) -> AbstractContextManager[object]: ...
 
     def pending_revision(self, agent_id: int) -> int: ...

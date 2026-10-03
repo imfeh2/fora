@@ -607,14 +607,16 @@ export function HistorySection({
   );
 }
 
-function TurnHistoryModal({
+export function TurnHistoryModal({
   agentId,
   sequence,
+  initialOrdinal,
   open,
   onOpenChange,
 }: {
   agentId: number;
   sequence: number;
+  initialOrdinal?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -786,12 +788,12 @@ function TurnHistoryModal({
   useEffect(() => {
     if (!open) return;
     setRead(null);
-    setOrdinal(undefined);
-    void load(undefined);
+    setOrdinal(initialOrdinal);
+    void load(initialOrdinal);
     return () => {
       loadGeneration.current += 1;
     };
-  }, [load, open, sequence]);
+  }, [load, open, sequence, initialOrdinal]);
 
   useEffect(() => {
     if (!open) return;
