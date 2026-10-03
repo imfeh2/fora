@@ -53,6 +53,7 @@ function result(total = "1234"): UsageResult {
         source_kind: "request",
         agent_id: 2,
         agent_name: "Researcher",
+        agent_name_source: "retained_member",
         agent_deleted: true,
         sequence: 1,
         ordinal: 1,
@@ -257,6 +258,49 @@ describe("usage records", () => {
     );
   });
 
+  it("shows each grouped field's recorded range for incomplete usage", async () => {
+    const data = result("0");
+    const metrics = {
+      ...data.summary,
+      records: 2,
+      input_tokens: "7",
+      requests: "2",
+      input_known: 2,
+      output_known: 1,
+      total_known: 1,
+      requests_known: 2,
+    };
+    vi.mocked(backend.usageQuery).mockResolvedValue({
+      ...data,
+      summary: metrics,
+      coverage: { recorded: 1, field_missing: 1 },
+      groups: {
+        model_key: [{ ...metrics, model_key: "model-key" }],
+        agent_id: [{ ...metrics, agent_id: 2 }],
+      },
+      records: [
+        data.records[0],
+        {
+          ...data.records[0],
+          record_id: "request:2:1:2",
+          ordinal: 2,
+          input_tokens: "7",
+          output_tokens: null,
+          total_tokens: null,
+          coverage: "field_missing",
+        },
+      ],
+    });
+    await renderPage();
+    const group = testing.screen.getByRole("table", { name: "Usage by model" });
+    const row = testing.within(group).getAllByRole("row")[1];
+    const cells = testing.within(row).getAllByRole("cell");
+    expect(cells[1].textContent).toBe("7");
+    expect(cells[2].textContent).toContain("1 of 2 records");
+    expect(cells[3].textContent).toContain("1 of 2 records");
+    expect(testing.screen.getByText(/For each complete record/)).toBeTruthy();
+  });
+
   it("refreshes the complete range after persisted Turn events and reconnects", async () => {
     await renderPage();
     const listener = vi.mocked(backend.onEvent).mock.calls[0][0];
@@ -343,6 +387,8 @@ describe("usage records", () => {
     );
     expect(modal.textContent).toContain("output_reasoning_tokens");
     expect(modal.textContent).toContain("long_extra_field");
+    expect(modal.textContent).toContain("retained member record");
+    expect(modal.textContent).toContain("Deleted");
     expect(backend.usageQuery).toHaveBeenCalledTimes(1);
   });
 });

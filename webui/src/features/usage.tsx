@@ -67,6 +67,13 @@ const NUMERIC_COLUMNS: Column[] = [
 const SELECT_CLASS =
   "h-9 max-w-full rounded-sm border border-line bg-surface px-2 text-sm";
 
+const KNOWN_COLUMNS = [
+  "input_known",
+  "output_known",
+  "total_known",
+  "requests_known",
+] as const;
+
 function TokenShare({
   value,
   total,
@@ -104,10 +111,19 @@ function Failure({ error, retry }: { error: string; retry: () => void }) {
 
 function NumericCells({
   metrics,
+  coverage,
 }: {
   metrics: Pick<
     UsageMetrics,
     "input_tokens" | "output_tokens" | "total_tokens" | "requests"
+  >;
+  coverage?: Pick<
+    UsageMetrics,
+    | "records"
+    | "input_known"
+    | "output_known"
+    | "total_known"
+    | "requests_known"
   >;
 }) {
   return (
@@ -124,6 +140,12 @@ function NumericCells({
           className="font-mono tabular-nums whitespace-nowrap"
         >
           {usageNumber(value)}
+          {coverage && coverage[KNOWN_COLUMNS[index]] !== coverage.records ? (
+            <div className="text-xs text-fg-muted">
+              {coverage[KNOWN_COLUMNS[index]].toLocaleString()} of{" "}
+              {coverage.records.toLocaleString()} records
+            </div>
+          ) : null}
         </td>
       ))}
     </>
@@ -457,9 +479,11 @@ export function UsagePage({ agentId }: { agentId?: number }) {
               ))}
             </div>
             <p className="m-0 text-xs text-fg-muted">
-              Total = input + output. Cache and audio counts are included in
-              their parent totals. Saved zero values may include SDK defaults.
-              Open a record to inspect every saved field and its source.
+              For each complete record, total = input + output. Metrics sum
+              saved values within each field's recorded range. Cache and audio
+              counts are included in their parent totals. Saved zero values may
+              include SDK defaults. Open a record to inspect every saved field
+              and its source.
             </p>
             {(["model_key", "agent_id"] as const).map((dimension) => (
               <Section
@@ -516,11 +540,11 @@ export function UsagePage({ agentId }: { agentId?: number }) {
                               {group.total_known} of {group.records} records
                               have complete token totals
                               {dimension === "agent_id"
-                                ? ` · ${group.model_count} models`
+                                ? ` · ${group.model_count} model groups`
                                 : ""}
                             </div>
                           </td>
-                          <NumericCells metrics={group} />
+                          <NumericCells metrics={group} coverage={group} />
                           {(
                             [
                               ["cache_read_tokens", "cache_read_known"],
@@ -789,8 +813,13 @@ function UsageModal({
             {detail.record_id}
           </div>
           <div>
-            {detail.agent_name} · {modelName(detail.model)} ·{" "}
-            {COVERAGE[detail.coverage]}
+            {detail.agent_name}
+            {detail.agent_deleted ? <Chip>Deleted</Chip> : null} ·{" "}
+            {modelName(detail.model)} · {COVERAGE[detail.coverage]}
+            <div className="text-xs text-fg-muted">
+              Agent name source: {detail.agent_name_source.replace(/_/g, " ")}{" "}
+              record.
+            </div>
           </div>
           <div>
             {detail.source_kind === "turn_summary"

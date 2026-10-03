@@ -31,6 +31,7 @@ export type UsageRecord = {
   source_kind: "request" | "turn_summary";
   agent_id: number;
   agent_name: string;
+  agent_name_source: string;
   agent_deleted: boolean;
   sequence: number;
   ordinal: number | null;
