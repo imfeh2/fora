@@ -1,5 +1,12 @@
 import { BarChart3, Search } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { type Resource, useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import {
   type Column,
@@ -9,11 +16,14 @@ import {
   Section,
   Table,
 } from "@/components/layout/shell";
+import { LoadError } from "@/components/ui/access-error";
 import { Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
   Input,
+  LoadingSkeleton,
+  Skeleton,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
@@ -22,7 +32,6 @@ import { TurnHistoryModal } from "@/features/members/detail";
 import {
   BackendError,
   backend,
-  type UsageDetail,
   type UsageFilters,
   type UsageMetrics,
   type UsageRecord,
@@ -95,20 +104,6 @@ function TokenShare({
   );
 }
 
-function Failure({ error, retry }: { error: string; retry: () => void }) {
-  return (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center gap-3 rounded-sm border border-danger p-4 text-sm"
-    >
-      <span className="text-danger wrap-anywhere">{error}</span>
-      <Button size="sm" onClick={retry}>
-        Retry
-      </Button>
-    </div>
-  );
-}
-
 function NumericCells({
   metrics,
   coverage,
@@ -152,6 +147,141 @@ function NumericCells({
   );
 }
 
+type UsageConnection = { available: boolean; error: BackendError | null };
+
+type UsageQueryControl = {
+  refresh: (changed?: boolean) => Promise<void>;
+  retry: () => void;
+};
+
+function UsageQuery({
+  filters,
+  limit,
+  cursor,
+  current,
+  anchor,
+  controls,
+  connection,
+  onChange,
+}: {
+  filters: UsageFilters;
+  limit: number;
+  cursor: string | null;
+  current: RefObject<UsageResult | null>;
+  anchor: RefObject<string | undefined>;
+  controls: RefObject<UsageQueryControl | null>;
+  connection: RefObject<UsageConnection>;
+  onChange: (
+    resource: Resource<UsageResult>,
+    connectionError: BackendError | null,
+  ) => void;
+}) {
+  const first = useRef(true);
+  const revision = useRef(current.current?.dataset_revision);
+  const generation = useRef(0);
+  const mounted = useRef(false);
+  const [connectionError, setConnectionError] = useState(
+    connection.current.error,
+  );
+  const read = useCallback(async () => {
+    const request = generation.current;
+    let data: UsageResult;
+    try {
+      data = await backend.usageQuery({
+        ...filters,
+        limit,
+        cursor: first.current ? cursor : null,
+        anchor: first.current ? undefined : anchor.current,
+        dataset_revision:
+          first.current && cursor ? revision.current : undefined,
+      });
+    } catch (failure) {
+      if (
+        !(failure instanceof BackendError) ||
+        failure.code !== "usage_changed" ||
+        request !== generation.current
+      )
+        throw failure;
+      data = await backend.usageQuery({
+        ...filters,
+        limit,
+        anchor: anchor.current,
+      });
+    }
+    if (request === generation.current) {
+      first.current = false;
+      anchor.current = data.records[0]?.record_id;
+    }
+    return data;
+  }, [filters, limit, cursor, anchor]);
+  const { resource, refresh, invalidate } = useResource(read);
+  const retry = useCallback(() => {
+    if (connection.current.available && !backend.disconnected) void refresh();
+    else
+      void backend.reconnect().catch((failure) => {
+        if (!(failure instanceof BackendError)) throw failure;
+        if (mounted.current) setConnectionError(failure);
+      });
+  }, [refresh, connection]);
+  useEffect(() => {
+    mounted.current = true;
+    controls.current = { refresh, retry };
+    invalidate(
+      connection.current.available,
+      connection.current.error ?? undefined,
+    );
+    void refresh();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = backend.onEvent((event) => {
+      if (event.type.startsWith("connection.")) {
+        generation.current += 1;
+        clearTimeout(timer);
+        connection.current.available = event.type === "connection.restored";
+        if (connection.current.available) {
+          connection.current.error = null;
+          setConnectionError(null);
+          invalidate(true);
+          void refresh();
+        } else if (event.type === "connection.closed") {
+          if (!(event.error instanceof BackendError))
+            throw new Error("Connection error must be a BackendError");
+          connection.current.error = event.error;
+          setConnectionError(event.error);
+          invalidate(false, event.error);
+        } else invalidate(false);
+        return;
+      }
+      if (
+        event.type.startsWith("agent.") ||
+        event.type.startsWith("turn.") ||
+        event.type.startsWith("organization.")
+      ) {
+        clearTimeout(timer);
+        timer = setTimeout(() => void refresh(true), 150);
+      }
+    });
+    const polling = setInterval(() => void refresh(true), 5000);
+    return () => {
+      mounted.current = false;
+      generation.current += 1;
+      controls.current = null;
+      invalidate(false);
+      clearTimeout(timer);
+      clearInterval(polling);
+      stop();
+    };
+  }, [controls, refresh, retry, invalidate, connection]);
+  useEffect(() => {
+    onChange(resource, connectionError);
+  }, [resource, connectionError, onChange]);
+  useEffect(() => {
+    if (!resource.data || resource.data.index.ready) return;
+    const timer = setTimeout(() => void refresh(true), 100);
+    return () => clearTimeout(timer);
+  }, [resource.data, refresh]);
+  return null;
+}
+
 export function UsagePage({ agentId }: { agentId?: number }) {
   const navigate = useNavigate();
   const [filters, setFilters] = useState<UsageFilters>({ agent_id: agentId });
@@ -159,14 +289,16 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const [timeRange, setTimeRange] = useState("all");
   const [cursor, setCursor] = useState<string | null>(null);
   const [result, setResult] = useState<UsageResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<BackendError | null>(null);
   const [loading, setLoading] = useState(true);
+  const [datasetRevision, setDatasetRevision] = useState<number>();
+  const controls = useRef<UsageQueryControl | null>(null);
+  const connection = useRef<UsageConnection>({
+    available: !backend.disconnected && !backend.reconnecting,
+    error: null,
+  });
   const [selected, setSelected] = useState<string | null>(null);
   const [context, setContext] = useState<UsageRecord | null>(null);
-  const generation = useRef(0);
-  const inFlight = useRef<number | null>(null);
-  const pendingRefresh = useRef(false);
-  const connected = useRef(true);
   const current = useRef<UsageResult | null>(null);
   const choices = useRef<Pick<UsageResult, "agents" | "models">>({
     agents: [],
@@ -177,7 +309,10 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const revealRecords = useRef(false);
 
   const changeFilters = (next: UsageFilters) => {
-    generation.current += 1;
+    if (JSON.stringify(next) === JSON.stringify(filters)) {
+      void controls.current?.refresh(true);
+      return;
+    }
     if (next.start_at !== filters.start_at || next.end_at !== filters.end_at) {
       setTimeRange(next.start_at || next.end_at ? "custom" : "all");
     }
@@ -186,108 +321,28 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     setFilters(next);
     setCursor(null);
     setResult(null);
+    setError(null);
+    setLoading(true);
   };
-
-  const load = useCallback(
-    async function read(refresh = false) {
-      if (!connected.current) return;
-      if (inFlight.current !== null) {
-        pendingRefresh.current = true;
-        return;
-      }
-      const request = ++generation.current;
-      inFlight.current = request;
-      setLoading(true);
-      setError(null);
-      try {
-        let data: UsageResult;
-        try {
-          data = await backend.usageQuery({
-            ...filters,
-            limit,
-            cursor: refresh ? null : cursor,
-            anchor: refresh ? anchor.current : undefined,
-            dataset_revision:
-              !refresh && cursor
-                ? current.current?.dataset_revision
-                : undefined,
-          });
-        } catch (failure) {
-          if (
-            !(failure instanceof BackendError) ||
-            failure.code !== "usage_changed"
-          )
-            throw failure;
-          if (request !== generation.current) return;
-          data = await backend.usageQuery({
-            ...filters,
-            limit,
-            anchor: anchor.current,
-          });
-        }
-        if (request !== generation.current) return;
-        if (
-          !refresh ||
-          data.dataset_revision !== current.current?.dataset_revision
-        ) {
-          current.current = data;
-          choices.current = data;
-          anchor.current = data.records[0]?.record_id;
-          setResult(data);
-        }
-        setLoading(false);
-      } catch (failure) {
-        if (request !== generation.current) return;
-        pendingRefresh.current = false;
-        setError(failure instanceof Error ? failure.message : String(failure));
-        setLoading(false);
-      } finally {
-        if (request === generation.current) {
-          inFlight.current = null;
-          if (pendingRefresh.current) {
-            pendingRefresh.current = false;
-            void read(true);
-          }
-        }
+  const onQueryChange = useCallback(
+    (resource: Resource<UsageResult>, connectionError: BackendError | null) => {
+      setError(connectionError ?? resource.error);
+      setLoading(resource.status === "pending" || resource.refreshing);
+      setResult(resource.data);
+      if (resource.data) {
+        current.current = resource.data;
+        choices.current = resource.data;
+        setDatasetRevision(resource.data.dataset_revision);
       }
     },
-    [filters, limit, cursor],
+    [],
   );
-
-  useEffect(() => {
-    void load();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const stop = backend.onEvent((event) => {
-      if (event.type.startsWith("connection.")) {
-        generation.current += 1;
-        inFlight.current = null;
-        pendingRefresh.current = false;
-        clearTimeout(timer);
-        connected.current = event.type === "connection.restored";
-        setLoading(false);
-        if (connected.current) void load(true);
-        else setError("Connection unavailable");
-        return;
-      }
-      if (
-        event.type.startsWith("agent.") ||
-        event.type.startsWith("turn.") ||
-        event.type.startsWith("organization.")
-      ) {
-        clearTimeout(timer);
-        timer = setTimeout(() => void load(true), 150);
-      }
-    });
-    const polling = setInterval(() => void load(true), 5000);
-    return () => {
-      generation.current += 1;
-      inFlight.current = null;
-      pendingRefresh.current = false;
-      clearTimeout(timer);
-      clearInterval(polling);
-      stop();
-    };
-  }, [load]);
+  const changePage = (next: string | null) => {
+    setCursor(next);
+    setResult(null);
+    setError(null);
+    setLoading(true);
+  };
 
   useEffect(() => {
     if (result && revealRecords.current) {
@@ -297,10 +352,7 @@ export function UsagePage({ agentId }: { agentId?: number }) {
         behavior: "smooth",
       });
     }
-    if (!result || result.index.ready) return;
-    const timer = setTimeout(() => void load(true), 100);
-    return () => clearTimeout(timer);
-  }, [result, load]);
+  }, [result]);
 
   return (
     <Page>
@@ -311,7 +363,10 @@ export function UsagePage({ agentId }: { agentId?: number }) {
           onSelect: () => navigate({ name: "members" }),
         }}
         actions={
-          <Button onClick={() => void load(true)} disabled={loading}>
+          <Button
+            onClick={() => void controls.current?.refresh(true)}
+            disabled={loading}
+          >
             Refresh
           </Button>
         }
@@ -439,22 +494,35 @@ export function UsagePage({ agentId }: { agentId?: number }) {
               </Button>
             ))}
         </div>
-        {error ? <Failure error={error} retry={() => void load()} /> : null}
+        <UsageQuery
+          key={JSON.stringify({ filters, limit, cursor })}
+          filters={filters}
+          limit={limit}
+          cursor={cursor}
+          current={current}
+          anchor={anchor}
+          controls={controls}
+          connection={connection}
+          onChange={onQueryChange}
+        />
+        {error ? (
+          <LoadError error={error} retry={() => controls.current?.retry()} />
+        ) : null}
         {!result ? (
           loading ? (
-            <div
-              role="status"
-              aria-label="Loading usage"
-              aria-busy={loading}
-              className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"
-            >
-              {METRICS.map(([key]) => (
-                <div
-                  key={key}
-                  className="h-28 rounded-sm border border-line bg-surface-raised animate-pulse"
-                />
-              ))}
-            </div>
+            <LoadingSkeleton label="Loading usage">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {METRICS.map(([key]) => (
+                  <Skeleton
+                    key={key}
+                    className="h-28 rounded-sm border border-line"
+                  />
+                ))}
+              </div>
+              <Skeleton className="h-64 rounded-md border border-line" />
+              <Skeleton className="h-64 rounded-md border border-line" />
+              <Skeleton className="h-64 rounded-md border border-line" />
+            </LoadingSkeleton>
           ) : null
         ) : (
           <>
@@ -740,7 +808,7 @@ export function UsagePage({ agentId }: { agentId?: number }) {
                       value={limit}
                       onChange={(event) => {
                         setLimit(Number(event.target.value));
-                        setCursor(null);
+                        changePage(null);
                         anchor.current = undefined;
                       }}
                     >
@@ -753,14 +821,14 @@ export function UsagePage({ agentId }: { agentId?: number }) {
                     <Button
                       size="sm"
                       disabled={!result.previous_cursor || loading}
-                      onClick={() => setCursor(result.previous_cursor)}
+                      onClick={() => changePage(result.previous_cursor)}
                     >
                       Previous
                     </Button>
                     <Button
                       size="sm"
                       disabled={!result.has_more || loading}
-                      onClick={() => setCursor(result.next_cursor)}
+                      onClick={() => changePage(result.next_cursor)}
                     >
                       Next
                     </Button>
@@ -775,7 +843,8 @@ export function UsagePage({ agentId }: { agentId?: number }) {
         <UsageModal
           key={selected}
           recordId={selected}
-          revision={result?.dataset_revision}
+          revision={datasetRevision}
+          connection={connection}
           onClose={() => setSelected(null)}
           onContext={(record) => {
             setSelected(null);
@@ -799,74 +868,65 @@ export function UsagePage({ agentId }: { agentId?: number }) {
 function UsageModal({
   recordId,
   revision,
+  connection,
   onClose,
   onContext,
 }: {
   recordId: string;
   revision?: number;
+  connection: RefObject<UsageConnection>;
   onClose: () => void;
   onContext: (record: UsageRecord) => void;
 }) {
-  const [detail, setDetail] = useState<UsageDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
-  const generation = useRef(0);
-  const inFlight = useRef<number | null>(null);
-  const pendingRefresh = useRef(false);
-  const connected = useRef(true);
-  const load = useCallback(
-    async function read() {
-      if (!connected.current) return;
-      if (inFlight.current !== null) {
-        pendingRefresh.current = true;
-        return;
-      }
-      const request = ++generation.current;
-      inFlight.current = request;
-      setError(null);
-      try {
-        const data = await backend.usageRead(recordId);
-        if (request === generation.current) setDetail(data);
-      } catch (failure) {
-        if (request === generation.current) {
-          pendingRefresh.current = false;
-          setError(
-            failure instanceof Error ? failure.message : String(failure),
-          );
-        }
-      } finally {
-        if (request === generation.current) {
-          inFlight.current = null;
-          if (pendingRefresh.current) {
-            pendingRefresh.current = false;
-            void read();
-          }
-        }
-      }
-    },
-    [recordId],
+  const [connectionError, setConnectionError] = useState(
+    connection.current.error,
   );
+  const mounted = useRef(false);
+  const read = useCallback(() => backend.usageRead(recordId), [recordId]);
+  const { resource, refresh, invalidate } = useResource(read);
+  const detail = resource.data;
+  const error = connectionError ?? resource.error;
+  const retry = useCallback(() => {
+    if (connection.current.available && !backend.disconnected) void refresh();
+    else
+      void backend.reconnect().catch((failure) => {
+        if (!(failure instanceof BackendError)) throw failure;
+        if (mounted.current) setConnectionError(failure);
+      });
+  }, [refresh, connection]);
   useEffect(() => {
+    mounted.current = true;
+    invalidate(
+      connection.current.available,
+      connection.current.error ?? undefined,
+    );
     const stop = backend.onEvent((event) => {
       if (!event.type.startsWith("connection.")) return;
-      generation.current += 1;
-      inFlight.current = null;
-      pendingRefresh.current = false;
-      connected.current = event.type === "connection.restored";
-      if (connected.current) void load();
-      else setError("Connection unavailable");
+      connection.current.available = event.type === "connection.restored";
+      if (connection.current.available) {
+        connection.current.error = null;
+        setConnectionError(null);
+        invalidate(true);
+        void refresh();
+      } else if (event.type === "connection.closed") {
+        if (!(event.error instanceof BackendError))
+          throw new Error("Connection error must be a BackendError");
+        connection.current.error = event.error;
+        setConnectionError(event.error);
+        invalidate(false, event.error);
+      } else invalidate(false);
     });
     return () => {
-      generation.current += 1;
-      inFlight.current = null;
-      pendingRefresh.current = false;
+      mounted.current = false;
+      invalidate(false);
       stop();
     };
-  }, [load]);
+  }, [refresh, invalidate, connection]);
   useEffect(() => {
-    void load();
-  }, [load, revision]);
+    void refresh(true);
+  }, [refresh, revision]);
   return (
     <Modal
       open
@@ -875,7 +935,7 @@ function UsageModal({
       wide
       footer={<Button onClick={onClose}>Close</Button>}
     >
-      {error ? <Failure error={error} retry={() => void load()} /> : null}
+      {error ? <LoadError error={error} retry={retry} /> : null}
       {detail ? (
         <div className="flex min-w-0 flex-col gap-4 text-sm">
           <div className="font-mono text-xs wrap-anywhere">
@@ -991,12 +1051,9 @@ function UsageModal({
           </Button>
         </div>
       ) : !error ? (
-        <div
-          role="status"
-          className="h-40 animate-pulse rounded-sm bg-surface-raised"
-        >
-          Loading record…
-        </div>
+        <LoadingSkeleton label="Loading record">
+          <Skeleton className="h-40 rounded-sm" />
+        </LoadingSkeleton>
       ) : null}
     </Modal>
   );

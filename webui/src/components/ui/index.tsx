@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import {
   type ButtonHTMLAttributes,
+  type CSSProperties,
   type InputHTMLAttributes,
   type ReactNode,
   type Ref,
@@ -8,6 +9,7 @@ import {
   useLayoutEffect,
   useRef,
 } from "react";
+import { twMerge } from "tailwind-merge";
 import { Tooltip } from "@/components/ui/tooltip";
 
 export {
@@ -17,6 +19,53 @@ export {
   type ToastTone,
   toast,
 } from "@/components/ui/toast";
+
+export function Skeleton({
+  className,
+  style,
+}: {
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={twMerge(
+        "block h-3.5 rounded-xs bg-surface-hover animate-breathe motion-reduce:animate-none motion-reduce:opacity-65",
+        className,
+      )}
+      style={style}
+    />
+  );
+}
+
+export function LoadingSkeleton({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-busy="true" aria-label={label} className="min-w-0">
+      <span className="sr-only" role="status">
+        {label}
+      </span>
+      <div aria-hidden="true" className="flex min-w-0 flex-col gap-4">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+export function FieldSkeleton() {
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <Skeleton className="w-32 max-w-full" />
+      <Skeleton className="h-8 w-full rounded-sm" />
+    </div>
+  );
+}
 
 const buttonVariants = {
   default:

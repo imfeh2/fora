@@ -4,6 +4,26 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button, Spinner } from "@/components/ui/index";
 import type { BackendError } from "@/lib/backend";
 
+export function LoadError({
+  error,
+  retry,
+}: {
+  error: BackendError;
+  retry: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-3 py-3 text-sm"
+    >
+      <p className="min-w-0 flex-1 break-words text-danger">{error.message}</p>
+      <Button size="sm" onClick={retry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 export function AccessError({
   error,
   reconnect,
