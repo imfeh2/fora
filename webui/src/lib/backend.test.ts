@@ -437,6 +437,78 @@ describe("Backend", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each(["usage.query", "usage.read"])(
+    "times out %s as a reading operation and accepts a fresh response",
+    async (method) => {
+      vi.useFakeTimers();
+      const { backend, connected } = harness();
+      const socket = await connected();
+      const failures = vi.fn();
+      backend.onFailure(failures);
+      const read = () =>
+        method === "usage.query"
+          ? backend.usageQuery({ limit: 20 })
+          : backend.usageRead("request:2:1:1");
+      const pending = read().catch((error) => error);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(await pending).toMatchObject({
+        code: "timeout",
+        message: "Request timed out. Try reading again.",
+        operation: method,
+        transport: true,
+      });
+      expect(backend.disconnected).toBe(false);
+      expect(failures).toHaveBeenCalledTimes(1);
+      expect(failures.mock.calls[0][0].code).toBe("timeout");
+      const retry = read();
+      await vi.advanceTimersByTimeAsync(0);
+      socket.reply({ type: "response", id: socket.sent[0].id, result: "late" });
+      const data = { dataset_revision: 3 };
+      socket.reply({ type: "response", id: socket.sent[1].id, result: data });
+      await expect(retry).resolves.toEqual(data);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["usage.query", "usage.read"])(
+    "rejects disconnected %s with a connection error and recovers",
+    async (method) => {
+      vi.useFakeTimers();
+      const { backend, connected, socket } = harness();
+      const first = await connected();
+      const failures = vi.fn();
+      backend.onFailure(failures);
+      const read = () =>
+        method === "usage.query"
+          ? backend.usageQuery({ limit: 20 })
+          : backend.usageRead("request:2:1:1");
+      const pending = read().catch((error) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      first.fail();
+      expect(await pending).toMatchObject({
+        code: "disconnected",
+        transport: true,
+      });
+      expect(failures).toHaveBeenCalledTimes(1);
+      expect(failures.mock.calls[0][0].code).toBe("disconnected");
+      const reconnect = backend.reconnect();
+      socket().open();
+      await reconnect;
+      const retry = read();
+      await vi.advanceTimersByTimeAsync(0);
+      first.reply({ type: "response", id: first.sent[0].id, result: "late" });
+      const data = { dataset_revision: 4 };
+      socket().reply({
+        type: "response",
+        id: socket().sent[0].id,
+        result: data,
+      });
+      await expect(retry).resolves.toEqual(data);
+      expect(backend.disconnected).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("opens one socket and reuses it", async () => {
     const { backend, connected } = harness();
     await connected();

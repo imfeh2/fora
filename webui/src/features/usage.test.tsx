@@ -11,8 +11,11 @@ import {
 } from "vitest";
 import { pageKeyOf, RouterProvider, useRouter } from "@/app/router";
 import {
+  Backend,
   BackendError,
   backend,
+  type Frame,
+  type Socket,
   type UsageDetail,
   type UsageResult,
 } from "@/lib/backend";
@@ -503,7 +506,7 @@ describe("usage records", () => {
     expect(backend.usageRead).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the preceding page while loading and refreshes at the new reading anchor", async () => {
+  it("preserves pagination focus and the request region while loading and refreshing", async () => {
     fakeClock();
     vi.mocked(backend.usageQuery).mockResolvedValueOnce({
       ...result(),
@@ -513,18 +516,56 @@ describe("usage records", () => {
     await renderPage();
     const read = deferred<UsageResult>();
     vi.mocked(backend.usageQuery).mockReturnValueOnce(read.promise);
-    await testing.act(async () =>
-      testing.fireEvent.click(
-        testing.screen.getByRole("button", { name: "Next" }),
-      ),
+    const next = testing.screen.getByRole("button", { name: "Next" });
+    const table = testing.screen.getByRole("table", {
+      name: "Request records",
+    });
+    next.focus();
+    await testing.act(async () => testing.fireEvent.click(next));
+    expect(testing.screen.getByRole("button", { name: "Next" })).toBe(next);
+    expect(testing.screen.getByRole("table", { name: "Request records" })).toBe(
+      table,
     );
-    expect(testing.screen.queryByText("1,234")).toBeNull();
+    expect(document.activeElement).toBe(next);
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+    expect(testing.screen.getByRole("status").textContent).toContain(
+      "Next page loading",
+    );
+    await testing.act(async () => testing.fireEvent.click(next));
+    expect(backend.usageQuery).toHaveBeenCalledTimes(2);
     expect(backend.usageQuery).toHaveBeenLastCalledWith(
       expect.objectContaining({ cursor: "page-two", dataset_revision: 3 }),
     );
     const page = result("2345");
     page.records[0].record_id = "request:2:1:2";
+    page.previous_cursor = "page-one";
+    const records = table.closest("section")?.parentElement;
+    if (!records) throw new Error("Request region is missing");
+    const scroll = vi.spyOn(records, "scrollIntoView").mockClear();
     await testing.act(async () => read.resolve(page));
+    expect(document.activeElement).toBe(next);
+    expect(scroll).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "instant",
+    });
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+    const previous = testing.screen.getByRole("button", { name: "Previous" });
+    previous.focus();
+    vi.mocked(backend.usageQuery).mockResolvedValueOnce({
+      ...result(),
+      has_more: true,
+      next_cursor: "page-two",
+    });
+    await testing.act(async () => testing.fireEvent.click(previous));
+    expect(document.activeElement).toBe(previous);
+    expect(previous.getAttribute("aria-disabled")).toBe("true");
+    expect(scroll).toHaveBeenCalledTimes(2);
+    expect(testing.screen.getByRole("table", { name: "Request records" })).toBe(
+      table,
+    );
+    next.focus();
+    vi.mocked(backend.usageQuery).mockResolvedValueOnce(page);
+    await testing.act(async () => testing.fireEvent.click(next));
     vi.mocked(backend.usageQuery).mockResolvedValue({
       ...page,
       dataset_revision: 4,
@@ -534,6 +575,289 @@ describe("usage records", () => {
       expect.objectContaining({ cursor: null, anchor: "request:2:1:2" }),
     );
   });
+
+  it.each(["Next", "Previous", "Page size"])(
+    "keeps %s mounted across failure and Retry",
+    async (label) => {
+      fakeClock();
+      vi.mocked(backend.usageQuery).mockResolvedValueOnce({
+        ...result(),
+        has_more: true,
+        next_cursor: "page-two",
+        previous_cursor: "page-zero",
+      });
+      await renderPage();
+      const size = testing.screen.getByRole(
+        label === "Page size" ? "combobox" : "button",
+        { name: label },
+      );
+      const params =
+        label === "Page size"
+          ? { limit: 50, cursor: null }
+          : { limit: 20, cursor: label === "Next" ? "page-two" : "page-zero" };
+      const target = label === "Page size" ? label : `${label} page`;
+      const table = testing.screen.getByRole("table", {
+        name: "Request records",
+      });
+      const read = deferred<UsageResult>();
+      vi.mocked(backend.usageQuery).mockReturnValueOnce(read.promise);
+      size.focus();
+      const operate = () =>
+        label === "Page size"
+          ? testing.fireEvent.change(size, { target: { value: "50" } })
+          : testing.fireEvent.click(size);
+      await testing.act(async () => operate());
+      expect(document.activeElement).toBe(size);
+      expect(
+        testing.screen.getByRole(
+          label === "Page size" ? "combobox" : "button",
+          { name: label },
+        ),
+      ).toBe(size);
+      expect(backend.usageQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining(params),
+      );
+      await testing.act(async () => operate());
+      expect(backend.usageQuery).toHaveBeenCalledTimes(2);
+      await testing.act(async () =>
+        read.reject(
+          new BackendError(
+            "timeout",
+            "Request timed out. Try reading again.",
+            true,
+            "usage.query",
+          ),
+        ),
+      );
+      const retry = testing.screen.getByRole("button", { name: "Retry" });
+      expect(table.closest("section")?.contains(retry)).toBe(true);
+      expect(testing.screen.getByRole("status").textContent).toContain(
+        `${target} unavailable`,
+      );
+      const recovered = deferred<UsageResult>();
+      vi.mocked(backend.usageQuery).mockReturnValueOnce(recovered.promise);
+      retry.focus();
+      await testing.act(async () => testing.fireEvent.click(retry));
+      expect(document.activeElement).toBe(size);
+      expect(backend.usageQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining(params),
+      );
+      await testing.act(async () => recovered.resolve(result("2345")));
+      expect(document.activeElement).toBe(size);
+      expect(testing.screen.queryByRole("alert")).toBeNull();
+      expect(
+        testing.screen.getByRole("table", { name: "Request records" }),
+      ).toBe(table);
+    },
+  );
+
+  it("leaves the chosen focus and scroll position after a pending page completes", async () => {
+    vi.mocked(backend.usageQuery).mockResolvedValueOnce({
+      ...result(),
+      has_more: true,
+      next_cursor: "page-two",
+    });
+    await renderPage();
+    const table = testing.screen.getByRole("table", {
+      name: "Request records",
+    });
+    const records = table.closest("section")?.parentElement;
+    if (!records) throw new Error("Request region is missing");
+    const scroll = vi.spyOn(records, "scrollIntoView").mockClear();
+    const next = testing.screen.getByRole("button", { name: "Next" });
+    const read = deferred<UsageResult>();
+    vi.mocked(backend.usageQuery).mockReturnValueOnce(read.promise);
+    next.focus();
+    await testing.act(async () => testing.fireEvent.click(next));
+    const filter = testing.screen.getByLabelText("From UTC");
+    filter.focus();
+    await testing.act(async () => read.resolve(result("2345")));
+    expect(document.activeElement).toBe(filter);
+    expect(scroll).not.toHaveBeenCalled();
+    const stale = deferred<UsageResult>();
+    vi.mocked(backend.usageQuery).mockResolvedValueOnce({
+      ...result(),
+      has_more: true,
+      next_cursor: "page-three",
+    });
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Refresh" }),
+      ),
+    );
+    vi.mocked(backend.usageQuery).mockReturnValueOnce(stale.promise);
+    next.focus();
+    await testing.act(async () => testing.fireEvent.click(next));
+    filter.focus();
+    await testing.act(async () =>
+      testing.fireEvent.change(filter, {
+        target: { value: "2026-10-01T00:00" },
+      }),
+    );
+    await testing.act(async () => stale.resolve(result("999999")));
+    expect(document.activeElement).toBe(filter);
+    expect(testing.screen.queryByText("999,999")).toBeNull();
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it("keeps an opened detail focused and discards a page after unmount", async () => {
+    fakeClock();
+    const first = { ...result(), has_more: true, next_cursor: "page-two" };
+    vi.mocked(backend.usageQuery).mockResolvedValueOnce(first);
+    vi.spyOn(backend, "usageRead").mockResolvedValue(detail());
+    await renderPage();
+    const table = testing.screen.getByRole("table", {
+      name: "Request records",
+    });
+    const records = table.closest("section")?.parentElement;
+    if (!records) throw new Error("Request region is missing");
+    const scroll = vi.spyOn(records, "scrollIntoView").mockClear();
+    const page = deferred<UsageResult>();
+    vi.mocked(backend.usageQuery).mockReturnValueOnce(page.promise);
+    const next = testing.screen.getByRole("button", { name: "Next" });
+    next.focus();
+    await testing.act(async () => testing.fireEvent.click(next));
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Inspect" }),
+      ),
+    );
+    const modal = testing.screen.getByRole("dialog");
+    const copy = testing
+      .within(modal)
+      .getByRole("button", { name: "Copy JSON" });
+    copy.focus();
+    await testing.act(async () =>
+      page.resolve({ ...first, next_cursor: "page-three" }),
+    );
+    expect(testing.screen.getByRole("dialog")).toBe(modal);
+    expect(document.activeElement).toBe(copy);
+    expect(scroll).not.toHaveBeenCalled();
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.within(modal).getAllByRole("button", { name: "Close" })[0],
+      ),
+    );
+    const stale = deferred<UsageResult>();
+    vi.mocked(backend.usageQuery).mockReturnValueOnce(stale.promise);
+    next.focus();
+    await testing.act(async () => testing.fireEvent.click(next));
+    await testing.act(async () => testing.cleanup());
+    await testing.act(async () => stale.resolve(result("999999")));
+    await testing.act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(backend.usageQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ["usage.query", "timeout"],
+    ["usage.read", "timeout"],
+    ["usage.query", "disconnected"],
+    ["usage.read", "disconnected"],
+  ])(
+    "recovers %s after Backend %s through regional Retry",
+    async (method, code) => {
+      fakeClock();
+      const sent: { id: number; method: string }[] = [];
+      const socket: Socket = {
+        onopen: null,
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: vi.fn(),
+        send: (data) => {
+          const frame = JSON.parse(data);
+          sent.push(frame);
+          if (frame.method !== method)
+            socket.onmessage?.(
+              new window.MessageEvent("message", {
+                data: JSON.stringify({
+                  type: "response",
+                  id: frame.id,
+                  result: result(),
+                }),
+              }),
+            );
+        },
+      };
+      const transport = new Backend(
+        () => ({ url: "ws://localhost/ws?token=test" }),
+        () => socket,
+      );
+      const connecting = transport.connect();
+      socket.onopen?.(new Event("open"));
+      await connecting;
+      vi.mocked(backend.usageQuery).mockImplementation(
+        transport.usageQuery.bind(transport),
+      );
+      vi.spyOn(backend, "usageRead").mockImplementation(
+        transport.usageRead.bind(transport),
+      );
+      vi.mocked(backend.onEvent).mockImplementation(
+        transport.onEvent.bind(transport),
+      );
+      vi.spyOn(backend, "disconnected", "get").mockImplementation(
+        () => transport.disconnected,
+      );
+      vi.spyOn(backend, "reconnect").mockImplementation(async () => {
+        const reconnecting = transport.reconnect();
+        socket.onopen?.(new Event("open"));
+        await reconnecting;
+      });
+      const failures = vi.fn();
+      transport.onFailure(failures);
+      await renderPage();
+      if (method === "usage.read")
+        await testing.act(async () =>
+          testing.fireEvent.click(
+            testing.screen.getByRole("button", { name: "Inspect" }),
+          ),
+        );
+      await testing.act(async () => {
+        if (code === "timeout") await vi.advanceTimersByTimeAsync(60000);
+        else socket.onclose?.(new window.CloseEvent("close"));
+      });
+      const region =
+        method === "usage.read"
+          ? testing.within(testing.screen.getByRole("dialog"))
+          : testing.screen;
+      expect(region.getByRole("alert").textContent).toContain(
+        code === "timeout"
+          ? "Request timed out. Try reading again."
+          : "Connection lost. Reconnect to continue.",
+      );
+      expect(failures.mock.calls.length).toBeGreaterThan(0);
+      expect(failures.mock.calls.every(([error]) => error.code === code)).toBe(
+        true,
+      );
+      if (code === "timeout")
+        expect(failures.mock.calls[0][0].operation).toBe(method);
+      const retry = region.getByRole("button", { name: "Retry" });
+      retry.focus();
+      await testing.act(async () => testing.fireEvent.click(retry));
+      const requests = sent.filter((frame) => frame.method === method);
+      const reply = (frame: Frame) =>
+        socket.onmessage?.(
+          new window.MessageEvent("message", { data: JSON.stringify(frame) }),
+        );
+      await testing.act(async () => {
+        reply({
+          type: "response",
+          id: requests[0].id,
+          result: method === "usage.read" ? detail("999999") : result("999999"),
+        });
+        reply({
+          type: "response",
+          id: requests[requests.length - 1].id,
+          result: method === "usage.read" ? detail("2345") : result("2345"),
+        });
+      });
+      expect(region.queryByRole("alert")).toBeNull();
+      expect(region.queryByText("999,999")).toBeNull();
+      expect(region.getAllByText("2,345").length).toBeGreaterThan(0);
+      expect(transport.disconnected).toBe(false);
+    },
+  );
 
   it("retains connection errors across filter identities and retries through Backend reconnect", async () => {
     await renderPage();
@@ -586,7 +910,12 @@ describe("usage records", () => {
       ),
     );
     read.mockRejectedValueOnce(
-      new BackendError("request_timeout", "Detail timed out"),
+      new BackendError(
+        "timeout",
+        "Request timed out. Try reading again.",
+        true,
+        "usage.read",
+      ),
     );
     vi.mocked(backend.usageQuery).mockResolvedValue({
       ...result(),
@@ -595,7 +924,7 @@ describe("usage records", () => {
     await testing.act(async () => vi.advanceTimersByTimeAsync(5000));
     const modal = testing.screen.getByRole("dialog");
     expect(testing.within(modal).getByRole("alert").textContent).toContain(
-      "Detail timed out",
+      "Request timed out. Try reading again.",
     );
     expect(modal.textContent).toContain("cache_read_tokens");
     read.mockResolvedValue(detail("2345"));

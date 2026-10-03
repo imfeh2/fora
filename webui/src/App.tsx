@@ -104,10 +104,12 @@ function View({
 }
 
 const CONNECTION_TOAST = "connection";
-const HISTORY_READ_OPERATIONS = new Set([
+const REGION_READ_OPERATIONS = new Set([
   "agent.history.read",
   "agent.history.text",
   "agent.history.image",
+  "usage.query",
+  "usage.read",
 ]);
 const COMPOSER_OPERATIONS = new Set([
   "discussion.send",
@@ -435,7 +437,7 @@ export function useApplication() {
       if (
         error.code === "timeout" &&
         error.operation !== null &&
-        HISTORY_READ_OPERATIONS.has(error.operation)
+        REGION_READ_OPERATIONS.has(error.operation)
       )
         return;
       if (

@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useApplication } from "@/App";
 import { clearToasts, readToasts } from "@/components/ui/toast";
-import { BackendError, type BackendEvent, backend } from "@/lib/backend";
+import {
+  Backend,
+  BackendError,
+  type BackendEvent,
+  backend,
+  type Socket,
+} from "@/lib/backend";
 
 const hooks = vi.hoisted(() => ({
   states: [] as unknown[],
@@ -134,6 +140,7 @@ afterEach(() => {
   for (const off of cleanup) off();
   clearToasts();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -271,6 +278,56 @@ describe("application recovery with controlled hook effects", () => {
       description: "Check the current operation before retrying.",
     });
   });
+
+  it.each(["usage.query", "usage.read"])(
+    "keeps %s timeouts in the reading region",
+    async (operation) => {
+      vi.useFakeTimers();
+      const sent: { id: number }[] = [];
+      const socket: Socket = {
+        onopen: null,
+        onmessage: null,
+        onclose: null,
+        onerror: null,
+        close: vi.fn(),
+        send: (data) => sent.push(JSON.parse(data)),
+      };
+      const transport = new Backend(
+        () => ({ url: "ws://localhost/ws?token=test" }),
+        () => socket,
+      );
+      const connecting = transport.connect();
+      socket.onopen?.(new Event("open"));
+      await connecting;
+      vi.mocked(backend.onFailure).mockImplementation(
+        transport.onFailure.bind(transport),
+      );
+      mount();
+      await settle();
+      const before = readToasts().filter((item) => item.open);
+      const read = () =>
+        operation === "usage.query"
+          ? transport.usageQuery({})
+          : transport.usageRead("request:2:1:1");
+      const pending = read().catch((error) => error);
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(await pending).toMatchObject({ code: "timeout", operation });
+      expect(readToasts().filter((item) => item.open)).toEqual(before);
+      const recovered = read();
+      await settle();
+      socket.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "response",
+            id: sent[1].id,
+            result: { dataset_revision: 3 },
+          }),
+        }),
+      );
+      await expect(recovered).resolves.toEqual({ dataset_revision: 3 });
+      expect(readToasts().filter((item) => item.open)).toEqual(before);
+    },
+  );
 
   it("suppresses an unconfirmed Discussion send from global feedback", async () => {
     mount();

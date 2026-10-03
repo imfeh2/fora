@@ -3,6 +3,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -288,6 +289,7 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const [limit, setLimit] = useState(20);
   const [timeRange, setTimeRange] = useState("all");
   const [cursor, setCursor] = useState<string | null>(null);
+  const [pageTarget, setPageTarget] = useState<string | null>(null);
   const [result, setResult] = useState<UsageResult | null>(null);
   const [error, setError] = useState<BackendError | null>(null);
   const [loading, setLoading] = useState(true);
@@ -307,6 +309,8 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const anchor = useRef<string | undefined>(undefined);
   const recordsElement = useRef<HTMLDivElement>(null);
   const revealRecords = useRef(false);
+  const revealPage = useRef(false);
+  const pageControl = useRef<HTMLElement | null>(null);
 
   const changeFilters = (next: UsageFilters) => {
     if (JSON.stringify(next) === JSON.stringify(filters)) {
@@ -316,6 +320,8 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     if (next.start_at !== filters.start_at || next.end_at !== filters.end_at) {
       setTimeRange(next.start_at || next.end_at ? "custom" : "all");
     }
+    revealPage.current = false;
+    setPageTarget(null);
     current.current = null;
     anchor.current = undefined;
     setFilters(next);
@@ -328,8 +334,9 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     (resource: Resource<UsageResult>, connectionError: BackendError | null) => {
       setError(connectionError ?? resource.error);
       setLoading(resource.status === "pending" || resource.refreshing);
-      setResult(resource.data);
       if (resource.data) {
+        setPageTarget(null);
+        setResult(resource.data);
         current.current = resource.data;
         choices.current = resource.data;
         setDatasetRevision(resource.data.dataset_revision);
@@ -337,12 +344,39 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     },
     [],
   );
-  const changePage = (next: string | null) => {
+  const changePage = (next: string | null, target: string) => {
+    revealPage.current = true;
+    setPageTarget(target);
+    pageControl.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setCursor(next);
-    setResult(null);
     setError(null);
     setLoading(true);
   };
+
+  const retryQuery = () => {
+    if (
+      revealPage.current &&
+      recordsElement.current?.contains(document.activeElement) &&
+      document.activeElement?.closest('[role="alert"]') &&
+      pageControl.current?.isConnected
+    )
+      pageControl.current.focus({ preventScroll: true });
+    controls.current?.retry();
+  };
+
+  useLayoutEffect(() => {
+    if (result && revealPage.current) {
+      revealPage.current = false;
+      if (recordsElement.current?.contains(document.activeElement))
+        recordsElement.current.scrollIntoView({
+          block: "start",
+          behavior: "instant",
+        });
+    }
+  }, [result]);
 
   useEffect(() => {
     if (result && revealRecords.current) {
@@ -505,8 +539,8 @@ export function UsagePage({ agentId }: { agentId?: number }) {
           connection={connection}
           onChange={onQueryChange}
         />
-        {error ? (
-          <LoadError error={error} retry={() => controls.current?.retry()} />
+        {error && !result ? (
+          <LoadError error={error} retry={retryQuery} />
         ) : null}
         {!result ? (
           loading ? (
@@ -696,8 +730,9 @@ export function UsagePage({ agentId }: { agentId?: number }) {
                 </div>
               </Section>
             ))}
-            <div ref={recordsElement}>
+            <div ref={recordsElement} aria-busy={loading}>
               <Section title="Request records">
+                {error ? <LoadError error={error} retry={retryQuery} /> : null}
                 {result.records.length === 0 ? (
                   <StatePanel
                     icons={[BarChart3, Search, BarChart3]}
@@ -796,19 +831,26 @@ export function UsagePage({ agentId }: { agentId?: number }) {
                   </div>
                 )}
                 <div className="flex flex-wrap items-center justify-between gap-3 py-3 text-xs">
-                  <span>
+                  <span role="status" aria-live="polite">
+                    {pageTarget
+                      ? `${pageTarget}${loading ? " loading" : " unavailable"} · `
+                      : loading
+                        ? "Loading records · "
+                        : ""}
                     {result.records.length.toLocaleString()} shown ·{" "}
                     {result.summary.records.toLocaleString()} records ·{" "}
                     {usageNumber(result.summary.requests)} requests
                   </span>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 [&_button[aria-disabled=true]]:cursor-not-allowed [&_button[aria-disabled=true]]:opacity-50">
                     <select
                       aria-label="Page size"
                       className={SELECT_CLASS}
                       value={limit}
+                      aria-disabled={loading || !!error}
                       onChange={(event) => {
+                        if (loading || error) return;
                         setLimit(Number(event.target.value));
-                        changePage(null);
+                        changePage(null, "Page size");
                         anchor.current = undefined;
                       }}
                     >
@@ -820,15 +862,23 @@ export function UsagePage({ agentId }: { agentId?: number }) {
                     </select>
                     <Button
                       size="sm"
-                      disabled={!result.previous_cursor || loading}
-                      onClick={() => changePage(result.previous_cursor)}
+                      aria-disabled={
+                        !result.previous_cursor || loading || !!error
+                      }
+                      onClick={() => {
+                        if (!loading && !error && result.previous_cursor)
+                          changePage(result.previous_cursor, "Previous page");
+                      }}
                     >
                       Previous
                     </Button>
                     <Button
                       size="sm"
-                      disabled={!result.has_more || loading}
-                      onClick={() => changePage(result.next_cursor)}
+                      aria-disabled={!result.has_more || loading || !!error}
+                      onClick={() => {
+                        if (!loading && !error && result.has_more)
+                          changePage(result.next_cursor, "Next page");
+                      }}
                     >
                       Next
                     </Button>

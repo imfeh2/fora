@@ -575,6 +575,8 @@ const READ_METHODS = new Set([
   "discussion.page",
   "discussion.search",
   "agent.detail",
+  "usage.query",
+  "usage.read",
   "agent.history",
   "agent.history.read",
   "agent.history.text",
