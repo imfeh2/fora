@@ -214,6 +214,288 @@ function fakeClock() {
 }
 
 describe("usage records", () => {
+  it.each(["From UTC", "Until UTC"])(
+    "keeps invalid years in %s outside the active query and recovers after editing",
+    async (label) => {
+      fakeClock();
+      await renderPage(2);
+      const field = testing.screen.getByLabelText(label) as HTMLInputElement;
+      field.focus();
+      for (const value of ["10000-01-01T00:00", "202610-03-12T03:00"]) {
+        await testing.act(async () =>
+          testing.fireEvent.input(field, { target: { value } }),
+        );
+        expect(field.value).toBe(value);
+        expect(field.getAttribute("aria-invalid")).toBe("true");
+        const errorId = field.getAttribute("aria-describedby");
+        expect(errorId).toBeTruthy();
+        expect(document.getElementById(errorId ?? "")?.textContent).toBe(
+          "Enter a UTC year from 0001 to 9999.",
+        );
+        expect(backend.usageQuery).toHaveBeenCalledTimes(1);
+        expect(
+          testing.screen.getByRole("table", { name: "Request records" }),
+        ).toBeTruthy();
+        expect(
+          testing.screen.queryByRole("button", { name: "Retry" }),
+        ).toBeNull();
+        expect(document.activeElement).toBe(field);
+      }
+      await testing.act(async () => vi.advanceTimersByTimeAsync(5000));
+      expect(backend.usageQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent_id: 2 }),
+      );
+      expect(
+        vi
+          .mocked(backend.usageQuery)
+          .mock.calls.every(([params]) => !params.start_at && !params.end_at),
+      ).toBe(true);
+      await testing.act(async () =>
+        testing.fireEvent.input(field, {
+          target: { value: "2026-10-03T12:30" },
+        }),
+      );
+      expect(field.getAttribute("aria-invalid")).toBe("false");
+      expect(testing.screen.queryByRole("alert")).toBeNull();
+      expect(backend.usageQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          [label === "From UTC" ? "start_at" : "end_at"]:
+            "2026-10-03T12:30:00+00:00",
+        }),
+      );
+    },
+  );
+
+  it.each(["0001-01-01T00:00", "9999-12-31T23:59", "2024-02-29T12:30"])(
+    "sends the native UTC minute value %s",
+    async (value) => {
+      await renderPage();
+      await testing.act(async () =>
+        testing.fireEvent.input(testing.screen.getByLabelText("From UTC"), {
+          target: { value },
+        }),
+      );
+      expect(backend.usageQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({ start_at: `${value}:00+00:00` }),
+      );
+      expect(testing.screen.queryByRole("alert")).toBeNull();
+    },
+  );
+
+  it("holds both date drafts while native input is incomplete or invalid", async () => {
+    await renderPage();
+    const from = testing.screen.getByLabelText("From UTC") as HTMLInputElement;
+    const until = testing.screen.getByLabelText(
+      "Until UTC",
+    ) as HTMLInputElement;
+    await testing.act(async () =>
+      testing.fireEvent.input(until, {
+        target: { value: "2026-10-03T12:30" },
+      }),
+    );
+    const validity = vi.spyOn(from, "validity", "get").mockReturnValue({
+      ...from.validity,
+      valid: false,
+      badInput: true,
+      rangeUnderflow: false,
+      rangeOverflow: false,
+    });
+    await testing.act(async () => testing.fireEvent.input(from));
+    expect(from.getAttribute("aria-invalid")).toBe("true");
+    expect(testing.screen.getByRole("alert").textContent).toBe(
+      "Enter a complete, valid UTC date and time in minutes.",
+    );
+    await testing.act(async () =>
+      testing.fireEvent.input(until, {
+        target: { value: "2026-10-04T12:30" },
+      }),
+    );
+    expect(until.value).toBe("2026-10-04T12:30");
+    expect(backend.usageQuery).toHaveBeenCalledTimes(2);
+    validity.mockRestore();
+    await testing.act(async () =>
+      testing.fireEvent.input(from, {
+        target: { value: "2026-10-02T00:00" },
+      }),
+    );
+    expect(backend.usageQuery).toHaveBeenCalledTimes(3);
+    expect(backend.usageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_at: "2026-10-02T00:00:00+00:00",
+        end_at: "2026-10-04T12:30:00+00:00",
+      }),
+    );
+    expect(testing.screen.queryByRole("alert")).toBeNull();
+    await testing.act(async () =>
+      testing.fireEvent.input(from, {
+        target: { value: "2026-10-02T00:00:30" },
+      }),
+    );
+    expect(from.validity.stepMismatch).toBe(true);
+    expect(from.getAttribute("aria-invalid")).toBe("true");
+    expect(backend.usageQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports reversed and equal custom ranges at Until and commits both corrected fields", async () => {
+    await renderPage();
+    const from = testing.screen.getByLabelText("From UTC");
+    const until = testing.screen.getByLabelText("Until UTC");
+    await testing.act(async () =>
+      testing.fireEvent.input(from, {
+        target: { value: "2026-10-03T12:30" },
+      }),
+    );
+    for (const value of ["2026-10-02T12:30", "2026-10-03T12:30"]) {
+      await testing.act(async () =>
+        testing.fireEvent.input(until, { target: { value } }),
+      );
+      expect(testing.screen.getByRole("alert").textContent).toBe(
+        "Until must be later than From.",
+      );
+      expect(until.getAttribute("aria-invalid")).toBe("true");
+      expect(backend.usageQuery).toHaveBeenCalledTimes(2);
+    }
+    await testing.act(async () =>
+      testing.fireEvent.input(from, {
+        target: { value: "2026-10-01T12:30" },
+      }),
+    );
+    expect(backend.usageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_at: "2026-10-01T12:30:00+00:00",
+        end_at: "2026-10-03T12:30:00+00:00",
+      }),
+    );
+    expect(testing.screen.queryByRole("alert")).toBeNull();
+    await testing.act(async () =>
+      testing.fireEvent.input(until, { target: { value: "" } }),
+    );
+    expect(backend.usageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_at: "2026-10-01T12:30:00+00:00",
+        end_at: null,
+      }),
+    );
+  });
+
+  it("synchronizes date drafts and messages with shortcuts, date tags and Clear Filters", async () => {
+    await renderPage(2);
+    const from = testing.screen.getByLabelText("From UTC") as HTMLInputElement;
+    const until = testing.screen.getByLabelText(
+      "Until UTC",
+    ) as HTMLInputElement;
+    await testing.act(async () =>
+      testing.fireEvent.input(until, {
+        target: { value: "202610-03-12T03:00" },
+      }),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.change(testing.screen.getByLabelText("Time range"), {
+        target: { value: "24" },
+      }),
+    );
+    const calls = vi.mocked(backend.usageQuery).mock.calls;
+    const shortcut = calls[calls.length - 1][0];
+    expect(from.value).toBe(shortcut?.start_at?.slice(0, 16));
+    expect(until.value).toBe("");
+    expect(testing.screen.queryByRole("alert")).toBeNull();
+    const count = vi.mocked(backend.usageQuery).mock.calls.length;
+    await testing.act(async () => testing.fireEvent.blur(from));
+    expect(backend.usageQuery).toHaveBeenCalledTimes(count);
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: /^start_at:/ }),
+      ),
+    );
+    expect(from.value).toBe("");
+    expect(until.value).toBe("");
+    await testing.act(async () =>
+      testing.fireEvent.input(from, {
+        target: { value: "202610-03-12T03:00" },
+      }),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Clear Filters" }),
+      ),
+    );
+    expect(from.value).toBe("");
+    expect(until.value).toBe("");
+    expect(testing.screen.queryByRole("alert")).toBeNull();
+    expect(from.getAttribute("aria-invalid")).toBe("false");
+    expect(
+      (testing.screen.getByLabelText("Time range") as HTMLSelectElement).value,
+    ).toBe("all");
+    const cleared = calls[calls.length - 1][0];
+    expect(cleared.agent_id).toBeUndefined();
+    expect(cleared.start_at).toBeUndefined();
+    expect(cleared.end_at).toBeUndefined();
+  });
+
+  it("uses validated dates through Refresh, regional Retry, pagination and other filters while a draft is invalid", async () => {
+    const data = { ...result(), has_more: true, next_cursor: "page-two" };
+    vi.mocked(backend.usageQuery).mockResolvedValue(data);
+    await renderPage(2);
+    const from = testing.screen.getByLabelText("From UTC");
+    const until = testing.screen.getByLabelText(
+      "Until UTC",
+    ) as HTMLInputElement;
+    await testing.act(async () =>
+      testing.fireEvent.input(from, {
+        target: { value: "2026-10-01T00:00" },
+      }),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.input(until, {
+        target: { value: "202610-03-12T03:00" },
+      }),
+    );
+    vi.mocked(backend.usageQuery).mockRejectedValueOnce(
+      new BackendError("timeout", "Read timed out", true, "usage.query"),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Refresh" }),
+      ),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Retry" }),
+      ),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Next" }),
+      ),
+    );
+    expect(backend.usageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_at: "2026-10-01T00:00:00+00:00",
+        end_at: null,
+        cursor: "page-two",
+      }),
+    );
+    await testing.act(async () =>
+      testing.fireEvent.change(testing.screen.getByLabelText("Model"), {
+        target: { value: "model-key" },
+      }),
+    );
+    expect(until.value).toBe("202610-03-12T03:00");
+    expect(until.getAttribute("aria-invalid")).toBe("true");
+    expect(backend.usageQuery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        model_key: "model-key",
+        start_at: "2026-10-01T00:00:00+00:00",
+        end_at: null,
+      }),
+    );
+    expect(
+      vi
+        .mocked(backend.usageQuery)
+        .mock.calls.every(([params]) => !params.end_at),
+    ).toBe(true);
+  });
+
   it("shows slow polling results and merges updates into one pending read", async () => {
     fakeClock();
     const reads: ReturnType<typeof deferred<UsageResult>>[] = [];
@@ -670,7 +952,7 @@ describe("usage records", () => {
     next.focus();
     await testing.act(async () => testing.fireEvent.click(next));
     const filter = testing.screen.getByLabelText("From UTC");
-    filter.focus();
+    await testing.act(async () => filter.focus());
     await testing.act(async () => read.resolve(result("2345")));
     expect(document.activeElement).toBe(filter);
     expect(scroll).not.toHaveBeenCalled();
@@ -686,9 +968,9 @@ describe("usage records", () => {
       ),
     );
     vi.mocked(backend.usageQuery).mockReturnValueOnce(stale.promise);
-    next.focus();
+    await testing.act(async () => next.focus());
     await testing.act(async () => testing.fireEvent.click(next));
-    filter.focus();
+    await testing.act(async () => filter.focus());
     await testing.act(async () =>
       testing.fireEvent.change(filter, {
         target: { value: "2026-10-01T00:00" },

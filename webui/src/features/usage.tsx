@@ -288,6 +288,12 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const [filters, setFilters] = useState<UsageFilters>({ agent_id: agentId });
   const [limit, setLimit] = useState(20);
   const [timeRange, setTimeRange] = useState("all");
+  const timeInputs = useRef<
+    Record<"start_at" | "end_at", HTMLInputElement | null>
+  >({ start_at: null, end_at: null });
+  const [timeErrors, setTimeErrors] = useState<
+    Partial<Record<"start_at" | "end_at", string>>
+  >({});
   const [cursor, setCursor] = useState<string | null>(null);
   const [pageTarget, setPageTarget] = useState<string | null>(null);
   const [result, setResult] = useState<UsageResult | null>(null);
@@ -312,7 +318,17 @@ export function UsagePage({ agentId }: { agentId?: number }) {
   const revealPage = useRef(false);
   const pageControl = useRef<HTMLElement | null>(null);
 
-  const changeFilters = (next: UsageFilters) => {
+  const changeFilters = (next: UsageFilters, resetTimeInputs = false) => {
+    if (resetTimeInputs) {
+      for (const key of ["start_at", "end_at"] as const) {
+        const input = timeInputs.current[key];
+        if (input)
+          input.value = next[key]
+            ? new Date(next[key]).toISOString().slice(0, 16)
+            : "";
+      }
+      setTimeErrors({});
+    }
     if (JSON.stringify(next) === JSON.stringify(filters)) {
       void controls.current?.refresh(true);
       return;
@@ -329,6 +345,43 @@ export function UsagePage({ agentId }: { agentId?: number }) {
     setResult(null);
     setError(null);
     setLoading(true);
+  };
+  const changeTimes = (commit = true) => {
+    const errors: Partial<Record<"start_at" | "end_at", string>> = {};
+    const times: Record<"start_at" | "end_at", string | null> = {
+      start_at: null,
+      end_at: null,
+    };
+    for (const key of ["start_at", "end_at"] as const) {
+      const input = timeInputs.current[key];
+      if (!input) throw new Error("Usage time input is missing");
+      if (input.validity.rangeUnderflow || input.validity.rangeOverflow)
+        errors[key] = "Enter a UTC year from 0001 to 9999.";
+      else if (
+        !input.validity.valid ||
+        (input.value && !Number.isFinite(input.valueAsNumber))
+      )
+        errors[key] = "Enter a complete, valid UTC date and time in minutes.";
+      else if (input.value)
+        times[key] = new Date(input.valueAsNumber)
+          .toISOString()
+          .replace(".000Z", "+00:00");
+    }
+    if (
+      !errors.start_at &&
+      !errors.end_at &&
+      times.start_at &&
+      times.end_at &&
+      times.start_at >= times.end_at
+    )
+      errors.end_at = "Until must be later than From.";
+    setTimeErrors(errors);
+    if (!commit || Object.keys(errors).length > 0) return;
+    if (
+      times.start_at !== (filters.start_at ?? null) ||
+      times.end_at !== (filters.end_at ?? null)
+    )
+      changeFilters({ ...filters, ...times });
   };
   const onQueryChange = useCallback(
     (resource: Resource<UsageResult>, connectionError: BackendError | null) => {
@@ -416,13 +469,16 @@ export function UsagePage({ agentId }: { agentId?: number }) {
               onChange={(event) => {
                 if (event.target.value === "custom") return;
                 const hours = Number(event.target.value);
-                changeFilters({
-                  ...filters,
-                  start_at: hours
-                    ? new Date(Date.now() - hours * 3600000).toISOString()
-                    : null,
-                  end_at: null,
-                });
+                changeFilters(
+                  {
+                    ...filters,
+                    start_at: hours
+                      ? new Date(Date.now() - hours * 3600000).toISOString()
+                      : null,
+                    end_at: null,
+                  },
+                  true,
+                );
                 setTimeRange(event.target.value);
               }}
             >
@@ -494,20 +550,33 @@ export function UsagePage({ agentId }: { agentId?: number }) {
               <Input
                 id={`usage-${key}`}
                 type="datetime-local"
+                ref={(input) => {
+                  timeInputs.current[key] = input;
+                }}
+                min="0001-01-01T00:00"
+                max="9999-12-31T23:59"
+                step={60}
                 aria-label={key === "start_at" ? "From UTC" : "Until UTC"}
-                value={filters[key]?.slice(0, 16) ?? ""}
-                onChange={(event) =>
-                  changeFilters({
-                    ...filters,
-                    [key]: event.target.value
-                      ? `${event.target.value}:00+00:00`
-                      : null,
-                  })
+                aria-invalid={!!timeErrors[key]}
+                aria-describedby={
+                  timeErrors[key] ? `usage-${key}-error` : undefined
                 }
+                onInput={() => changeTimes()}
+                onChange={() => changeTimes()}
+                onBlur={() => changeTimes(false)}
               />
+              {timeErrors[key] ? (
+                <span
+                  id={`usage-${key}-error`}
+                  role="alert"
+                  className="text-danger"
+                >
+                  {timeErrors[key]}
+                </span>
+              ) : null}
             </label>
           ))}
-          <Button onClick={() => changeFilters({})}>Clear Filters</Button>
+          <Button onClick={() => changeFilters({}, true)}>Clear Filters</Button>
         </div>
         <div className="flex flex-wrap gap-2">
           {Object.entries(filters)
@@ -516,7 +585,12 @@ export function UsagePage({ agentId }: { agentId?: number }) {
               <Button
                 key={key}
                 size="sm"
-                onClick={() => changeFilters({ ...filters, [key]: null })}
+                onClick={() =>
+                  changeFilters(
+                    { ...filters, [key]: null },
+                    key === "start_at" || key === "end_at",
+                  )
+                }
               >
                 {key === "model_key"
                   ? modelName(
