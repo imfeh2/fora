@@ -25,6 +25,7 @@ let fireEvent: typeof import("@testing-library/react").fireEvent;
 let clearToasts: typeof import("@/components/ui/toast").clearToasts;
 let closeDom: () => void;
 let events: Set<(event: BackendEvent) => void>;
+let failures: Set<(error: InstanceType<typeof BackendError>) => void>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -116,6 +117,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   events = new Set();
+  failures = new Set();
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
   connection = deferred<void>();
   organizationRead = deferred<typeof organization>();
@@ -127,7 +129,12 @@ beforeEach(() => {
       events.delete(listener);
     };
   });
-  vi.spyOn(backend, "onFailure").mockReturnValue(() => {});
+  vi.spyOn(backend, "onFailure").mockImplementation((listener) => {
+    failures.add(listener);
+    return () => {
+      failures.delete(listener);
+    };
+  });
   vi.spyOn(backend, "disconnected", "get").mockReturnValue(false);
   vi.spyOn(backend, "organization").mockReturnValue(organizationRead.promise);
   vi.spyOn(backend, "discussions").mockReturnValue(discussionsRead.promise);
@@ -476,6 +483,285 @@ it("ignores an archived response from a closed connection and reads after restor
   expect(
     vi.mocked(backend.discussions).mock.calls.filter(([archived]) => archived),
   ).toHaveLength(2);
+});
+
+async function readyApplication() {
+  const view = render(<App />);
+  await connect();
+  await act(async () => {
+    organizationRead.resolve(organization);
+    discussionsRead.resolve(discussions);
+  });
+  return view;
+}
+
+async function emit(event: BackendEvent) {
+  await act(async () => {
+    for (const listener of events) listener(event);
+  });
+}
+
+function archiveCalls() {
+  return vi.mocked(backend.discussions).mock.calls.filter(([value]) => value);
+}
+
+it("publishes archived results and merges updates during continuous events", async () => {
+  const view = await readyApplication();
+  const reads = Array.from({ length: 5 }, () =>
+    deferred<DiscussionSummary[]>(),
+  );
+  let index = 0;
+  vi.mocked(backend.discussions).mockImplementation((archived) =>
+    archived ? reads[index++].promise : Promise.resolve(discussions),
+  );
+  fireEvent.click(view.getByRole("button", { name: "Show archived" }));
+  await act(async () => {});
+  const input = view.getByRole("searchbox", { name: "Search messages" });
+  for (let position = 0; position < 4; position += 1) {
+    await emit({ type: "message.created", discussion_id: 99 });
+    await emit({ type: "discussion.updated", discussion_id: 99 });
+    expect(archiveCalls()).toHaveLength(position + 1);
+    await act(async () => {
+      reads[position].resolve([
+        {
+          ...discussions[0],
+          topic: `Archived result ${position}`,
+          archived: true,
+        },
+      ]);
+    });
+    expect(view.getByText(`Archived result ${position}`)).toBeTruthy();
+    expect(view.queryByLabelText("Loading Discussions")).toBeNull();
+    expect(archiveCalls()).toHaveLength(position + 2);
+    expect(view.getByRole("searchbox", { name: "Search messages" })).toBe(
+      input,
+    );
+  }
+  await act(async () => {
+    reads[4].resolve([
+      { ...discussions[0], topic: "Final archived result", archived: true },
+    ]);
+  });
+  expect(view.getByText("Final archived result")).toBeTruthy();
+  expect(archiveCalls()).toHaveLength(5);
+});
+
+it.each(["internal_error", "timeout"])(
+  "retries only archived Discussions after an initial %s failure",
+  async (code) => {
+    const view = await readyApplication();
+    const first = deferred<DiscussionSummary[]>();
+    const next = deferred<DiscussionSummary[]>();
+    let reads = 0;
+    vi.mocked(backend.discussions).mockImplementation((archived) =>
+      archived
+        ? reads++ === 0
+          ? first.promise
+          : next.promise
+        : Promise.resolve(discussions),
+    );
+    fireEvent.click(view.getByRole("button", { name: "Show archived" }));
+    await act(async () => {});
+    const error = new BackendError(
+      code,
+      "Archived read unavailable",
+      code === "timeout",
+      "discussion.list",
+    );
+    await act(async () => {
+      if (error.transport) for (const listener of failures) listener(error);
+      first.reject(error);
+    });
+    expect(view.getByText("Archived read unavailable")).toBeTruthy();
+    expect(view.queryByLabelText("Loading Discussions")).toBeNull();
+    expect(view.queryByText("No Discussions yet")).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "Retry" }));
+    await act(async () => {
+      next.resolve([
+        { ...discussions[0], topic: "Recovered archive", archived: true },
+      ]);
+    });
+    expect(view.getByText("Recovered archive")).toBeTruthy();
+    expect(view.queryByText("Archived read unavailable")).toBeNull();
+    expect(archiveCalls()).toHaveLength(2);
+    expect(backend.organization).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(backend.discussions).mock.calls.filter(([value]) => !value),
+    ).toHaveLength(1);
+  },
+);
+
+it.each(["internal_error", "timeout"])(
+  "retains archived rows and search input through refresh %s and Retry",
+  async (code) => {
+    const view = await readyApplication();
+    const archived = [
+      { ...discussions[0], topic: "Saved archive", archived: true },
+    ];
+    vi.mocked(backend.discussions).mockImplementation((value) =>
+      Promise.resolve(value ? archived : discussions),
+    );
+    fireEvent.click(view.getByRole("button", { name: "Show archived" }));
+    await act(async () => {});
+    const input = view.getByRole("searchbox", { name: "Search messages" });
+    const row = view.getByText("Saved archive");
+    const refresh = deferred<DiscussionSummary[]>();
+    vi.mocked(backend.discussions).mockImplementation((value) =>
+      value ? refresh.promise : Promise.resolve(discussions),
+    );
+    await emit({ type: "mention.acked", discussion_id: 4 });
+    expect(view.getByText("Saved archive")).toBe(row);
+    expect(view.queryByLabelText("Loading Discussions")).toBeNull();
+    await act(async () => {
+      refresh.reject(
+        new BackendError(
+          code,
+          "Archived refresh unavailable",
+          code === "timeout",
+          "discussion.list",
+        ),
+      );
+    });
+    expect(view.getByText("Saved archive")).toBe(row);
+    expect(view.getByText("Archived refresh unavailable")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "saved search draft" } });
+    vi.mocked(backend.discussions).mockImplementation((value) =>
+      Promise.resolve(value ? archived : discussions),
+    );
+    fireEvent.click(view.getByRole("button", { name: "Retry" }));
+    await act(async () => {});
+    expect(view.getByRole("searchbox", { name: "Search messages" })).toBe(
+      input,
+    );
+    expect((input as HTMLInputElement).value).toBe("saved search draft");
+    expect(view.queryByText("Archived refresh unavailable")).toBeNull();
+    fireEvent.change(input, { target: { value: "" } });
+    expect(view.getByText("Saved archive")).toBeTruthy();
+    expect(archiveCalls()).toHaveLength(3);
+  },
+);
+
+it("ignores archived reads after switching and merges every update event", async () => {
+  const view = await readyApplication();
+  const old = deferred<DiscussionSummary[]>();
+  const next = deferred<DiscussionSummary[]>();
+  let reads = 0;
+  vi.mocked(backend.discussions).mockImplementation((archived) => {
+    if (!archived) return Promise.resolve(discussions);
+    reads += 1;
+    return reads === 1
+      ? old.promise
+      : reads === 2
+        ? next.promise
+        : Promise.resolve([
+            { ...discussions[0], topic: "Current archive", archived: true },
+          ]);
+  });
+  const toggle = view.getByRole("button", { name: "Show archived" });
+  fireEvent.click(toggle);
+  await act(async () => {});
+  fireEvent.click(toggle);
+  for (const type of [
+    "message.created",
+    "mention.acked",
+    "mention.revoked",
+    "discussion.created",
+    "discussion.updated",
+  ])
+    await emit({ type, discussion_id: 99 });
+  expect(archiveCalls()).toHaveLength(1);
+  fireEvent.click(toggle);
+  await act(async () => {});
+  for (const type of [
+    "message.created",
+    "mention.acked",
+    "mention.revoked",
+    "discussion.created",
+    "discussion.updated",
+  ])
+    await emit({ type, discussion_id: 99 });
+  expect(archiveCalls()).toHaveLength(2);
+  await act(async () => {
+    old.resolve([
+      { ...discussions[0], topic: "Obsolete archive", archived: true },
+    ]);
+  });
+  expect(view.queryByText("Obsolete archive")).toBeNull();
+  expect(view.getByLabelText("Loading Discussions")).toBeTruthy();
+  await act(async () => {
+    next.resolve([
+      { ...discussions[0], topic: "Next archive", archived: true },
+    ]);
+  });
+  expect(view.getByText("Current archive")).toBeTruthy();
+  expect(archiveCalls()).toHaveLength(3);
+});
+
+it("invalidates archived reads and removes subscriptions when leaving the page", async () => {
+  const view = await readyApplication();
+  const old = deferred<DiscussionSummary[]>();
+  vi.mocked(backend.discussions).mockImplementation((archived) =>
+    archived ? old.promise : Promise.resolve(discussions),
+  );
+  fireEvent.click(view.getByRole("button", { name: "Show archived" }));
+  await act(async () => {});
+  const listeners = events.size;
+  fireEvent.click(view.getByRole("button", { name: "Members" }));
+  expect(events.size).toBeLessThan(listeners);
+  await emit({ type: "message.created", discussion_id: 99 });
+  expect(archiveCalls()).toHaveLength(1);
+  await act(async () => {
+    old.resolve([
+      { ...discussions[0], topic: "Unmounted archive", archived: true },
+    ]);
+  });
+  fireEvent.click(view.getByRole("button", { name: /^Discussions/ }));
+  expect(view.queryByText("Unmounted archive")).toBeNull();
+  expect(view.getAllByText("Startup review")).toHaveLength(2);
+  expect(archiveCalls()).toHaveLength(1);
+});
+
+it("retains archived rows and input across disconnect and restoration", async () => {
+  const view = await readyApplication();
+  const archived = [
+    { ...discussions[0], topic: "Saved archive", archived: true },
+  ];
+  vi.mocked(backend.discussions).mockImplementation((value) =>
+    Promise.resolve(value ? archived : discussions),
+  );
+  fireEvent.click(view.getByRole("button", { name: "Show archived" }));
+  await act(async () => {});
+  const old = deferred<DiscussionSummary[]>();
+  let reads = 0;
+  vi.mocked(backend.discussions).mockImplementation((value) =>
+    value && reads++ === 0
+      ? old.promise
+      : Promise.resolve(value ? archived : discussions),
+  );
+  await emit({ type: "discussion.updated", discussion_id: 99 });
+  const input = view.getByRole("searchbox", { name: "Search messages" });
+  vi.spyOn(backend, "disconnected", "get").mockReturnValue(true);
+  await emit({
+    type: "connection.closed",
+    error: new BackendError("disconnected", "Connection lost", true),
+  });
+  expect(view.getByText("Saved archive")).toBeTruthy();
+  expect(view.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+  expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
+  fireEvent.change(input, { target: { value: "connection search draft" } });
+  await act(async () => {
+    old.resolve([
+      { ...discussions[0], topic: "Closed archive", archived: true },
+    ]);
+  });
+  vi.spyOn(backend, "disconnected", "get").mockReturnValue(false);
+  await emit({ type: "connection.restored" });
+  expect(view.getByRole("searchbox", { name: "Search messages" })).toBe(input);
+  expect((input as HTMLInputElement).value).toBe("connection search draft");
+  fireEvent.change(input, { target: { value: "" } });
+  expect(view.queryByText("Closed archive")).toBeNull();
+  expect(view.getByText("Saved archive")).toBeTruthy();
+  expect(archiveCalls()).toHaveLength(3);
 });
 
 it("ends document and toolbar placeholders after an initial read failure", async () => {

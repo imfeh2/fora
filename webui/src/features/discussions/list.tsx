@@ -9,8 +9,8 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useOrganization } from "@/app/organization";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useOrganization, useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import {
   type Column,
@@ -107,9 +107,12 @@ export function DiscussionsPage({
     retry,
   } = useOrganization();
   const navigate = useNavigate();
-  const [archivedList, setList] = useState<DiscussionSummary[] | null>(null);
-  const [archiveFailure, setArchiveFailure] = useState(false);
-  const generation = useRef(0);
+  const readArchived = useCallback(() => backend.discussions(true), []);
+  const {
+    resource: archiveResource,
+    refresh: load,
+    invalidate,
+  } = useResource(readArchived);
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState<{
     query: string;
@@ -117,62 +120,41 @@ export function DiscussionsPage({
   } | null>(null);
   const results = search?.query === query.trim() ? search.items : null;
   const [archived, setArchived] = useState(false);
-  const list = archived ? archivedList : discussions;
+  const list = archived ? archiveResource.data : discussions;
   const [creating, setCreating] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState<number | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
 
-  const load = useCallback(async () => {
-    if (!archived) return;
-    const epoch = ++generation.current;
-    setArchiveFailure(false);
-    try {
-      const items = await backend.discussions(true);
-      if (epoch !== generation.current) return;
-      setList(items);
-      dismissToast("discussions-list");
-    } catch (failure) {
-      if (epoch !== generation.current) return;
-      setArchiveFailure(true);
-      if (failure instanceof BackendError && failure.transport)
-        backend.reportFailure(failure);
-      else
-        toast({
-          id: "discussions-list",
-          tone: "danger",
-          title: "Could not load Discussions",
-          description:
-            failure instanceof Error ? failure.message : String(failure),
-          duration: null,
-          action: { label: "Retry", onClick: () => void load() },
-        });
-    }
-  }, [archived]);
-
   useEffect(() => {
-    void load();
-    return () => {
-      generation.current += 1;
-    };
-  }, [load]);
+    invalidate(archived && !backend.disconnected);
+    if (archived) void load();
+    return () => invalidate(false);
+  }, [archived, load, invalidate]);
 
   useEffect(() => {
     return backend.onEvent((event) => {
-      if (event.type === "connection.closed") generation.current += 1;
-      if (event.type === "connection.restored")
+      if (event.type === "connection.closed")
+        invalidate(
+          false,
+          event.error instanceof BackendError ? event.error : undefined,
+        );
+      if (event.type === "connection.restored") {
         setConnectionRevision((value) => value + 1);
+        invalidate(archived);
+        if (archived) void load();
+      }
       if (
-        event.type === "connection.restored" ||
-        event.type === "message.created" ||
-        event.type === "mention.acked" ||
-        event.type === "mention.revoked" ||
-        event.type === "discussion.created" ||
-        event.type === "discussion.updated"
+        archived &&
+        (event.type === "message.created" ||
+          event.type === "mention.acked" ||
+          event.type === "mention.revoked" ||
+          event.type === "discussion.created" ||
+          event.type === "discussion.updated")
       ) {
-        void load();
+        void load(true);
       }
     });
-  }, [load]);
+  }, [archived, load, invalidate]);
 
   useEffect(() => {
     const text = query.trim();
@@ -213,7 +195,7 @@ export function DiscussionsPage({
     try {
       await backend.archiveDiscussion(item.id, !item.archived);
       dismissToast(`discussion-archive:${item.id}`);
-      if (archived) await load();
+      if (archived) await load(true);
       else await retry("discussions");
     } catch (failure) {
       if (failure instanceof BackendError && failure.transport)
@@ -266,6 +248,11 @@ export function DiscussionsPage({
         </IconButton>
       </Toolbar>
       <PageBody>
+        {archived &&
+        archiveResource.error &&
+        !(archiveResource.error.transport && backend.disconnected) ? (
+          <LoadError error={archiveResource.error} retry={() => void load()} />
+        ) : null}
         {!archived && discussionsError ? (
           <LoadError
             error={discussionsError}
@@ -367,9 +354,8 @@ export function DiscussionsPage({
             </Table>
           )
         ) : list === null ? (
-          archived && archiveFailure ? (
-            <p role="alert">Could not load Discussions.</p>
-          ) : connectionError || (!archived && discussionsError) ? null : (
+          connectionError ||
+          (archived ? archiveResource.error : discussionsError) ? null : (
             <LoadingSkeleton label="Loading Discussions">
               <Table columns={LIST_COLUMNS} label="Discussions">
                 {["75%", "55%", "85%"].map((width) => (
