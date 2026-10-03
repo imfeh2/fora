@@ -192,6 +192,7 @@ export function Composer({
   members,
   memberIds,
   busy,
+  disabled = false,
   placeholder,
   onSend,
   onHeightChange,
@@ -204,6 +205,7 @@ export function Composer({
   members: Member[];
   memberIds: ReadonlySet<number>;
   busy: boolean;
+  disabled?: boolean;
   placeholder: string;
   onSend: SendDraft;
   onHeightChange: (height: number) => void;
@@ -300,7 +302,12 @@ export function Composer({
     });
   };
   const startRecording = async () => {
-    if (!controller || recording.current || voiceConfigRead.current !== null)
+    if (
+      disabled ||
+      !controller ||
+      recording.current ||
+      voiceConfigRead.current !== null
+    )
       return;
     const target = controller;
     const version = ++nextVoiceConfigVersion.current;
@@ -688,7 +695,8 @@ export function Composer({
   };
 
   const submit = async () => {
-    if (!canSend || sending || !controller || recording.current) return;
+    if (disabled || !canSend || sending || !controller || recording.current)
+      return;
     await controller.send(onSend);
     if (!controller.snapshot().draft.body) setCaret(0);
   };
@@ -891,6 +899,7 @@ export function Composer({
                       <button
                         type="button"
                         className="underline"
+                        disabled={disabled}
                         onClick={() => void submit()}
                       >
                         Retry send
@@ -1103,6 +1112,7 @@ export function Composer({
             <button
               type="button"
               aria-label="Start voice input"
+              disabled={disabled}
               onClick={() => void startRecording()}
               className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
             >
@@ -1181,7 +1191,7 @@ export function Composer({
             !!view?.moved ||
             !!view?.recovering ||
             !!view?.draft.pending?.cancelRequested ||
-            (!recordingActive && sending) ||
+            (!recordingActive && (sending || disabled)) ||
             voiceState === "finishing"
           }
           onClick={() => {

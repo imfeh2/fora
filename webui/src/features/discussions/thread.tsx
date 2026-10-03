@@ -126,7 +126,22 @@ export function ThreadPage(props: ThreadPageProps) {
             )
           }
         />
-        <PageBody>{pending ? <ThreadSkeleton /> : null}</PageBody>
+        <PageBody variant="flush">
+          <div className="@container relative flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6">
+              {pending ? <ThreadSkeleton /> : null}
+            </div>
+            {pending ? (
+              <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
+                <div className="w-full @[601px]:w-3/4">
+                  <LoadingSkeleton label="Loading message composer">
+                    <Skeleton className="h-12 w-full rounded-[24px]" />
+                  </LoadingSkeleton>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </PageBody>
       </Page>
     );
   return <ThreadSession key={id} {...props} members={members} humanId={humanId} />;
@@ -145,7 +160,6 @@ function ThreadSkeleton() {
           </div>
         </div>
       ))}
-      <Skeleton className="h-[52px] w-full rounded-sm" />
     </LoadingSkeleton>
   );
 }
@@ -891,8 +905,9 @@ function ThreadSession({
             discussionId={id}
             members={members}
             memberIds={memberIds}
-            busy={
-              busy || !detail || !memberIds.has(humanId) || backend.disconnected
+            busy={busy}
+            disabled={
+              !detail || !memberIds.has(humanId) || backend.disconnected
             }
             placeholder={topic ? `Message ${topic}` : "Message"}
             onSend={send}

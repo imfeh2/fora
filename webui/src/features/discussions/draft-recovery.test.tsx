@@ -102,6 +102,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => cleanup());
+  await new Promise<void>((resolve) => setImmediate(resolve));
   vi.restoreAllMocks();
 });
 
