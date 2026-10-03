@@ -29,16 +29,12 @@ describe("Langfuse settings", () => {
     );
   });
 
-  it("renders labelled password fields and disables saving before load", () => {
+  it("shows form placeholders while settings are pending", () => {
     const html = renderToStaticMarkup(<LangfusePanel />);
-    expect(html).toContain("Public key");
-    expect(html).toContain("Secret key");
-    expect(html.match(/type="password"/g)).toHaveLength(2);
-    expect(html).toMatch(/<fieldset\b[^>]*\bdisabled=""/);
-    expect(html).toContain('type="submit"');
-    const enabledId = html.match(/<input[^>]*id="([^"]+-enabled)"/)?.[1];
-    expect(enabledId).toBeDefined();
-    expect(html).toContain(`for="${enabledId}"`);
+    expect(html).toContain('aria-label="Loading Langfuse settings"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain("<input");
+    expect(html).not.toContain('type="submit"');
     expect(html).not.toContain('role="alert"');
     expect(html).not.toContain("Restart Fora");
   });

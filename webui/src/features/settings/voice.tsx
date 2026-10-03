@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Button, Field, Input, Spinner } from "@/components/ui/index";
+import {
+  Button,
+  Field,
+  FieldSkeleton,
+  Input,
+  LoadingSkeleton,
+  Spinner,
+} from "@/components/ui/index";
 import { backend } from "@/lib/backend";
 import { VoiceRecording, type VoiceState } from "@/lib/voice";
 
@@ -26,6 +33,7 @@ export function VoicePanel() {
 
   const load = useCallback(async () => {
     if (dirtyRef.current) return;
+    setLoadFailed(false);
     try {
       const next = (await backend.settings("voice")) as Values;
       if (dirtyRef.current) return;
@@ -101,6 +109,17 @@ export function VoicePanel() {
     recording.current = current;
     void current.start();
   };
+
+  if (values === null && !loadFailed)
+    return (
+      <div className="max-w-[560px]">
+        <LoadingSkeleton label="Loading voice settings">
+          {["address", "model", "key"].map((field) => (
+            <FieldSkeleton key={field} />
+          ))}
+        </LoadingSkeleton>
+      </div>
+    );
 
   return (
     <div className="flex max-w-[560px] flex-col gap-4">

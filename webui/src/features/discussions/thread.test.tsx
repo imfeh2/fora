@@ -87,6 +87,10 @@ const organization: Organization = {
     { id: 2, name: "Helper", type: "agent", state: "idle" },
   ],
   humanId: 1,
+  connectionError: null,
+  organizationError: null,
+  discussionsError: null,
+  retry: async () => {},
   discussions: [],
   refresh: async () => {},
 };
@@ -277,10 +281,10 @@ describe("thread page", () => {
     },
   );
 
-  it("never shows a loading heading for an unlisted thread", () => {
+  it("shows placeholders for an unlisted thread", () => {
     const html = page([]);
-    expect(html).toMatch(/<h1\b[^>]*><\/h1>/);
-    expect(html).not.toContain("Loading");
+    expect(html).toMatch(/<h1\b[^>]*><span[^>]*aria-hidden="true"/);
+    expect(html).toContain('aria-label="Loading Discussion"');
     expect(html).toContain('placeholder="Message"');
   });
 });

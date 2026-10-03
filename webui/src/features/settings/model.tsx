@@ -6,7 +6,9 @@ import {
   Button,
   Chip,
   Field,
+  FieldSkeleton,
   Input,
+  LoadingSkeleton,
   Spinner,
   Textarea,
   toast,
@@ -365,6 +367,7 @@ export function ModelPanel() {
   const loadGeneration = useRef(0);
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
+    setFailed(false);
     try {
       const loaded = await backend.modelCatalog();
       if (generation !== loadGeneration.current) return;
@@ -446,7 +449,22 @@ export function ModelPanel() {
       disabled={!catalog || busy || failed}
     >
       {!catalog ? (
-        <Spinner label="Loading model settings" />
+        failed ? (
+          <p role="alert">Could not load model settings.</p>
+        ) : (
+          <LoadingSkeleton label="Loading model settings">
+            <div className="flex max-w-[560px] flex-col gap-4">
+              <FieldSkeleton />
+              <FieldSkeleton />
+            </div>
+            <section className="provider-card">
+              <FieldSkeleton />
+              <FieldSkeleton />
+              <FieldSkeleton />
+              <FieldSkeleton />
+            </section>
+          </LoadingSkeleton>
+        )
       ) : (
         <>
           <DefaultModelForm catalog={catalog} save={save} busy={busy} />

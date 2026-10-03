@@ -122,6 +122,10 @@ describe("Agent deletion", () => {
                 { id: 2, name: "Helper", type: "agent", state: "idle" },
               ],
               humanId: 1,
+              connectionError: null,
+              organizationError: null,
+              discussionsError: null,
+              retry: async () => {},
               discussions: [],
               refresh,
             }}

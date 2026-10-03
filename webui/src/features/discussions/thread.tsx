@@ -28,6 +28,8 @@ import {
   Button,
   Chip,
   dismissToast,
+  LoadingSkeleton,
+  Skeleton,
   toast,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
@@ -42,7 +44,12 @@ import {
   shouldStopPositioningForKey,
 } from "@/features/discussions/thread-position";
 import { renderMentions } from "@/features/mentions";
-import { BackendError, backend, type Message } from "@/lib/backend";
+import {
+  BackendError,
+  backend,
+  type Member,
+  type Message,
+} from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
 
 type PositioningKind = "none" | "entry" | "latest" | "follow";
@@ -103,15 +110,57 @@ type ThreadPageProps = {
 };
 
 export function ThreadPage(props: ThreadPageProps) {
-  return <ThreadSession key={props.id} {...props} />;
+  const { id } = props;
+  const { members, humanId, organizationError, connectionError } =
+    useOrganization();
+  const pending = !organizationError && !connectionError;
+  if (members === null || humanId === null)
+    return (
+      <Page>
+        <PageHeader
+          title={
+            pending ? (
+              <Skeleton className="h-6 w-44 max-w-full" />
+            ) : (
+              "Discussion"
+            )
+          }
+        />
+        <PageBody>{pending ? <ThreadSkeleton /> : null}</PageBody>
+      </Page>
+    );
+  return <ThreadSession key={id} {...props} members={members} humanId={humanId} />;
+}
+
+function ThreadSkeleton() {
+  return (
+    <LoadingSkeleton label="Loading Discussion">
+      {["90%", "75%", "50%"].map((width) => (
+        <div key={width} className="flex gap-3 py-3">
+          <Skeleton className="size-7 shrink-0 rounded-full" />
+          <div className="flex flex-1 min-w-0 flex-col gap-2">
+            <Skeleton className="w-24" />
+            <Skeleton style={{ width }} />
+            <Skeleton className="w-1/2" />
+          </div>
+        </div>
+      ))}
+      <Skeleton className="h-[52px] w-full rounded-sm" />
+    </LoadingSkeleton>
+  );
 }
 
 function ThreadSession({
   id,
   focusComposer,
   onComposerFocused,
-}: ThreadPageProps) {
-  const { members, humanId, discussions, refresh } = useOrganization();
+  members,
+  humanId,
+}: ThreadPageProps & {
+  members: Member[];
+  humanId: number;
+}) {
+  const { discussions, refresh } = useOrganization();
   const navigate = useNavigate();
   const thread = useThreadData(id, humanId);
   const { data: detail, missing, failed: loadFailed } = thread;
@@ -534,6 +583,8 @@ function ThreadSession({
     attachmentIds: string[],
     clientMessageId: string,
   ) => {
+    if (!detail || !memberIds.has(humanId) || backend.disconnected)
+      return false;
     setBusy(true);
     let sent = false;
     try {
@@ -620,7 +671,7 @@ function ThreadSession({
 
   const names = (detail?.members ?? []).map((member) => member.name);
   const topic =
-    discussions.find((item) => item.id === id)?.topic ?? detail?.topic ?? "";
+    discussions?.find((item) => item.id === id)?.topic ?? detail?.topic ?? "";
 
   const handleScrollToBottom = useCallback(() => {
     if (thread.loading) return;
@@ -653,7 +704,12 @@ function ThreadSession({
         title={
           missing
             ? "Discussion not found"
-            : topic || (loadFailed ? "Unavailable" : "")
+            : topic ||
+              (loadFailed ? (
+                "Unavailable"
+              ) : (
+                <Skeleton className="h-6 w-44 max-w-full" />
+              ))
         }
         status={detail?.archived ? <Chip>Archived</Chip> : undefined}
         actions={
@@ -729,6 +785,7 @@ function ThreadSession({
             onPointerDown={stopPositioning}
             aria-busy={thread.loading}
           >
+            {!detail && !loadFailed && !missing ? <ThreadSkeleton /> : null}
             {detail &&
             messages.length === 0 &&
             !thread.loading &&
@@ -834,7 +891,9 @@ function ThreadSession({
             discussionId={id}
             members={members}
             memberIds={memberIds}
-            busy={busy}
+            busy={
+              busy || !detail || !memberIds.has(humanId) || backend.disconnected
+            }
             placeholder={topic ? `Message ${topic}` : "Message"}
             onSend={send}
             onHeightChange={resizeComposer}
@@ -974,7 +1033,9 @@ export function MessageRow({
           </div>
         )}
         <div className="whitespace-pre-wrap wrap-anywhere [&_mark]:bg-blue-500/25 [&_mark]:text-blue-100 [&_mark]:rounded-xs [&_mark]:px-[3px] [&_mark]:font-medium">
-          {renderMentions(message.body, message.mentions, members)}
+          {members === null
+            ? message.body
+            : renderMentions(message.body, message.mentions, members)}
         </div>
         {message.attachments.map((attachment) => (
           <MessageAttachment

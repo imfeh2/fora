@@ -14,6 +14,8 @@ import {
   Chip,
   dismissToast,
   EmptyState,
+  LoadingSkeleton,
+  Skeleton,
   Spinner,
   Textarea,
   toast,
@@ -86,6 +88,10 @@ export function DocumentPage({ path }: { path: string }) {
   const load = useCallback(
     async (preserve = false) => {
       const revision = ++loadRevision.current;
+      if (editing.current.loaded === null) {
+        setFailed(false);
+        setUnavailable(null);
+      }
       try {
         const document = await backend.readLibrary(path);
         if (revision !== loadRevision.current) return;
@@ -211,12 +217,14 @@ export function DocumentPage({ path }: { path: string }) {
                 {
                   id: "rename",
                   label: "Rename",
+                  disabled: loaded === null || failed,
                   icon: <SquarePen size={15} />,
                   onSelect: () => setRenaming(true),
                 },
                 {
                   id: "delete",
                   label: "Delete",
+                  disabled: loaded === null || failed,
                   icon: <Trash2 size={15} />,
                   tone: "danger",
                   onSelect: () => setDoomed(true),
@@ -227,7 +235,13 @@ export function DocumentPage({ path }: { path: string }) {
         }
       />
       <Toolbar>
-        <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
+        {loaded === null ? (
+          failed ? null : (
+            <Skeleton className="w-16" />
+          )
+        ) : (
+          <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
+        )}
         {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
       </Toolbar>
       <PageBody variant="flush">
@@ -238,18 +252,29 @@ export function DocumentPage({ path }: { path: string }) {
             </p>
           ) : null}
           {unavailable ? <DocumentUnavailable code={unavailable} /> : null}
-          <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
-            <Textarea
-              aria-label="Document"
-              disabled={loaded === null}
-              readOnly={failed}
-              value={draft}
-              spellCheck={false}
-              onChange={(event) => {
-                setDraft(event.target.value);
-              }}
-            />
-          </div>
+          {loaded === null ? (
+            failed ? (
+              <p role="alert">Could not load document.</p>
+            ) : (
+              <LoadingSkeleton label="Loading document">
+                {["90%", "75%", "85%", "50%"].map((width) => (
+                  <Skeleton key={width} style={{ width }} />
+                ))}
+              </LoadingSkeleton>
+            )
+          ) : (
+            <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
+              <Textarea
+                aria-label="Document"
+                readOnly={failed}
+                value={draft}
+                spellCheck={false}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                }}
+              />
+            </div>
+          )}
         </div>
       </PageBody>
 

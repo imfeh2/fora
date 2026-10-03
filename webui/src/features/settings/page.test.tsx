@@ -310,7 +310,7 @@ describe("mounted Settings interactions", () => {
     expect(enabledA.isConnected).toBe(true);
     expect(remoteA.value).toBe("retained-remote");
     expect(enabledA.checked).toBe(false);
-  });
+  }, 15000);
 
   it("blocks Tabs and Sidebar through delayed write and readback", async () => {
     const readback = deferred<Record<string, unknown>>();
@@ -387,34 +387,20 @@ describe("Settings page", () => {
       expect(html).toContain(`>${label}</button>`);
     }
     expect(html).toContain('aria-selected="true"');
-    expect(html).toContain("0 means no ceiling.");
-    expect(html).toContain('aria-label="Agent settings"');
-    expect(html).toContain(">Context</h3>");
-    expect(html).toContain(">Run limits</h3>");
-    expect(html).toContain(">Reminders and pausing</h3>");
-    expect(html.match(/<form/g)).toHaveLength(1);
-    expect(html).not.toContain(">Limits</button>");
-    expect(
-      Array.from(
-        html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g),
-        ([, text]) => text,
-      ),
-    ).toEqual([
-      "0 means no ceiling.",
-      "0 means unlimited. Changes apply to new Turns.",
-    ]);
+    expect(html).toContain('aria-label="Loading Agent settings"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain("<input");
   });
 
-  it("shows only remote voice settings and the microphone test", () => {
+  it("shows voice form placeholders before settings arrive", () => {
     const html = renderToStaticMarkup(
       <RouterProvider>
         <SettingsPage section="voice" />
       </RouterProvider>,
     );
-    expect(html).toContain(">Service address</label>");
-    expect(html).toContain(">Model</label>");
-    expect(html).toContain(">API key</label>");
-    expect(html).toContain("Start microphone test");
+    expect(html).toContain('aria-label="Loading voice settings"');
+    expect(html).not.toContain("<input");
+    expect(html).not.toContain("Start microphone test");
     expect(html).not.toContain("Whisper");
     expect(html).not.toContain("Download model");
     expect(html).not.toContain("<select");

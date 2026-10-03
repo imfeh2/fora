@@ -240,7 +240,7 @@ function Harness() {
   const application = useApplication();
   return (
     <TooltipProvider>
-      {application.loaded ? (
+      {application.organization.data ? (
         <HistorySection agentId={2} initialRuns={[run]} />
       ) : null}
       <toastModule.Toaster />

@@ -110,10 +110,9 @@ describe("Agent settings", () => {
 
   it("does not invent defaults before loading", () => {
     const html = renderToStaticMarkup(<AgentPanel />);
-    expect(html).toMatch(
-      /<fieldset[^>]*aria-label="Agent settings"[^>]*disabled=""/,
-    );
-    expect(html.match(/value=""/g)).toHaveLength(8);
+    expect(html).toContain('aria-label="Loading Agent settings"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain("<input");
     expect(html).not.toContain('value="0"');
   });
 });

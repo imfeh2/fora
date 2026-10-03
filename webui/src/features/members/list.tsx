@@ -23,14 +23,17 @@ import {
   Toolbar,
   useNarrowViewport,
 } from "@/components/layout/shell";
+import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   Button,
   Chip,
   CountPill,
+  LoadingSkeleton,
   Meter,
   SearchField,
+  Skeleton,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
@@ -96,7 +99,8 @@ export function memberActions(
 }
 
 export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
-  const { members, refresh } = useOrganization();
+  const { members, refresh, organizationError, connectionError, retry } =
+    useOrganization();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -106,7 +110,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
 
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return members.filter((member) => {
+    return members?.filter((member) => {
       if (filter === "agents" && member.type !== "agent") return false;
       if (filter === "humans" && member.type !== "human") return false;
       return !needle || member.name.toLowerCase().includes(needle);
@@ -115,6 +119,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
   const noAgents =
     filter === "agents" &&
     !query.trim() &&
+    members !== null &&
     !members.some((member) => member.type === "agent");
   const narrow = useNarrowViewport();
 
@@ -123,7 +128,11 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
       <PageHeader
         title="Members"
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
+          <Button
+            variant="primary"
+            disabled={members === null || backend.disconnected}
+            onClick={() => setCreating(true)}
+          >
             <Plus size={16} />
             New Agent
           </Button>
@@ -145,8 +154,45 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
         />
       </Toolbar>
       <PageBody>
-        <CountPill>{plural(shown.length, COUNTED[filter])}</CountPill>
-        {shown.length === 0 ? (
+        {organizationError ? (
+          <LoadError
+            error={organizationError}
+            retry={() => void retry("organization")}
+          />
+        ) : null}
+        {shown ? (
+          <CountPill>{plural(shown.length, COUNTED[filter])}</CountPill>
+        ) : null}
+        {shown === undefined ? (
+          organizationError || connectionError ? null : (
+            <LoadingSkeleton label="Loading Members">
+              <Table columns={COLUMNS} label="Members">
+                {[1, 2, 3, 4].map((row) => (
+                  <tr key={row}>
+                    <td>
+                      <div className="flex items-center gap-3">
+                        <Skeleton className="size-7 shrink-0 rounded-full" />
+                        <Skeleton className="w-30 max-w-full" />
+                      </div>
+                    </td>
+                    <td data-hide-below="md">
+                      <Skeleton className="w-16" />
+                    </td>
+                    <td>
+                      <Skeleton className="w-20" />
+                    </td>
+                    <td>
+                      <Skeleton className="w-16" />
+                    </td>
+                    <td>
+                      <Skeleton className="size-6" />
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </LoadingSkeleton>
+          )
+        ) : shown.length === 0 ? (
           <StatePanel
             icons={noAgents ? [User, Bot, Users] : [User, Search, Users]}
             title={noAgents ? "No Agents yet" : "No Members match"}

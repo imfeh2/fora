@@ -59,6 +59,8 @@ export function CreateDiscussionDialog({
     if (id !== null) onCreated(id);
   };
 
+  if (members === null || humanId === null) return null;
+
   const others = members.filter((member) => member.id !== humanId);
   const ready = topic.trim().length > 0 && chosen.length > 0;
 

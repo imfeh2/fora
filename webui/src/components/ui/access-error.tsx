@@ -61,7 +61,7 @@ export function AccessError({
             : "Could not connect to Fora";
 
   return (
-    <main className="flex h-dvh w-full overflow-auto bg-surface p-6">
+    <section className="flex min-h-0 flex-1 w-full overflow-auto bg-surface p-6">
       <div className="m-auto w-full max-w-[520px] min-w-0">
         <Alert
           aria-labelledby={titleId}
@@ -102,6 +102,6 @@ export function AccessError({
           </AlertDescription>
         </Alert>
       </div>
-    </main>
+    </section>
   );
 }

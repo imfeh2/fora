@@ -49,11 +49,12 @@ describe("document hierarchy", () => {
     ]);
   });
 
-  it("keeps Library clickable for root documents and disables the unloaded editor", () => {
+  it("keeps Library clickable while root document content loads", () => {
     const html = render("notes.md");
     expect(html).toContain(">Library</button>");
     expect(html.match(/›/g)).toHaveLength(1);
-    expect(html).toMatch(/<textarea[^>]*disabled=""/);
+    expect(html).toContain('aria-label="Loading document"');
+    expect(html).not.toContain("<textarea");
   });
 });
 

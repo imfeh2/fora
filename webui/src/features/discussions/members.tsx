@@ -87,6 +87,8 @@ export function DiscussionMembersDialog({
     selected.length !== memberIds.length ||
     selected.some((id) => !memberIds.includes(id));
 
+  if (members === null) return null;
+
   const save = async () => {
     if (!changed || busy) return;
     setBusy(true);

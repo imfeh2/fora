@@ -22,6 +22,17 @@ export type Resource<T> =
       refreshing: boolean;
     };
 
+export type Organization = {
+  members: Member[] | null;
+  humanId: number | null;
+  discussions: DiscussionSummary[] | null;
+  refresh: () => Promise<void>;
+  connectionError: BackendError | null;
+  organizationError: BackendError | null;
+  discussionsError: BackendError | null;
+  retry: (resource: "organization" | "discussions") => Promise<void>;
+};
+
 export function useResource<T>(read: () => Promise<T>) {
   const [resource, setResource] = useState<Resource<T>>({
     status: "pending",
@@ -106,13 +117,6 @@ export function useResource<T>(read: () => Promise<T>) {
   );
   return { resource, refresh, invalidate };
 }
-
-export type Organization = {
-  members: Member[];
-  humanId: number;
-  discussions: DiscussionSummary[];
-  refresh: () => Promise<void>;
-};
 
 const OrganizationContext = createContext<Organization | null>(null);
 

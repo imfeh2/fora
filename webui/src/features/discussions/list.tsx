@@ -9,7 +9,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrganization } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import {
@@ -22,6 +22,7 @@ import {
   Toolbar,
   useNarrowViewport,
 } from "@/components/layout/shell";
+import { LoadError } from "@/components/ui/access-error";
 import {
   Badge,
   Button,
@@ -30,7 +31,9 @@ import {
   Dot,
   dismissToast,
   IconButton,
+  LoadingSkeleton,
   SearchField,
+  Skeleton,
   StatusText,
   toast,
 } from "@/components/ui/index";
@@ -95,9 +98,18 @@ export function DiscussionsPage({
 }: {
   onCreated?: (id: number) => void;
 } = {}) {
-  const { members } = useOrganization();
+  const {
+    members,
+    discussions,
+    organizationError,
+    discussionsError,
+    connectionError,
+    retry,
+  } = useOrganization();
   const navigate = useNavigate();
-  const [list, setList] = useState<DiscussionSummary[] | null>(null);
+  const [archivedList, setList] = useState<DiscussionSummary[] | null>(null);
+  const [archiveFailure, setArchiveFailure] = useState(false);
+  const generation = useRef(0);
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState<{
     query: string;
@@ -105,15 +117,23 @@ export function DiscussionsPage({
   } | null>(null);
   const results = search?.query === query.trim() ? search.items : null;
   const [archived, setArchived] = useState(false);
+  const list = archived ? archivedList : discussions;
   const [creating, setCreating] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState<number | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
 
   const load = useCallback(async () => {
+    if (!archived) return;
+    const epoch = ++generation.current;
+    setArchiveFailure(false);
     try {
-      setList(await backend.discussions(archived));
+      const items = await backend.discussions(true);
+      if (epoch !== generation.current) return;
+      setList(items);
       dismissToast("discussions-list");
     } catch (failure) {
+      if (epoch !== generation.current) return;
+      setArchiveFailure(true);
       if (failure instanceof BackendError && failure.transport)
         backend.reportFailure(failure);
       else
@@ -131,10 +151,14 @@ export function DiscussionsPage({
 
   useEffect(() => {
     void load();
+    return () => {
+      generation.current += 1;
+    };
   }, [load]);
 
   useEffect(() => {
     return backend.onEvent((event) => {
+      if (event.type === "connection.closed") generation.current += 1;
       if (event.type === "connection.restored")
         setConnectionRevision((value) => value + 1);
       if (
@@ -172,7 +196,7 @@ export function DiscussionsPage({
   }, [query, connectionRevision]);
 
   const byId = useMemo(
-    () => new Map(members.map((member) => [member.id, member] as const)),
+    () => new Map(members?.map((member) => [member.id, member] as const)),
     [members],
   );
 
@@ -183,12 +207,14 @@ export function DiscussionsPage({
   const narrow = useNarrowViewport();
 
   const archive = async (item: DiscussionSummary) => {
-    if (archiveBusy !== null) return;
+    if (archiveBusy !== null || members === null || backend.disconnected)
+      return;
     setArchiveBusy(item.id);
     try {
       await backend.archiveDiscussion(item.id, !item.archived);
       dismissToast(`discussion-archive:${item.id}`);
-      await load();
+      if (archived) await load();
+      else await retry("discussions");
     } catch (failure) {
       if (failure instanceof BackendError && failure.transport)
         backend.reportFailure(failure);
@@ -213,7 +239,11 @@ export function DiscussionsPage({
       <PageHeader
         title="Discussions"
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
+          <Button
+            variant="primary"
+            disabled={members === null || backend.disconnected}
+            onClick={() => setCreating(true)}
+          >
             <Plus size={16} />
             New Discussion
           </Button>
@@ -236,6 +266,12 @@ export function DiscussionsPage({
         </IconButton>
       </Toolbar>
       <PageBody>
+        {!archived && discussionsError ? (
+          <LoadError
+            error={discussionsError}
+            retry={() => void retry("discussions")}
+          />
+        ) : null}
         {(searching ? results !== null : list !== null) ? (
           <CountPill>
             {results
@@ -330,16 +366,48 @@ export function DiscussionsPage({
               ))}
             </Table>
           )
-        ) : list === null ? null : list.length === 0 ? (
+        ) : list === null ? (
+          archived && archiveFailure ? (
+            <p role="alert">Could not load Discussions.</p>
+          ) : connectionError || (!archived && discussionsError) ? null : (
+            <LoadingSkeleton label="Loading Discussions">
+              <Table columns={LIST_COLUMNS} label="Discussions">
+                {["75%", "55%", "85%"].map((width) => (
+                  <tr key={width}>
+                    <td>
+                      <Skeleton style={{ width }} className="h-7" />
+                    </td>
+                    <td data-hide-below="md">
+                      <Skeleton className="w-24" />
+                    </td>
+                    <td>
+                      <Skeleton className="w-8" />
+                    </td>
+                    <td>
+                      <Skeleton className="w-20" />
+                    </td>
+                    <td>
+                      <Skeleton className="size-6" />
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </LoadingSkeleton>
+          )
+        ) : list.length === 0 ? (
           <StatePanel
             icons={[MessageCircle, MessagesSquare, MessageSquare]}
             title="No Discussions yet"
             description="Create a Discussion to bring Members together."
-            action={{
-              label: "New Discussion",
-              icon: <Plus size={16} />,
-              onClick: () => setCreating(true),
-            }}
+            action={
+              members !== null && !backend.disconnected
+                ? {
+                    label: "New Discussion",
+                    icon: <Plus size={16} />,
+                    onClick: () => setCreating(true),
+                  }
+                : undefined
+            }
           />
         ) : narrow ? (
           <div
@@ -365,8 +433,15 @@ export function DiscussionsPage({
                 key={item.id}
                 item={item}
                 byId={byId}
+                membersPending={
+                  members === null && !organizationError && !connectionError
+                }
                 onOpen={() => navigate({ name: "discussion", id: item.id })}
-                archiveBusy={archiveBusy === item.id}
+                archiveBusy={
+                  archiveBusy === item.id ||
+                  members === null ||
+                  backend.disconnected
+                }
                 onArchive={() => void archive(item)}
               />
             ))}
@@ -476,12 +551,14 @@ export function DiscussionRow({
   onOpen,
   onArchive,
   archiveBusy = false,
+  membersPending = false,
 }: {
   item: DiscussionSummary;
   byId: Map<number, Member>;
   onOpen: () => void;
   onArchive: () => void;
   archiveBusy?: boolean;
+  membersPending?: boolean;
 }) {
   const people = item.member_ids
     .map((id) => byId.get(id))
@@ -504,6 +581,7 @@ export function DiscussionRow({
       </td>
       <td data-hide-below="md">
         <div className="flex flex-wrap gap-1">
+          {membersPending ? <Skeleton className="w-24" /> : null}
           {shown.map((member) => (
             <Chip
               key={member.id}

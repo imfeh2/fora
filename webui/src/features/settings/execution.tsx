@@ -11,7 +11,9 @@ import {
   Button,
   Chip,
   Field,
+  FieldSkeleton,
   Input,
+  LoadingSkeleton,
   Spinner,
   toast,
 } from "@/components/ui/index";
@@ -398,17 +400,24 @@ export function ExecutionForm({
 
 export function ExecutionPanel() {
   const [info, setInfo] = useState<ExecutionSettings | null>(null);
+  const [failed, setFailed] = useState(false);
   const generation = useRef(0);
   const saving = useRef(false);
   const load = useCallback(async () => {
     if (saving.current) return;
     const current = ++generation.current;
+    setFailed(false);
     try {
       const result = (await backend.settings("execution")) as ExecutionSettings;
-      if (current === generation.current) setInfo(result);
+      if (current === generation.current) {
+        setInfo(result);
+        setFailed(false);
+      }
     } catch (failure) {
-      if (current === generation.current)
+      if (current === generation.current) {
+        setFailed(true);
         reportLoadFailure("settings-execution", failure, () => void load());
+      }
     }
   }, []);
   useEffect(() => {
@@ -421,7 +430,16 @@ export function ExecutionPanel() {
       off();
     };
   }, [load]);
-  if (!info) return null;
+  if (!info)
+    return failed ? (
+      <p role="alert">Could not load execution settings.</p>
+    ) : (
+      <LoadingSkeleton label="Loading execution settings">
+        {["target", "directory", "permissions"].map((field) => (
+          <FieldSkeleton key={field} />
+        ))}
+      </LoadingSkeleton>
+    );
   return (
     <ExecutionForm
       initial={info}

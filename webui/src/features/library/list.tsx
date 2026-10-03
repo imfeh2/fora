@@ -9,21 +9,23 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader, Toolbar } from "@/components/layout/shell";
+import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Button,
   CountPill,
-  dismissToast,
   IconButton,
+  LoadingSkeleton,
   SearchField,
+  Skeleton,
 } from "@/components/ui/index";
 import type { MenuAction } from "@/components/ui/menu";
 import { StatePanel } from "@/components/ui/state-panel";
 import { expandedFolders } from "@/features/library/tree";
 import { TreeView, type TreeViewProps } from "@/features/library/tree-view";
-import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
 import { plural } from "@/lib/format";
 
@@ -221,40 +223,37 @@ export function LibraryContents({
 
 export function LibraryPage({ path }: { path?: string }) {
   const navigate = useNavigate();
-  const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
+  const read = useCallback(() => backend.library(), []);
+  const { resource, refresh: load, invalidate } = useResource(read);
+  const entries = resource.data;
+  const failed = resource.error !== null;
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(() => expandedFolders(path));
   const [creating, setCreating] = useState<Creation | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
   const [doomed, setDoomed] = useState<LibraryEntry | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      setEntries(await backend.library());
-      setFailed(false);
-      dismissToast("library-load");
-    } catch (failure) {
-      setFailed(true);
-      reportLoadFailure("library-load", failure, () => void load());
-    }
-  }, []);
 
   useEffect(() => {
+    invalidate(true);
     void load();
-    return () => dismissToast("library-load");
-  }, [load]);
+    return () => invalidate(false);
+  }, [load, invalidate]);
 
   useEffect(
     () =>
       backend.onEvent((event) => {
-        if (
-          event.type === "library.updated" ||
-          event.type === "connection.restored"
-        )
+        if (event.type === "library.updated") void load(true);
+        if (event.type === "connection.closed")
+          invalidate(
+            false,
+            event.error instanceof BackendError ? event.error : undefined,
+          );
+        if (event.type === "connection.restored") {
+          invalidate(true);
           void load();
+        }
       }),
-    [load],
+    [load, invalidate],
   );
 
   return (
@@ -264,7 +263,7 @@ export function LibraryPage({ path }: { path?: string }) {
         actions={
           <CreateActions
             onCreate={setCreating}
-            disabled={entries === null || failed}
+            disabled={entries === null || failed || backend.disconnected}
           />
         }
       />
@@ -278,7 +277,29 @@ export function LibraryPage({ path }: { path?: string }) {
         />
       </Toolbar>
       <PageBody>
-        {entries === null ? null : (
+        {resource.error &&
+        !(resource.error.transport && backend.disconnected) ? (
+          <LoadError
+            error={resource.error}
+            retry={() =>
+              void (backend.disconnected
+                ? backend.reconnect().catch(backend.reportFailure)
+                : load())
+            }
+          />
+        ) : null}
+        {entries === null ? (
+          failed ? null : (
+            <LoadingSkeleton label="Loading Library">
+              {[1, 2, 3, 4, 5].map((row) => (
+                <div key={row} className="flex h-7 items-center gap-2">
+                  <Skeleton className="size-4 shrink-0" />
+                  <Skeleton className="w-40 max-w-full" />
+                </div>
+              ))}
+            </LoadingSkeleton>
+          )
+        ) : (
           <LibraryContents
             entries={entries}
             disabled={failed}

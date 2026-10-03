@@ -7,7 +7,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { Button, Field, Input, Spinner } from "@/components/ui/index";
+import {
+  Button,
+  Field,
+  FieldSkeleton,
+  Input,
+  LoadingSkeleton,
+  Spinner,
+} from "@/components/ui/index";
 import {
   reportLoadFailure,
   useReportSettingsSave,
@@ -24,6 +31,12 @@ const FIELDS = [
   { key: "max_concurrent_turns", label: "Concurrent Turns" },
   { key: "token_limit", label: "Tokens per Agent" },
   { key: "request_limit", label: "Model requests per Turn" },
+];
+
+const GROUPS = [
+  { title: "Context", fields: FIELDS.slice(0, 2) },
+  { title: "Run limits", fields: FIELDS.slice(5) },
+  { title: "Reminders and pausing", fields: FIELDS.slice(2, 5) },
 ];
 
 function agentInteger(key: string, draft: string): number | null {
@@ -66,11 +79,6 @@ export function AgentForm({
 }) {
   const id = useId();
   const update = agentUpdate(drafts);
-  const groups = [
-    { title: "Context", fields: FIELDS.slice(0, 2) },
-    { title: "Run limits", fields: FIELDS.slice(5) },
-    { title: "Reminders and pausing", fields: FIELDS.slice(2, 5) },
-  ];
   return (
     <form
       noValidate
@@ -85,7 +93,7 @@ export function AgentForm({
         disabled={disabled}
       >
         <div className="agent-groups">
-          {groups.map((group) => (
+          {GROUPS.map((group) => (
             <section className="agent-group" key={group.title}>
               <h3>{group.title}</h3>
               <div className="agent-fields">
@@ -160,6 +168,7 @@ export function AgentPanel() {
 
   const load = useCallback(async (preserve = false) => {
     setLoading(true);
+    setLoadFailed(false);
     try {
       const values = await backend.settings("agent");
       if (!preserve || editing.current === saved.current) {
@@ -187,6 +196,25 @@ export function AgentPanel() {
 
   const { saving, save } = useSaver(load, first);
   useReportSettingsSave("agent", saving);
+  if (Object.keys(drafts).length === 0)
+    return loadFailed ? (
+      <p role="alert">Could not load Agent settings.</p>
+    ) : (
+      <LoadingSkeleton label="Loading Agent settings">
+        <div className="agent-groups">
+          {GROUPS.map((group) => (
+            <section className="agent-group" key={group.title}>
+              <h3>{group.title}</h3>
+              <div className="agent-fields">
+                {group.fields.map(({ key }) => (
+                  <FieldSkeleton key={key} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </LoadingSkeleton>
+    );
   return (
     <AgentForm
       drafts={drafts}

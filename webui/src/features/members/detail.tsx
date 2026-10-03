@@ -21,9 +21,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { useOrganization } from "@/app/organization";
+import { useOrganization, useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader, Section } from "@/components/layout/shell";
+import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import {
   Avatar,
@@ -31,7 +32,9 @@ import {
   Chip,
   Dot,
   dismissToast,
+  LoadingSkeleton,
   Meter,
+  Skeleton,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
@@ -81,17 +84,64 @@ function runTone(status: string): "green" | "red" | "blue" | "yellow" | "grey" {
 }
 
 export function MemberPage({ id }: { id: number }) {
-  const { members, refresh } = useOrganization();
+  const { members, refresh, organizationError, connectionError } =
+    useOrganization();
+  const pending = !organizationError && !connectionError;
   const navigate = useNavigate();
-  const member = members.find((item) => item.id === id);
+  const member = members?.find((item) => item.id === id);
   const agent = member?.type === "agent" ? member : null;
 
   useEffect(() => {
-    if (!agent) navigate({ name: "members" });
-  }, [agent, navigate]);
+    if (members !== null && !agent) navigate({ name: "members" });
+  }, [agent, members, navigate]);
 
+  if (members === null)
+    return (
+      <Page>
+        <PageHeader
+          crumb={{
+            label: "Members",
+            onSelect: () => navigate({ name: "members" }),
+          }}
+          title={
+            pending ? <Skeleton className="h-6 w-44 max-w-full" /> : "Member"
+          }
+          leading={
+            pending ? (
+              <Skeleton className="size-10 shrink-0 rounded-full" />
+            ) : undefined
+          }
+        />
+        <PageBody>{pending ? <MemberSkeleton /> : null}</PageBody>
+      </Page>
+    );
   if (!agent) return null;
   return <AgentPage key={agent.id} member={agent} refresh={refresh} />;
+}
+
+function MemberSkeleton() {
+  return (
+    <LoadingSkeleton label="Loading Member">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px rounded-md border border-line bg-line">
+        {[1, 2, 3].map((card) => (
+          <div key={card} className="flex flex-col gap-3 bg-surface p-4">
+            <Skeleton className="w-15" />
+            <Skeleton className="h-5 w-24" />
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col gap-3 rounded-md border border-line p-5">
+        <Skeleton className="w-1/2" />
+        <Skeleton className="h-8 w-3/4" />
+        <Skeleton className="h-8 w-2/3" />
+      </div>
+      <div className="flex flex-col gap-3 rounded-md border border-line p-5">
+        {["75%", "55%", "85%"].map((width) => (
+          <Skeleton key={width} style={{ width }} />
+        ))}
+      </div>
+    </LoadingSkeleton>
+  );
 }
 
 function AgentPage({
@@ -102,70 +152,37 @@ function AgentPage({
   refresh: () => Promise<void>;
 }) {
   const navigate = useNavigate();
-  const [detail, setDetail] = useState<AgentDetail | null>(null);
+  const read = useCallback(() => backend.agentDetail(member.id), [member.id]);
+  const { resource, refresh: load, invalidate } = useResource(read);
+  const detail = resource.data;
   const [doomed, setDoomed] = useState(false);
   const paused = canResume(member);
 
   useEffect(() => {
-    let active = true;
-    let connected = true;
-    let generation = 0;
-    let pending = false;
-    let dirty = false;
-    const toastId = `agent-load:${member.id}`;
-    const load = async () => {
-      if (!active || !connected) return;
-      dirty = true;
-      if (pending) return;
-      pending = true;
-      dirty = false;
-      const current = generation;
-      try {
-        const result = await backend.agentDetail(member.id);
-        if (!active || current !== generation) return;
-        setDetail(result);
-        dismissToast(toastId);
-      } catch (failure) {
-        if (!active || current !== generation) return;
-        reportLoadFailure(toastId, failure, () => void load());
-      } finally {
-        if (active && current === generation) {
-          pending = false;
-          if (dirty) void load();
-        }
-      }
-    };
-    const stop = backend.onEvent((event) => {
-      if (event.type === "connection.closed") {
-        generation += 1;
-        connected = false;
-        pending = false;
-        dirty = false;
-        dismissToast(toastId);
-        return;
-      }
-      if (event.type === "connection.restored") {
-        generation += 1;
-        connected = true;
-        pending = false;
-        dirty = false;
-        void load();
-        return;
-      }
+    invalidate(true);
+    void load();
+    return () => invalidate(false);
+  }, [load, invalidate]);
+
+  useEffect(() => {
+    return backend.onEvent((event) => {
       if (
         (event.type.startsWith("turn.") && event.agent_id === member.id) ||
         event.type === "organization.changed" ||
         event.type === "settings.updated"
       )
+        void load(true);
+      if (event.type === "connection.closed")
+        invalidate(
+          false,
+          event.error instanceof BackendError ? event.error : undefined,
+        );
+      if (event.type === "connection.restored") {
+        invalidate(true);
         void load();
+      }
     });
-    queueMicrotask(() => void load());
-    return () => {
-      active = false;
-      stop();
-      dismissToast(toastId);
-    };
-  }, [member.id]);
+  }, [load, invalidate, member.id]);
 
   return (
     <Page>
@@ -213,6 +230,17 @@ function AgentPage({
         }
       />
       <PageBody>
+        {resource.error &&
+        !(resource.error.transport && backend.disconnected) ? (
+          <LoadError
+            error={resource.error}
+            retry={() =>
+              void (backend.disconnected
+                ? backend.reconnect().catch(backend.reportFailure)
+                : load())
+            }
+          />
+        ) : null}
         {detail ? (
           <>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px overflow-hidden rounded-md border border-line bg-line flex-none">
@@ -273,7 +301,9 @@ function AgentPage({
 
             <HistorySection agentId={member.id} initialRuns={detail.runs} />
           </>
-        ) : null}
+        ) : resource.error ? null : (
+          <MemberSkeleton />
+        )}
       </PageBody>
 
       <ConfirmDialog

@@ -198,6 +198,10 @@ function organization() {
   return {
     members: [member, helper],
     humanId: member.id,
+    connectionError: null,
+    organizationError: null,
+    discussionsError: null,
+    retry: vi.fn(async () => {}),
     discussions: [discussion],
     refresh: vi.fn(async () => {}),
   };

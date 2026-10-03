@@ -19,7 +19,11 @@ describe("discussions page", () => {
             value={{
               members: [{ id: 1, name: "You", type: "human", state: "idle" }],
               humanId: 1,
-              discussions: [],
+              connectionError: null,
+              organizationError: null,
+              discussionsError: null,
+              retry: async () => {},
+              discussions: null,
               refresh: async () => {},
             }}
           >

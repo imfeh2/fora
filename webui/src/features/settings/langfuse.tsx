@@ -3,7 +3,9 @@ import {
   Button,
   Chip,
   Field,
+  FieldSkeleton,
   Input,
+  LoadingSkeleton,
   Spinner,
   toast,
 } from "@/components/ui/index";
@@ -31,6 +33,7 @@ export function LangfusePanel() {
   const id = useId();
   const first = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<Record<string, unknown> | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [publicKey, setPublicKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,9 +42,12 @@ export function LangfusePanel() {
 
   const load = useCallback(async () => {
     setBusy(true);
+    setLoadFailed(false);
     try {
       setValues(await backend.settings("observability"));
+      setLoadFailed(false);
     } catch (failure) {
+      setLoadFailed(true);
       reportLoadFailure("settings-langfuse", failure, () => void load());
     } finally {
       setBusy(false);
@@ -82,6 +88,19 @@ export function LangfusePanel() {
       });
     }
   };
+
+  if (values === null)
+    return loadFailed ? (
+      <p role="alert">Could not load Langfuse settings.</p>
+    ) : (
+      <div className="max-w-[560px]">
+        <LoadingSkeleton label="Loading Langfuse settings">
+          {["enabled", "url", "public", "secret"].map((field) => (
+            <FieldSkeleton key={field} />
+          ))}
+        </LoadingSkeleton>
+      </div>
+    );
 
   const enabled = values?.enabled === true;
   const configured = values?.keys_set === true;

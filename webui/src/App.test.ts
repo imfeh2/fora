@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { useApplication } from "@/App";
 import { clearToasts, readToasts } from "@/components/ui/toast";
 import {
@@ -9,36 +18,30 @@ import {
   type Socket,
 } from "@/lib/backend";
 
-const hooks = vi.hoisted(() => ({
-  states: [] as unknown[],
-  refs: [] as { current: unknown }[],
-  effects: [] as (() => undefined | (() => void))[],
-  stateIndex: 0,
-  refIndex: 0,
-  mounting: true,
-}));
-vi.mock("react", async (original) => ({
-  ...(await original<typeof import("react")>()),
-  useState: (initial: unknown) => {
-    const index = hooks.stateIndex++;
-    if (hooks.mounting) hooks.states[index] = initial;
-    return [
-      hooks.states[index],
-      (value: unknown) => {
-        hooks.states[index] = value;
-      },
-    ];
-  },
-  useRef: (initial: unknown) => {
-    const index = hooks.refIndex++;
-    if (hooks.mounting) hooks.refs[index] = { current: initial };
-    return hooks.refs[index];
-  },
-  useCallback: (callback: unknown) => callback,
-  useEffect: (effect: () => undefined | (() => void)) => {
-    if (hooks.mounting) hooks.effects.push(effect);
-  },
-}));
+let renderHook: typeof import("@testing-library/react").renderHook;
+let act: typeof import("@testing-library/react").act;
+let closeDom: () => void;
+let result: { current: ReturnType<typeof useApplication> };
+
+beforeAll(async () => {
+  const packageName = "jsdom";
+  const { JSDOM } = await import(packageName);
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost",
+  });
+  closeDom = () => dom.window.close();
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("navigator", dom.window.navigator);
+  vi.stubGlobal("Event", dom.window.Event);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  ({ renderHook, act } = await import("@testing-library/react"));
+});
+
+afterAll(() => {
+  closeDom();
+  vi.unstubAllGlobals();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -64,27 +67,26 @@ let page: EventTarget & { visibilityState: string };
 let network: { onLine: boolean };
 
 function render() {
-  hooks.stateIndex = 0;
-  hooks.refIndex = 0;
-  return useApplication();
+  return result.current;
 }
 function mount() {
-  const application = render();
-  hooks.mounting = false;
-  for (const effect of hooks.effects) {
-    const off = effect();
-    if (off) cleanup.push(off);
-  }
-  return application;
+  const mounted = renderHook(() => useApplication());
+  result = mounted.result;
+  cleanup.push(mounted.unmount);
+  return result.current;
 }
 function emit(event: BackendEvent) {
-  for (const listener of events) listener(event);
+  act(() => {
+    for (const listener of events) listener(event);
+  });
 }
 function notifyFailure(
   error = new BackendError("disconnected", "Connection lost", true),
 ) {
   closed = true;
-  for (const listener of failures) listener(error);
+  act(() => {
+    for (const listener of failures) listener(error);
+  });
   return error;
 }
 function disconnect(
@@ -94,24 +96,28 @@ function disconnect(
   emit({ type: "connection.closed", error });
 }
 async function settle() {
-  for (let i = 0; i < 30; i++) await Promise.resolve();
+  await act(async () => {
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  });
 }
 
 beforeEach(() => {
-  hooks.states = [];
-  hooks.refs = [];
-  hooks.effects = [];
-  hooks.mounting = true;
   cleanup = [];
   events = new Set();
   failures = new Set();
   closed = false;
   clearToasts();
-  page = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  page = document;
+  Object.defineProperty(page, "visibilityState", {
+    configurable: true,
+    writable: true,
+    value: "visible",
+  });
   network = { onLine: true };
-  vi.stubGlobal("window", new EventTarget());
-  vi.stubGlobal("document", page);
-  vi.stubGlobal("navigator", network);
+  Object.defineProperty(navigator, "onLine", {
+    configurable: true,
+    get: () => network.onLine,
+  });
   vi.spyOn(backend, "disconnected", "get").mockImplementation(() => closed);
   vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
     events.add(listener);
@@ -141,10 +147,9 @@ afterEach(() => {
   clearToasts();
   vi.restoreAllMocks();
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
-describe("application recovery with controlled hook effects", () => {
+describe("application recovery with React effects", () => {
   it.each([
     ["organization.changed", "scheduler_stopped", 10],
     ["settings.updated", "model_unavailable", 10],
@@ -170,8 +175,8 @@ describe("application recovery with controlled hook effects", () => {
     emit({ type });
     await settle();
     expect(backend.organization).toHaveBeenCalledTimes(2);
-    expect(render().loaded?.members).toEqual(members);
-    expect(render().loaded?.tokenLimit).toBe(tokenLimit);
+    expect(render().organization.data?.members).toEqual(members);
+    expect(render().organization.data?.token_limit).toBe(tokenLimit);
   });
 
   it("merges organization and settings changes during an active read", async () => {
@@ -188,7 +193,7 @@ describe("application recovery with controlled hook effects", () => {
     first.resolve(organization);
     await settle();
     expect(backend.organization).toHaveBeenCalledTimes(2);
-    expect(render().loaded?.tokenLimit).toBe(20);
+    expect(render().organization.data?.token_limit).toBe(20);
   });
 
   it.each(["internal_error", "timeout"])(
@@ -198,10 +203,10 @@ describe("application recovery with controlled hook effects", () => {
       vi.mocked(backend.organization).mockRejectedValueOnce(error);
       mount();
       await settle();
-      expect(render().failure).toBe(error);
-      await render().retry();
+      expect(render().organization.error).toBe(error);
+      await act(() => render().retry());
       await settle();
-      expect(render().loaded?.humanId).toBe(1);
+      expect(render().organization.data?.human_id).toBe(1);
       expect(render().failure).toBeNull();
       expect(backend.organization).toHaveBeenCalledTimes(2);
       expect(backend.reconnect).not.toHaveBeenCalled();
@@ -381,7 +386,9 @@ describe("application recovery with controlled hook effects", () => {
       await settle();
       if (order === "close-first") disconnect();
       page.visibilityState = "visible";
-      page.dispatchEvent(new Event("visibilitychange"));
+      act(() => {
+        page.dispatchEvent(new Event("visibilitychange"));
+      });
       if (order === "visible-first") disconnect();
       await settle();
       expect(closed).toBe(false);
@@ -398,11 +405,15 @@ describe("application recovery with controlled hook effects", () => {
     expect(backend.reconnect).not.toHaveBeenCalled();
     page.visibilityState = "hidden";
     network.onLine = true;
-    window.dispatchEvent(new Event("online"));
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
     await settle();
     expect(backend.reconnect).not.toHaveBeenCalled();
     page.visibilityState = "visible";
-    page.dispatchEvent(new Event("visibilitychange"));
+    act(() => {
+      page.dispatchEvent(new Event("visibilitychange"));
+    });
     await settle();
     expect(closed).toBe(false);
   });
@@ -415,11 +426,11 @@ describe("application recovery with controlled hook effects", () => {
     });
     mount();
     await settle();
-    expect(render().loaded?.humanId).toBe(1);
+    expect(render().organization.data?.human_id).toBe(1);
     expect(render().failure).toBeNull();
   });
 
-  it("keeps initialization failure visible while a retry is loading", async () => {
+  it("shows pending data while an initial resource retry is loading", async () => {
     vi.mocked(backend.organization).mockRejectedValueOnce(
       new BackendError("internal_error", "Read failed"),
     );
@@ -427,12 +438,15 @@ describe("application recovery with controlled hook effects", () => {
     await settle();
     const next = deferred<typeof organization>();
     vi.mocked(backend.organization).mockReturnValueOnce(next.promise);
-    const retry = render().retry();
+    let retry!: Promise<void>;
+    act(() => {
+      retry = render().retry();
+    });
     await settle();
-    expect(render().failure?.code).toBe("internal_error");
+    expect(render().organization.status).toBe("pending");
     expect(render().loading).toBe(true);
     next.resolve(organization);
-    await retry;
+    await act(() => retry);
     expect(render().failure).toBeNull();
     expect(render().loading).toBe(false);
   });
@@ -448,14 +462,17 @@ describe("application recovery with controlled hook effects", () => {
     await settle();
     old.resolve({ ...organization, human_id: 99 });
     await settle();
-    expect(render().loaded).toBeNull();
-    const retry = render().retry();
+    expect(render().organization.data).toBeNull();
+    let retry!: Promise<void>;
+    act(() => {
+      retry = render().retry();
+    });
     await settle();
     expect(backend.organization).toHaveBeenCalledTimes(2);
     next.resolve(organization);
-    await retry;
+    await act(() => retry);
     await settle();
-    expect(render().loaded?.humanId).toBe(1);
+    expect(render().organization.data?.human_id).toBe(1);
   });
 
   it("merges events during a read and retains loaded data on a failed follow-up", async () => {
@@ -471,39 +488,27 @@ describe("application recovery with controlled hook effects", () => {
     emit({ type: "discussion.updated" });
     first.resolve(organization);
     await settle();
-    expect(render().loaded?.humanId).toBe(1);
+    expect(render().organization.data?.human_id).toBe(1);
     expect(backend.organization).toHaveBeenCalledTimes(2);
-    const failure = readToasts().find(
-      (item) => item.open && item.action?.label === "Retry",
-    );
-    expect(failure?.duration).toBeNull();
-    failure?.action?.onClick();
-    await settle();
+    expect(render().organization.error?.message).toBe("Follow-up failed");
+    await act(() => render().refreshOrganization());
     expect(backend.organization).toHaveBeenCalledTimes(3);
-    expect(readToasts().find((item) => item.id === failure?.id)?.open).toBe(
-      false,
-    );
+    expect(render().organization.error).toBeNull();
   });
 
   it("shows a retryable read error after connection restoration", async () => {
     mount();
     await settle();
-    const snapshot = render().loaded;
+    const snapshot = render().discussions.data;
     vi.mocked(backend.discussions).mockRejectedValueOnce(
       new BackendError("timeout", "Read timed out", true),
     );
     disconnect();
     await settle();
-    expect(render().loaded).toBe(snapshot);
-    expect(render().failure?.code).toBe("timeout");
-    const failure = readToasts().find(
-      (item) => item.open && item.id === "application-data",
-    );
-    expect(failure?.duration).toBeNull();
-    expect(failure?.action?.label).toBe("Retry");
-    failure?.action?.onClick();
-    await settle();
-    expect(render().failure).toBeNull();
+    expect(render().discussions.data).toBe(snapshot);
+    expect(render().discussions.error?.code).toBe("timeout");
+    await act(() => render().refreshDiscussions());
+    expect(render().discussions.error).toBeNull();
     expect(backend.discussions).toHaveBeenCalledTimes(3);
   });
 
@@ -512,14 +517,21 @@ describe("application recovery with controlled hook effects", () => {
     await settle();
     const pending = deferred<typeof organization>();
     vi.mocked(backend.organization).mockReturnValueOnce(pending.promise);
-    const first = render().retry();
-    expect(render().retry()).toBe(first);
-    page.dispatchEvent(new Event("visibilitychange"));
-    window.dispatchEvent(new Event("online"));
+    let first!: Promise<void>;
+    act(() => {
+      first = render().retry();
+      void render().retry();
+    });
+    act(() => {
+      page.dispatchEvent(new Event("visibilitychange"));
+    });
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
     await settle();
     expect(backend.organization).toHaveBeenCalledTimes(2);
     pending.resolve(organization);
-    await first;
+    await act(() => first);
     expect(render().failure).toBeNull();
   });
 
@@ -531,11 +543,13 @@ describe("application recovery with controlled hook effects", () => {
     for (const off of cleanup.splice(0)) off();
     pending.resolve(organization);
     await settle();
-    expect(render().loaded).toBeNull();
+    expect(render().organization.data).toBeNull();
     expect(events.size).toBe(0);
     expect(failures.size).toBe(0);
     closed = true;
-    window.dispatchEvent(new Event("online"));
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
     expect(backend.reconnect).not.toHaveBeenCalled();
   });
 });
