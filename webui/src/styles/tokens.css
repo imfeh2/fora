@@ -101,6 +101,7 @@
   --animate-pop-in: pop-in var(--duration-fast) var(--ease-out);
   --animate-fade-in: fade-in var(--duration-base) var(--ease-standard);
   --animate-rise-in: rise-in var(--duration-base) var(--ease-standard);
+  --animate-slide-up: slide-up var(--duration-base) var(--ease-standard);
 
   @keyframes spin {
     to {
@@ -154,6 +155,15 @@
     to {
       opacity: 1;
       transform: none;
+    }
+  }
+
+  @keyframes slide-up {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
     }
   }
 }

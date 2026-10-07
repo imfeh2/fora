@@ -1,13 +1,23 @@
 import { clsx } from "clsx";
-import { ArrowLeft } from "lucide-react";
-import { Children, type ReactNode, useRef } from "react";
+import { ArrowLeft, Menu } from "lucide-react";
+import {
+  Children,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import { Modal } from "@/components/ui/dialog";
+import { Badge, IconButton } from "@/components/ui/index";
 import brandIcon from "../../../../assets/icon.svg";
 
 const crumbClasses =
   "inline-flex items-center gap-1 self-start min-h-6 py-0 pr-2 pl-1 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg";
 
 const pageBodyVariants = {
-  scroll: "gap-4 overflow-y-auto pt-0 px-8 pb-8 max-[940px]:px-6",
+  scroll:
+    "gap-4 overflow-y-auto pt-0 px-8 pb-8 max-[940px]:px-6 [@media(max-width:640px)]:px-3 [@media(max-width:640px)]:pb-4",
   flush: "gap-0 overflow-hidden",
 };
 
@@ -16,17 +26,86 @@ const columnVisibility = {
   sm: "max-[940px]:hidden",
 };
 
+function subscribeViewport(listener: () => void) {
+  window.addEventListener("resize", listener);
+  return () => window.removeEventListener("resize", listener);
+}
+
+export function useNarrowViewport() {
+  return useSyncExternalStore(
+    subscribeViewport,
+    () => window.innerWidth <= 640,
+    () => false,
+  );
+}
+
 export function Shell({
   sidebar,
   children,
+  navigation,
 }: {
   sidebar: ReactNode;
   children: ReactNode;
+  navigation?: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onClosed: () => void;
+    unread: number | null;
+    trigger: RefObject<HTMLButtonElement | null>;
+    restoreFocus: () => HTMLElement | null;
+    desktop: RefObject<HTMLDivElement | null>;
+  };
 }) {
+  const narrow = useNarrowViewport();
+  useEffect(() => {
+    if (!navigation) return;
+    if (!narrow && navigation.trigger.current === document.activeElement)
+      navigation.restoreFocus()?.focus();
+    if (narrow && navigation.desktop.current?.contains(document.activeElement))
+      navigation.trigger.current?.focus();
+  }, [narrow, navigation]);
   return (
-    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-surface">
-      {sidebar}
-      <div className="flex flex-col min-w-0 min-h-0">{children}</div>
+    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-surface [@media(max-width:640px)]:grid-cols-[minmax(0,1fr)]">
+      <div
+        ref={navigation?.desktop}
+        inert={narrow}
+        aria-hidden={narrow || undefined}
+        className="flex min-h-0 flex-col [@media(max-width:640px)]:hidden"
+      >
+        {sidebar}
+      </div>
+      <div className="flex flex-col min-w-0 min-h-0">
+        <div className="hidden flex-none items-center gap-2 border-b border-line px-3 py-2 [@media(max-width:640px)]:flex">
+          {navigation ? (
+            <>
+              <IconButton
+                ref={navigation.trigger}
+                label="Open navigation"
+                aria-expanded={navigation.open && narrow}
+                onClick={() => navigation.onOpenChange(true)}
+              >
+                <Menu size={16} />
+              </IconButton>
+              {navigation.unread !== null && navigation.unread > 0 ? (
+                <Badge tone="unread">{navigation.unread}</Badge>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+        {children}
+      </div>
+      {navigation ? (
+        <Modal
+          open={navigation.open && narrow}
+          onOpenChange={navigation.onOpenChange}
+          onClosed={navigation.onClosed}
+          restoreFocus={navigation.restoreFocus}
+          title="Navigation"
+          side="left"
+        >
+          {sidebar}
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -42,7 +121,7 @@ export function Sidebar({
 }) {
   return (
     <div
-      className="flex flex-col min-h-0 border-r border-line bg-app"
+      className="flex flex-1 flex-col min-h-0 border-r border-line bg-app"
       inert={inert}
     >
       <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
@@ -235,15 +314,17 @@ export function PageHeader({
   actions,
   crumb,
   leading,
+  wrap = false,
 }: {
   title: ReactNode;
   status?: ReactNode;
   actions?: ReactNode;
   crumb?: Crumb | Crumb[];
   leading?: ReactNode;
+  wrap?: boolean;
 }) {
   return (
-    <header className="flex flex-col gap-2 pt-6 px-8 pb-4 flex-none max-[940px]:px-6">
+    <header className="flex flex-col gap-2 pt-6 px-8 pb-4 flex-none max-[940px]:px-6 [@media(max-width:640px)]:px-3 [@media(max-width:640px)]:pt-3 [@media(max-width:640px)]:pb-3">
       {Array.isArray(crumb) ? (
         <nav aria-label="Breadcrumb">
           <ol className="flex items-center flex-wrap gap-2 text-fg-muted text-xs wrap-anywhere">
@@ -278,18 +359,33 @@ export function PageHeader({
           {crumb.label}
         </button>
       ) : null}
-      <div className="flex items-start gap-4">
+      <div
+        className={clsx(
+          "flex items-start gap-4 [@media(max-width:640px)]:flex-wrap",
+          wrap && "flex-wrap",
+        )}
+      >
         {leading}
-        <div className="flex-1 min-w-0 flex flex-col gap-1">
+        <div
+          className={clsx(
+            "flex-1 min-w-0 max-w-full flex flex-col gap-1",
+            wrap && "basis-auto",
+          )}
+        >
           <h1 className="wrap-anywhere">{title}</h1>
           {status ? (
-            <div className="flex items-center gap-2 text-fg-muted">
+            <div
+              className={clsx(
+                "flex items-center gap-2 text-fg-muted",
+                wrap && "flex-wrap",
+              )}
+            >
               {status}
             </div>
           ) : null}
         </div>
         {actions ? (
-          <div className="flex items-center gap-2 flex-none pt-0.5">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 pt-0.5 [@media(max-width:640px)]:w-full">
             {actions}
           </div>
         ) : null}
@@ -300,7 +396,7 @@ export function PageHeader({
 
 export function Toolbar({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 pt-0 px-8 pb-4 flex-none max-[940px]:px-6">
+    <div className="flex flex-wrap items-center gap-2 pt-0 px-8 pb-4 flex-none max-[940px]:px-6 [@media(max-width:640px)]:px-3">
       {children}
     </div>
   );
@@ -316,7 +412,7 @@ export function PageBody({
   return (
     <div
       className={clsx(
-        "flex-1 min-h-0 flex flex-col",
+        "flex-1 min-w-0 min-h-0 flex flex-col",
         pageBodyVariants[variant],
       )}
     >
@@ -343,7 +439,7 @@ export function Table({
   label: string;
 }) {
   return (
-    <div className="w-full">
+    <div className="w-full overflow-x-auto">
       <table
         className="w-full table-auto [&_td]:p-3 [&_td]:border-b [&_td]:border-line [&_td]:align-middle [&_td[data-align=end]]:text-right max-[1120px]:[&_td[data-hide-below=md]]:hidden max-[940px]:[&_td[data-hide-below=sm]]:hidden [&_tbody_tr]:relative [&_tbody_tr]:transition-[background-color] [&_tbody_tr]:duration-(--duration-fast) [&_tbody_tr]:ease-linear [&_tbody_tr:hover]:bg-gray-800/70 [&_tbody_tr[data-highlight=true]]:bg-blue-500/7"
         aria-label={label}

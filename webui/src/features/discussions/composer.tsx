@@ -173,6 +173,8 @@ export function Composer({
   onSend,
   onHeightChange,
   onOpenVoiceSettings,
+  focusOnReady = false,
+  onFocused,
 }: {
   discussionId: number;
   members: Member[];
@@ -182,6 +184,8 @@ export function Composer({
   onSend: SendDraft;
   onHeightChange: (height: number) => void;
   onOpenVoiceSettings: () => void;
+  focusOnReady?: boolean;
+  onFocused?: () => void;
 }) {
   const {
     controller,
@@ -424,6 +428,20 @@ export function Composer({
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  const focusDelivered = useRef(false);
+  useEffect(() => {
+    if (
+      !focusOnReady ||
+      !controller ||
+      !input.current ||
+      input.current.matches(":disabled") ||
+      focusDelivered.current
+    )
+      return;
+    focusDelivered.current = true;
+    input.current.focus();
+    onFocused?.();
+  }, [focusOnReady, controller, onFocused, busy, view?.busy]);
   const menuId = useId();
   const card = useRef<HTMLFieldSetElement>(null);
   const probe = useRef<HTMLTextAreaElement>(null);
@@ -604,7 +622,7 @@ export function Composer({
   return (
     <div
       style={composerTheme}
-      className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center"
+      className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center max-[640px]:inset-x-2 max-[640px]:bottom-2 max-[640px]:pb-[env(safe-area-inset-bottom)]"
     >
       <div
         className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
@@ -634,7 +652,7 @@ export function Composer({
         }}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none",
+          "pointer-events-auto relative w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none max-[640px]:max-h-[35dvh]",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
@@ -778,7 +796,7 @@ export function Composer({
         </div>
         {suggesting ? (
           <div
-            className="absolute bottom-full mb-2 left-0 right-0 z-(--layer-popover) max-h-66 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in"
+            className="absolute bottom-full mb-2 left-0 right-0 z-(--layer-popover) max-h-66 max-[640px]:max-h-40 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in"
             id={menuId}
             role="listbox"
             aria-label="Members"
@@ -965,7 +983,7 @@ export function Composer({
             onClick={() => fileInput.current?.click()}
             aria-label="Attach files"
             title="Attach files"
-            className="ml-auto flex size-7 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
+            className="ml-auto flex size-7 min-w-11 min-h-11 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
           >
             <PlusIcon />
           </button>
@@ -977,14 +995,14 @@ export function Composer({
             title="Attach files"
             disabled={!controller}
             onClick={() => fileInput.current?.click()}
-            className="absolute left-2 bottom-2 z-10 flex size-8 items-center justify-center rounded-full hover:bg-white/10"
+            className="absolute left-2 bottom-2 z-10 flex size-8 min-w-11 min-h-11 items-center justify-center rounded-full hover:bg-white/10"
           >
             <PlusIcon />
           </button>
         ) : null}
         <button
           type="button"
-          className="absolute right-2 bottom-2 z-10 flex size-8 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
+          className="absolute right-2 bottom-2 z-10 flex size-8 min-w-11 min-h-11 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
           aria-label={
             recordingActive
               ? "Stop recording"

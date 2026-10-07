@@ -23,6 +23,7 @@ import {
   Shell,
   Sidebar,
   SidebarBrand,
+  useNarrowViewport,
 } from "@/components/layout/shell";
 import { AccessError } from "@/components/ui/access-error";
 import {
@@ -65,15 +66,27 @@ type Loaded = {
 function View({
   route,
   tokenLimit,
+  focusDiscussionId,
+  onComposerFocused,
+  onDiscussionCreated,
 }: {
   route: Route;
   tokenLimit: number | null;
+  focusDiscussionId: number | null;
+  onComposerFocused: () => void;
+  onDiscussionCreated: (id: number) => void;
 }) {
   switch (route.name) {
     case "discussions":
-      return <DiscussionsPage />;
+      return <DiscussionsPage onCreated={onDiscussionCreated} />;
     case "discussion":
-      return <ThreadPage id={route.id} />;
+      return (
+        <ThreadPage
+          id={route.id}
+          focusComposer={route.id === focusDiscussionId}
+          onComposerFocused={onComposerFocused}
+        />
+      );
     case "members":
       return <MembersPage tokenLimit={tokenLimit} />;
     case "member":
@@ -140,6 +153,45 @@ function Chrome({ loaded }: { loaded: Loaded }) {
   const { route } = useRouter();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [focusDiscussionId, setFocusDiscussionId] = useState<number | null>(
+    null,
+  );
+  const menuTrigger = useRef<HTMLButtonElement>(null);
+  const desktopNavigation = useRef<HTMLDivElement>(null);
+  const afterDrawer = useRef<(() => void) | null>(null);
+  const narrow = useNarrowViewport();
+  const onComposerFocused = useCallback(() => setFocusDiscussionId(null), []);
+  const onDiscussionCreated = useCallback(
+    (id: number) => {
+      setFocusDiscussionId(id);
+      navigate({ name: "discussion", id });
+    },
+    [navigate],
+  );
+  const restoreNavigationFocus = useCallback(
+    () =>
+      window.innerWidth <= 640
+        ? menuTrigger.current
+        : (desktopNavigation.current?.querySelector<HTMLElement>(
+            '[aria-current="page"]',
+          ) ?? null),
+    [],
+  );
+  const drawerClosed = useCallback(() => {
+    const next = afterDrawer.current;
+    afterDrawer.current = null;
+    next?.();
+  }, []);
+  const closeThen = (action: () => void) => {
+    if (drawerOpen && narrow) {
+      afterDrawer.current = action;
+      setDrawerOpen(false);
+    } else action();
+  };
+  useEffect(() => {
+    if (!narrow) setDrawerOpen(false);
+  }, [narrow]);
   const settingsSaving = useSettingsSaving();
   const active = navIdOf(route);
   const unlisted =
@@ -155,8 +207,21 @@ function Chrome({ loaded }: { loaded: Loaded }) {
     0,
   );
 
+  const selectRoute = (next: Route) => {
+    if (!settingsSaving) closeThen(() => navigate(next));
+  };
+
   return (
     <Shell
+      navigation={{
+        open: drawerOpen,
+        onOpenChange: setDrawerOpen,
+        onClosed: drawerClosed,
+        unread,
+        trigger: menuTrigger,
+        desktop: desktopNavigation,
+        restoreFocus: restoreNavigationFocus,
+      }}
       sidebar={
         <Sidebar
           inert={settingsSaving}
@@ -166,10 +231,13 @@ function Chrome({ loaded }: { loaded: Loaded }) {
                 icon={<Settings size={16} />}
                 label="Settings"
                 active={active === "settings"}
-                onSelect={() => {
-                  if (route.name !== "settings")
-                    navigate({ name: "settings", section: "model" });
-                }}
+                onSelect={() =>
+                  selectRoute({
+                    name: "settings",
+                    section:
+                      route.name === "settings" ? route.section : "model",
+                  })
+                }
               />
             </Nav>
           }
@@ -191,12 +259,14 @@ function Chrome({ loaded }: { loaded: Loaded }) {
                 <IconButton
                   size="sm"
                   label="New Discussion"
-                  onClick={() => setCreating(true)}
+                  onClick={() => {
+                    if (!settingsSaving) closeThen(() => setCreating(true));
+                  }}
                 >
                   <Plus size={15} />
                 </IconButton>
               }
-              onSelect={() => navigate({ name: "discussions" })}
+              onSelect={() => selectRoute({ name: "discussions" })}
             >
               {loaded.discussions.map((item) => (
                 <NavSubItem
@@ -215,7 +285,9 @@ function Chrome({ loaded }: { loaded: Loaded }) {
                       <StateDot state="running" />
                     ) : undefined
                   }
-                  onSelect={() => navigate({ name: "discussion", id: item.id })}
+                  onSelect={() =>
+                    selectRoute({ name: "discussion", id: item.id })
+                  }
                 />
               ))}
             </NavItem>
@@ -223,25 +295,32 @@ function Chrome({ loaded }: { loaded: Loaded }) {
               icon={<Users size={16} />}
               label="Members"
               active={active === "members"}
-              onSelect={() => navigate({ name: "members" })}
+              onSelect={() => selectRoute({ name: "members" })}
             />
             <NavItem
               icon={<BookText size={16} />}
               label="Library"
               active={active === "library"}
-              onSelect={() => navigate({ name: "library" })}
+              onSelect={() => selectRoute({ name: "library" })}
             />
           </Nav>
         </Sidebar>
       }
     >
       <PageTransition id={pageKeyOf(route)}>
-        <View route={route} tokenLimit={loaded.tokenLimit} />
+        <View
+          route={route}
+          tokenLimit={loaded.tokenLimit}
+          focusDiscussionId={focusDiscussionId}
+          onComposerFocused={onComposerFocused}
+          onDiscussionCreated={onDiscussionCreated}
+        />
       </PageTransition>
       <CreateDiscussionDialog
         open={creating}
         onOpenChange={setCreating}
-        onCreated={(id) => navigate({ name: "discussion", id })}
+        restoreFocus={restoreNavigationFocus}
+        onCreated={onDiscussionCreated}
       />
     </Shell>
   );

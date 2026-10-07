@@ -88,7 +88,11 @@ const RESULT_COLUMNS: Column[] = [
   { key: "discussion", label: "Discussion", width: "220px" },
 ];
 
-export function DiscussionsPage() {
+export function DiscussionsPage({
+  onCreated,
+}: {
+  onCreated?: (id: number) => void;
+} = {}) {
   const { members } = useOrganization();
   const navigate = useNavigate();
   const [list, setList] = useState<DiscussionSummary[] | null>(null);
@@ -314,7 +318,7 @@ export function DiscussionsPage() {
       <CreateDiscussionDialog
         open={creating}
         onOpenChange={setCreating}
-        onCreated={(id) => navigate({ name: "discussion", id })}
+        onCreated={onCreated ?? ((id) => navigate({ name: "discussion", id }))}
       />
     </Page>
   );

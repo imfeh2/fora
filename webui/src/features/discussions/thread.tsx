@@ -65,11 +65,21 @@ function reportDiscussionWriteFailure(
   });
 }
 
-export function ThreadPage({ id }: { id: number }) {
-  return <ThreadSession key={id} id={id} />;
+type ThreadPageProps = {
+  id: number;
+  focusComposer?: boolean;
+  onComposerFocused?: () => void;
+};
+
+export function ThreadPage(props: ThreadPageProps) {
+  return <ThreadSession key={props.id} {...props} />;
 }
 
-function ThreadSession({ id }: { id: number }) {
+function ThreadSession({
+  id,
+  focusComposer,
+  onComposerFocused,
+}: ThreadPageProps) {
   const { members, humanId, discussions, refresh } = useOrganization();
   const navigate = useNavigate();
   const thread = useThreadData(id, humanId);
@@ -443,7 +453,7 @@ function ThreadSession({ id }: { id: number }) {
         <div className="@container relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scroll}
-            className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 [overflow-anchor:none]"
+            className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 [@media(max-width:640px)]:px-3 [overflow-anchor:none]"
             onScroll={() => {
               if (positioningInterrupted.current && scroll.current)
                 virtual.scrollToOffset(scroll.current.scrollTop);
@@ -532,7 +542,7 @@ function ThreadSession({ id }: { id: number }) {
           </div>
           {detail && detail.latest > lastVisible ? (
             <div
-              className="absolute right-8"
+              className="absolute right-8 [@media(max-width:640px)]:right-3"
               style={{ bottom: composerSize + 24 }}
             >
               <Button
@@ -554,6 +564,8 @@ function ThreadSession({ id }: { id: number }) {
             placeholder={topic ? `Message ${topic}` : "Message"}
             onSend={send}
             onHeightChange={resizeComposer}
+            focusOnReady={focusComposer}
+            onFocused={onComposerFocused}
             onOpenVoiceSettings={() =>
               navigate({ name: "settings", section: "voice" })
             }
