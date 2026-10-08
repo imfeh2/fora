@@ -35,6 +35,8 @@ function refocus(target: { focus: () => void } | null) {
   });
 }
 
+export type ModalVariant = "form" | "confirm" | "history";
+
 export function Modal({
   open,
   onOpenChange,
@@ -43,6 +45,7 @@ export function Modal({
   children,
   footer,
   wide = false,
+  variant,
   side,
   initialFocus,
   restoreFocus,
@@ -55,6 +58,7 @@ export function Modal({
   children?: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  variant?: ModalVariant;
   side?: "left";
   initialFocus?: () => HTMLElement | null;
   restoreFocus?: () => HTMLElement | null;
@@ -71,6 +75,15 @@ export function Modal({
   const toastHost = useCallback((node: HTMLDivElement | null) => {
     if (node) return registerToastHost(node);
   }, []);
+
+  const modalKind = variant ?? (wide ? "history" : "form");
+  const maxDvhClass =
+    modalKind === "history" ? "narrow:max-h-[90dvh]" : "narrow:max-h-[85dvh]";
+  const wideWidth =
+    modalKind === "history" || wide
+      ? "w-[min(960px,calc(100vw-32px))]"
+      : "w-[min(440px,calc(100vw-48px))]";
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -80,7 +93,7 @@ export function Modal({
           className={
             side === "left"
               ? "fixed inset-y-0 left-0 z-(--layer-dialog) flex min-h-0 w-[280px] max-w-[85vw] flex-col border-r border-line bg-app shadow-dialog animate-fade-in"
-              : `fixed top-1/2 left-1/2 z-(--layer-dialog) flex min-h-0 max-h-[calc(100vh-32px)] flex-col gap-4 p-6 border border-line rounded-lg bg-surface-raised shadow-dialog [translate:-50%_-50%] origin-center animate-pop-in max-[640px]:inset-x-0 max-[640px]:bottom-0 max-[640px]:top-auto max-[640px]:translate-x-0 max-[640px]:translate-y-0 max-[640px]:w-full max-[640px]:max-w-full max-[640px]:rounded-t-lg max-[640px]:rounded-b-none max-[640px]:border-t max-[640px]:border-x-0 max-[640px]:border-b-0 max-[640px]:max-h-[85dvh] max-[640px]:p-4 max-[640px]:pb-[calc(16px+env(safe-area-inset-bottom))] max-[640px]:animate-slide-up ${wide ? "w-[min(960px,calc(100vw-32px))]" : "w-[min(440px,calc(100vw-48px))]"}`
+              : `fixed top-1/2 left-1/2 z-(--layer-dialog) flex min-h-0 max-h-[calc(100vh-32px)] flex-col gap-4 p-6 border border-line rounded-lg bg-surface-raised shadow-dialog [translate:-50%_-50%] origin-center animate-pop-in narrow:inset-x-0 narrow:bottom-0 narrow:top-auto narrow:translate-x-0 narrow:translate-y-0 narrow:w-full narrow:max-w-full narrow:rounded-t-lg narrow:rounded-b-none narrow:border-t narrow:border-x-0 narrow:border-b-0 ${maxDvhClass} narrow:p-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))] narrow:animate-slide-up ${wideWidth}`
           }
           onOpenAutoFocus={(event) => {
             opener.current =
@@ -121,8 +134,8 @@ export function Modal({
           <div
             className={
               side === "left"
-                ? "flex items-center justify-between gap-3 p-3 border-b border-line"
-                : "flex items-start justify-between gap-3"
+                ? "flex items-center justify-between gap-3 p-3 border-b border-line shrink-0"
+                : "flex items-start justify-between gap-3 shrink-0"
             }
           >
             <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
@@ -133,32 +146,31 @@ export function Modal({
                 ref={closeButton}
                 label={side === "left" ? "Close navigation" : "Close"}
                 size="sm"
+                touchTarget
               >
                 <X size={15} />
               </IconButton>
             </Dialog.Close>
           </div>
-          {description ? (
-            <Dialog.Description className="-mt-4 mx-0 mb-0 text-fg-muted text-sm">
-              {description}
-            </Dialog.Description>
-          ) : null}
           <div ref={toastHost} className="empty:hidden shrink-0" />
-          {children ? (
-            <div
-              className={
-                side === "left"
-                  ? "min-h-0 flex-1 flex flex-col"
-                  : "min-h-0 flex-1 overflow-y-auto flex flex-col gap-4"
-              }
-            >
+          {side === "left" ? (
+            children ? (
+              <div className="min-h-0 flex-1 flex flex-col">{children}</div>
+            ) : null
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto flex flex-col gap-4">
+              {description ? (
+                <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
+                  {description}
+                </Dialog.Description>
+              ) : null}
               {children}
             </div>
-          ) : null}
+          )}
           {footer ? (
             <div
               ref={footerElement}
-              className="flex justify-end gap-2 max-[640px]:flex-col-reverse max-[640px]:*:w-full"
+              className="flex justify-end gap-2 shrink-0 narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11"
             >
               {footer}
             </div>
@@ -308,6 +320,7 @@ export function ConfirmDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={title}
+      variant="confirm"
       description={description}
       footer={
         <>

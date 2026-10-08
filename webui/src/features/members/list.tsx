@@ -21,6 +21,7 @@ import {
   RowLink,
   Table,
   Toolbar,
+  useNarrowViewport,
 } from "@/components/layout/shell";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
@@ -115,6 +116,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
     filter === "agents" &&
     !query.trim() &&
     !members.some((member) => member.type === "agent");
+  const narrow = useNarrowViewport();
 
   return (
     <Page>
@@ -170,6 +172,25 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
                   }
             }
           />
+        ) : narrow ? (
+          <div className="flex flex-col gap-3" role="feed" aria-label="Members">
+            {shown.map((member) => (
+              <MemberCard
+                key={member.id}
+                member={member}
+                tokenLimit={tokenLimit}
+                onOpen={() => navigate({ name: "member", id: member.id })}
+                onToggle={async () => {
+                  await (canResume(member)
+                    ? backend.resumeAgent(member.id)
+                    : backend.pauseAgent(member.id));
+                  await refresh();
+                }}
+                onRename={() => setRenaming(member)}
+                onDelete={() => setDoomed(member)}
+              />
+            ))}
+          </div>
         ) : (
           <Table columns={COLUMNS} label="Members">
             {shown.map((member) => (
@@ -224,6 +245,102 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
         }}
       />
     </Page>
+  );
+}
+
+export function MemberCard({
+  member,
+  tokenLimit,
+  onOpen,
+  onToggle,
+  onRename,
+  onDelete,
+}: {
+  member: Member;
+  tokenLimit: number | null;
+  onOpen: () => void;
+  onToggle: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const agent = member.type === "agent";
+  const tokens = member.tokens ?? 0;
+
+  return (
+    <div className="relative flex flex-col gap-2.5 p-3 border border-line rounded-md bg-app transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50">
+      <div className="flex items-start justify-between gap-2 min-w-0">
+        <div className="flex min-w-0 items-center gap-3">
+          <Avatar memberId={member.id} />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            {agent ? (
+              <RowLink primary={member.name} onSelect={onOpen} />
+            ) : (
+              <span className="min-w-0 truncate font-semibold">
+                {member.name}
+              </span>
+            )}
+            <div className="flex items-center gap-1.5">
+              <Chip tone={agent ? "blue" : "neutral"}>
+                {agent ? <Bot size={12} /> : <User size={12} />}
+                {agent ? "Agent" : "Human"}
+              </Chip>
+            </div>
+          </div>
+        </div>
+        <div className="relative z-10 flex items-center gap-2 flex-none">
+          <OverflowMenu
+            label={`Actions for ${member.name}`}
+            actions={memberActions(member, {
+              toggle: onToggle,
+              rename: onRename,
+              remove: onDelete,
+            })}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 pt-1 border-t border-line/50 text-xs">
+        <div>
+          {agent ? (
+            <StatusText
+              dot={
+                <StateDot
+                  state={member.state}
+                  ping={member.state === "running"}
+                />
+              }
+            >
+              {agentStateLabel(member)}
+              {member.pause_requested && member.state === "running"
+                ? " · Pause requested"
+                : ""}
+            </StatusText>
+          ) : (
+            <span className="text-fg-muted">—</span>
+          )}
+        </div>
+
+        {agent ? (
+          <div className="flex flex-col items-end gap-1">
+            <span className="tabular-nums text-fg-muted">
+              {tokens.toLocaleString()}
+              {tokenLimit !== null && tokenLimit > 0 ? (
+                <span> / {tokenLimit.toLocaleString()}</span>
+              ) : null}
+            </span>
+            {tokenLimit !== null && tokenLimit > 0 ? (
+              <div className="w-20">
+                <Meter
+                  value={tokens}
+                  max={tokenLimit}
+                  label={`Token spend for ${member.name}`}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

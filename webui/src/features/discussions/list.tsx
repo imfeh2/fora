@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import {
   Archive,
   ArchiveRestore,
@@ -19,6 +20,7 @@ import {
   RowLink,
   Table,
   Toolbar,
+  useNarrowViewport,
 } from "@/components/layout/shell";
 import {
   Badge,
@@ -178,6 +180,7 @@ export function DiscussionsPage({
     list?.find((item) => item.id === id)?.topic ?? `Discussion ${id}`;
 
   const searching = query.trim().length > 0;
+  const narrow = useNarrowViewport();
 
   const archive = async (item: DiscussionSummary) => {
     if (archiveBusy !== null) return;
@@ -253,6 +256,45 @@ export function DiscussionsPage({
                 onClick: () => setQuery(""),
               }}
             />
+          ) : narrow ? (
+            <div
+              className="flex flex-col gap-3"
+              role="feed"
+              aria-label="Search results"
+            >
+              {results.map((result) => (
+                <div
+                  key={`${result.discussion_id}-${result.id}`}
+                  className="relative flex flex-col gap-2 p-3 border border-line rounded-md bg-app hover:bg-surface-hover/50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <Chip>{topicOf(result.discussion_id)}</Chip>
+                    <span className="text-xs text-fg-muted">
+                      {result.sender_name}
+                    </span>
+                  </div>
+                  <RowLink
+                    primary={
+                      <span className="block font-normal text-fg-muted [&_mark]:bg-blue-500/30 [&_mark]:rounded-xs [&_mark]:text-fg [&_mark]:font-medium">
+                        {segments(result.body, query).map((part) =>
+                          part.match ? (
+                            <mark key={part.id}>{part.text}</mark>
+                          ) : (
+                            <span key={part.id}>{part.text}</span>
+                          ),
+                        )}
+                      </span>
+                    }
+                    onSelect={() =>
+                      navigate({
+                        name: "discussion",
+                        id: result.discussion_id,
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
           ) : (
             <Table columns={RESULT_COLUMNS} label="Search results">
               {results.map((result) => (
@@ -299,6 +341,23 @@ export function DiscussionsPage({
               onClick: () => setCreating(true),
             }}
           />
+        ) : narrow ? (
+          <div
+            className="flex flex-col gap-3"
+            role="feed"
+            aria-label="Discussions"
+          >
+            {list.map((item) => (
+              <DiscussionCard
+                key={item.id}
+                item={item}
+                byId={byId}
+                onOpen={() => navigate({ name: "discussion", id: item.id })}
+                archiveBusy={archiveBusy === item.id}
+                onArchive={() => void archive(item)}
+              />
+            ))}
+          </div>
         ) : (
           <Table columns={LIST_COLUMNS} label="Discussions">
             {list.map((item) => (
@@ -321,6 +380,93 @@ export function DiscussionsPage({
         onCreated={onCreated ?? ((id) => navigate({ name: "discussion", id }))}
       />
     </Page>
+  );
+}
+
+export function DiscussionCard({
+  item,
+  byId,
+  onOpen,
+  onArchive,
+  archiveBusy = false,
+}: {
+  item: DiscussionSummary;
+  byId: Map<number, Member>;
+  onOpen: () => void;
+  onArchive: () => void;
+  archiveBusy?: boolean;
+}) {
+  const people = item.member_ids
+    .map((id) => byId.get(id))
+    .filter((member): member is Member => member !== undefined);
+  const shown = people.slice(0, 3);
+  const rest = people.length - shown.length;
+
+  return (
+    <div
+      data-highlight={item.unread > 0}
+      className={clsx(
+        "relative flex flex-col gap-2 p-3 border border-line rounded-md bg-app transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50",
+        item.unread > 0 && "border-blue-500/40 bg-surface-raised",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2 min-w-0">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-gray-800 text-fg-muted"
+            aria-hidden="true"
+          >
+            <MessageSquare size={15} />
+          </span>
+          <RowLink primary={item.topic} onSelect={onOpen} />
+        </div>
+        <div className="relative z-10 flex items-center gap-1.5 flex-none">
+          {item.unread > 0 ? <Badge tone="unread">{item.unread}</Badge> : null}
+          <OverflowMenu
+            label={`Actions for ${item.topic}`}
+            actions={[
+              {
+                id: "archive",
+                label: item.archived ? "Unarchive" : "Archive",
+                icon: item.archived ? (
+                  <ArchiveRestore size={15} />
+                ) : (
+                  <Archive size={15} />
+                ),
+                disabled: archiveBusy,
+                onSelect: onArchive,
+              },
+            ]}
+          />
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <div className="flex flex-wrap gap-1">
+          {shown.map((member) => (
+            <Chip
+              key={member.id}
+              tone={member.type === "agent" ? "blue" : "neutral"}
+            >
+              {member.name}
+            </Chip>
+          ))}
+          {rest > 0 ? <Chip>+{rest}</Chip> : null}
+        </div>
+        <div className="flex-none">
+          {item.archived ? (
+            <StatusText dot={<Dot tone="grey" />}>
+              <span className="text-fg-muted">Archived</span>
+            </StatusText>
+          ) : item.unread > 0 ? (
+            <StatusText dot={<Dot tone="blue" />}>
+              {plural(item.unread, "new message")}
+            </StatusText>
+          ) : (
+            <StatusText dot={<Dot tone="green" />}>{null}</StatusText>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

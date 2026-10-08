@@ -88,7 +88,7 @@ function ThreadSession({
   const [ackBusy, setAckBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
-  const [composerSize, setComposerSize] = useState(48);
+  const [composerSize, setComposerSize] = useState(64);
   const [lastVisible, setLastVisible] = useState(0);
   const scroll = useRef<HTMLDivElement>(null);
   const ready = useRef(false);
@@ -107,7 +107,7 @@ function ThreadSession({
     anchorTo: "end",
     followOnAppend: detail !== null && !detail.hasAfter,
     paddingStart: 16,
-    paddingEnd: composerSize + 40,
+    paddingEnd: composerSize + 24,
     scrollEndThreshold: 1,
   });
   const resizeComposer = useCallback(
@@ -129,7 +129,10 @@ function ThreadSession({
       const current = thread.current.current;
       if (!root || !ready.current || !current) return;
       const bounds = root.getBoundingClientRect();
-      const end = bounds.bottom - composerSize - 16;
+      const vv = typeof window !== "undefined" ? window.visualViewport : null;
+      const viewportBottom = vv ? vv.offsetTop + vv.height : bounds.bottom;
+      const effectiveBottom = Math.min(bounds.bottom, viewportBottom);
+      const end = effectiveBottom - composerSize;
       const visible: number[] = [];
       for (const element of root.querySelectorAll<HTMLElement>(
         "[data-message-id]",
@@ -244,7 +247,7 @@ function ThreadSession({
         root.scrollHeight - root.clientHeight,
         marker.getBoundingClientRect().top,
         bounds.top,
-        bounds.bottom - composerSize - 16,
+        bounds.bottom - composerSize,
       );
       const needsCorrection = Math.abs(target - root.scrollTop) >= 0.5;
       virtual.scrollToOffset(target);
@@ -277,12 +280,28 @@ function ThreadSession({
     const observer = new ResizeObserver(changed);
     if (scroll.current) observer.observe(scroll.current);
     document.addEventListener("visibilitychange", changed);
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    const onViewport = () => {
+      if (ready.current && virtual.isAtEnd()) {
+        virtual.scrollToEnd();
+      } else {
+        sample();
+      }
+    };
+    if (vv) {
+      vv.addEventListener("resize", onViewport);
+      vv.addEventListener("scroll", onViewport);
+    }
     return () => {
       cancelAnimationFrame(tick);
       observer.disconnect();
       document.removeEventListener("visibilitychange", changed);
+      if (vv) {
+        vv.removeEventListener("resize", onViewport);
+        vv.removeEventListener("scroll", onViewport);
+      }
     };
-  }, [sample, items]);
+  }, [sample, items, virtual]);
 
   useLayoutEffect(() => {
     if (ready.current && preserveBottom.current) virtual.scrollToEnd();
@@ -453,7 +472,7 @@ function ThreadSession({
         <div className="@container relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scroll}
-            className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 [@media(max-width:640px)]:px-3 [overflow-anchor:none]"
+            className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 narrow:px-3 [overflow-anchor:none]"
             onScroll={() => {
               if (positioningInterrupted.current && scroll.current)
                 virtual.scrollToOffset(scroll.current.scrollTop);
@@ -470,7 +489,7 @@ function ThreadSession({
             !loadFailed ? (
               <div
                 className="flex min-h-full flex-col"
-                style={{ paddingBottom: composerSize + 40 }}
+                style={{ paddingBottom: composerSize + 24 }}
               >
                 <StatePanel
                   icons={[MessageCircle, MessagesSquare, Send]}
@@ -542,8 +561,8 @@ function ThreadSession({
           </div>
           {detail && detail.latest > lastVisible ? (
             <div
-              className="absolute right-8 [@media(max-width:640px)]:right-3"
-              style={{ bottom: composerSize + 24 }}
+              className="absolute right-8 narrow:right-3"
+              style={{ bottom: composerSize + 8 }}
             >
               <Button
                 disabled={thread.loading}
@@ -656,7 +675,7 @@ export function MessageRow({
         {pending ? (
           <div className="mt-2 flex items-center gap-2">
             <Chip tone="warning">Mentions you</Chip>
-            <Button size="sm" disabled={busy} onClick={onAck}>
+            <Button size="sm" touchTarget disabled={busy} onClick={onAck}>
               <Check size={13} />
               Mark handled
             </Button>
@@ -666,6 +685,7 @@ export function MessageRow({
             <Chip tone="success">Handled</Chip>
             <Button
               size="sm"
+              touchTarget
               disabled={busy}
               aria-label="Undo confirmation"
               onClick={onRevoke}

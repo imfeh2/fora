@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useNarrowViewport } from "@/components/layout/shell";
 import {
   Avatar,
   autoGrowHeight,
@@ -443,6 +444,9 @@ export function Composer({
     onFocused?.();
   }, [focusOnReady, controller, onFocused, busy, view?.busy]);
   const menuId = useId();
+  const narrow = useNarrowViewport();
+  const wrapper = useRef<HTMLDivElement>(null);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
   const card = useRef<HTMLFieldSetElement>(null);
   const probe = useRef<HTMLTextAreaElement>(null);
   const topFade = useRef<HTMLDivElement>(null);
@@ -460,6 +464,8 @@ export function Composer({
     topFade.current.style.top = `${element.offsetTop}px`;
     bottomFade.current.style.top = `${element.offsetTop + element.offsetHeight - 32}px`;
   }, []);
+  const baseCompactHeight = narrow ? 52 : 48;
+  const compactPadding = narrow ? 52 : 44;
   const [layout, setLayout] = useState({
     expanded: false,
     height: 48,
@@ -473,7 +479,7 @@ export function Composer({
     const measure = (typing = false) => {
       const compactStyle = getComputedStyle(measureInput);
       const compactLine = Number.parseFloat(compactStyle.lineHeight);
-      const compactPadding =
+      const compactPaddingValue =
         Number.parseFloat(compactStyle.paddingTop) +
         Number.parseFloat(compactStyle.paddingBottom);
       measureInput.style.height = "auto";
@@ -485,7 +491,7 @@ export function Composer({
           element.value,
           measureInput.scrollHeight,
           compactLine,
-          compactPadding,
+          compactPaddingValue,
         );
       element.style.paddingBlock = expanded ? "14px" : "12px";
       const style = getComputedStyle(element);
@@ -505,7 +511,9 @@ export function Composer({
       element.scrollTop = scrollTop;
       updateFades();
       setLayout((previous) => {
-        const nextHeight = composerHeight(expanded, height);
+        const nextHeight = expanded
+          ? Math.min(300, Math.max(88, height + 48))
+          : baseCompactHeight;
         const smooth =
           previous.expanded !== expanded
             ? false
@@ -547,10 +555,11 @@ export function Composer({
     extraHeight,
     recordingActive,
     updateFades,
+    baseCompactHeight,
   ]);
 
   useLayoutEffect(() => {
-    const element = card.current;
+    const element = wrapper.current;
     if (!element) return;
     let height = -1;
     const update = () => {
@@ -621,8 +630,9 @@ export function Composer({
 
   return (
     <div
+      ref={wrapper}
       style={composerTheme}
-      className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center max-[640px]:inset-x-2 max-[640px]:bottom-2 max-[640px]:pb-[env(safe-area-inset-bottom)]"
+      className="pointer-events-none absolute inset-x-4 bottom-0 flex justify-center pb-4 narrow:inset-x-2 narrow:pb-[calc(8px+env(safe-area-inset-bottom,0px))]"
     >
       <div
         className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
@@ -631,7 +641,7 @@ export function Composer({
         <Textarea
           ref={probe}
           variant="composer"
-          style={{ paddingLeft: 44 }}
+          style={{ paddingLeft: compactPadding }}
           value={body}
           readOnly
           rows={1}
@@ -652,7 +662,7 @@ export function Composer({
         }}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none max-[640px]:max-h-[35dvh]",
+          "pointer-events-auto relative flex flex-col min-h-0 overflow-hidden w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh]",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
@@ -674,7 +684,10 @@ export function Composer({
             event.currentTarget.value = "";
           }}
         />
-        <div ref={extra}>
+        <div
+          ref={extra}
+          className="shrink-0 overflow-y-auto narrow:max-h-[14dvh]"
+        >
           {files.length ? (
             <DraftAttachments
               files={files}
@@ -796,7 +809,12 @@ export function Composer({
         </div>
         {suggesting ? (
           <div
-            className="absolute bottom-full mb-2 left-0 right-0 z-(--layer-popover) max-h-66 max-[640px]:max-h-40 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in"
+            className="absolute bottom-full mb-2 left-0 right-0 z-(--layer-popover) max-h-66 narrow:max-h-40 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in"
+            style={{
+              maxHeight: narrow
+                ? "min(160px, calc(100dvh - 180px))"
+                : undefined,
+            }}
             id={menuId}
             role="listbox"
             aria-label="Members"
@@ -828,6 +846,24 @@ export function Composer({
                       event.preventDefault();
                       accept(member);
                     }}
+                    onTouchStart={(event) => {
+                      const touch = event.touches[0];
+                      touchStart.current = {
+                        x: touch.clientX,
+                        y: touch.clientY,
+                      };
+                    }}
+                    onTouchEnd={(event) => {
+                      if (!touchStart.current) return;
+                      const touch = event.changedTouches[0];
+                      const dx = Math.abs(touch.clientX - touchStart.current.x);
+                      const dy = Math.abs(touch.clientY - touchStart.current.y);
+                      touchStart.current = null;
+                      if (dx < 10 && dy < 10) {
+                        event.preventDefault();
+                        accept(member);
+                      }
+                    }}
                   >
                     <Avatar memberId={member.id} size="sm" />
                     <span
@@ -849,12 +885,20 @@ export function Composer({
             })}
           </div>
         ) : null}
-        <div className="flex min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 min-h-0 overflow-hidden">
           <Textarea
             ref={input}
             value={body}
             disabled={!controller}
-            style={{ paddingLeft: layout.expanded ? undefined : 44 }}
+            style={{
+              paddingLeft: layout.expanded
+                ? narrow
+                  ? 14
+                  : undefined
+                : compactPadding,
+              paddingRight: narrow ? 52 : undefined,
+              maxHeight: "100%",
+            }}
             onPaste={(event) => {
               const images = Array.from(event.clipboardData.files).filter(
                 (file) => file.type.startsWith("image/"),
@@ -934,6 +978,7 @@ export function Composer({
         />
         <div
           aria-hidden={!layout.expanded}
+          inert={!layout.expanded ? true : undefined}
           className={clsx(
             "absolute bottom-2 left-3 right-12 z-10 flex min-w-0 items-center gap-0 transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.275)] motion-reduce:transition-none",
             layout.expanded
@@ -946,6 +991,7 @@ export function Composer({
               type="button"
               aria-label="Start voice input"
               onClick={() => void startRecording()}
+              className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
             >
               <MicIcon />
             </button>
@@ -983,7 +1029,7 @@ export function Composer({
             onClick={() => fileInput.current?.click()}
             aria-label="Attach files"
             title="Attach files"
-            className="ml-auto flex size-7 min-w-11 min-h-11 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
+            className="ml-auto flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
           >
             <PlusIcon />
           </button>
@@ -995,14 +1041,14 @@ export function Composer({
             title="Attach files"
             disabled={!controller}
             onClick={() => fileInput.current?.click()}
-            className="absolute left-2 bottom-2 z-10 flex size-8 min-w-11 min-h-11 items-center justify-center rounded-full hover:bg-white/10"
+            className="absolute left-2 bottom-2 narrow:left-1 narrow:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
           >
             <PlusIcon />
           </button>
         ) : null}
         <button
           type="button"
-          className="absolute right-2 bottom-2 z-10 flex size-8 min-w-11 min-h-11 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
+          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
           aria-label={
             recordingActive
               ? "Stop recording"

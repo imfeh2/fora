@@ -2,6 +2,8 @@
 @import "@fontsource-variable/inter";
 @import "@/styles/tokens.css";
 
+@custom-variant narrow (@media (max-width: 640px));
+
 @layer base {
   *,
   *::before,

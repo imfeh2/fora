@@ -4,7 +4,6 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
   type Ref,
-  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
   useLayoutEffect,
   useRef,
@@ -90,12 +89,10 @@ const meterTones = {
   danger: "bg-red-300",
 };
 
-type ButtonProps = Omit<
-  ButtonHTMLAttributes<HTMLButtonElement>,
-  "className"
-> & {
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
+  touchTarget?: boolean;
   ref?: Ref<HTMLButtonElement>;
 };
 
@@ -103,6 +100,8 @@ export function Button({
   variant = "default",
   size = "md",
   type = "button",
+  className,
+  touchTarget = false,
   ...rest
 }: ButtonProps) {
   return (
@@ -113,18 +112,18 @@ export function Button({
         "inline-flex items-center justify-center py-0 border rounded-sm font-medium leading-body whitespace-nowrap cursor-pointer transition-[background-color,border-color,color,box-shadow] duration-(--duration-fast) ease-linear disabled:cursor-not-allowed disabled:shadow-none [&_svg]:flex-none",
         buttonVariants[variant],
         buttonSizes[size],
+        touchTarget && "narrow:min-h-11 narrow:px-4",
+        className,
       )}
     />
   );
 }
 
-type IconButtonProps = Omit<
-  ButtonHTMLAttributes<HTMLButtonElement>,
-  "className"
-> & {
+type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
   size?: "md" | "sm";
   pressed?: boolean;
+  touchTarget?: boolean;
   ref?: Ref<HTMLButtonElement>;
 };
 
@@ -133,6 +132,8 @@ export function IconButton({
   size = "md",
   pressed,
   type = "button",
+  className,
+  touchTarget = false,
   children,
   ...rest
 }: IconButtonProps) {
@@ -144,6 +145,8 @@ export function IconButton({
         className={clsx(
           "inline-flex items-center justify-center flex-none border rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color] duration-(--duration-fast) ease-linear hover:enabled:bg-surface-hover hover:enabled:border-line-hover disabled:not-aria-pressed:text-fg-disabled disabled:cursor-not-allowed aria-pressed:bg-blue-500/18 aria-pressed:text-blue-100",
           iconButtonSizes[size],
+          touchTarget && "narrow:size-11 narrow:min-w-11 narrow:min-h-11",
+          className,
         )}
         aria-label={label}
         aria-pressed={pressed}
@@ -169,22 +172,6 @@ export function Input({
           ? "appearance-none inline-grid place-content-center size-[14px] flex-none m-0 border border-line-interactive rounded-xs bg-app cursor-pointer checked:border-line-focus checked:bg-line-focus checked:after:content-[''] checked:after:w-1 checked:after:h-2 checked:after:border-fg checked:after:border-r-2 checked:after:border-b-2 checked:after:[transform:translateY(-1px)_rotate(45deg)] disabled:opacity-50 disabled:cursor-not-allowed"
           : clsx(inputClasses, "h-8 px-3 py-0")
       }
-    />
-  );
-}
-
-export function Select(
-  props: Omit<SelectHTMLAttributes<HTMLSelectElement>, "className"> & {
-    ref?: Ref<HTMLSelectElement>;
-  },
-) {
-  return (
-    <select
-      {...props}
-      className={clsx(
-        inputClasses,
-        "h-8 min-w-0 max-w-full px-3 py-0 cursor-pointer disabled:cursor-not-allowed",
-      )}
     />
   );
 }

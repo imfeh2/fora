@@ -17,7 +17,7 @@ const crumbClasses =
 
 const pageBodyVariants = {
   scroll:
-    "gap-4 overflow-y-auto pt-0 px-8 pb-8 max-[940px]:px-6 [@media(max-width:640px)]:px-3 [@media(max-width:640px)]:pb-4",
+    "gap-4 overflow-y-auto pt-0 px-8 pb-8 max-[940px]:px-6 narrow:px-3 narrow:pb-4",
   flush: "gap-0 overflow-hidden",
 };
 
@@ -65,17 +65,17 @@ export function Shell({
       navigation.trigger.current?.focus();
   }, [narrow, navigation]);
   return (
-    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-surface [@media(max-width:640px)]:grid-cols-[minmax(0,1fr)]">
+    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-surface narrow:grid-cols-[minmax(0,1fr)]">
       <div
         ref={navigation?.desktop}
         inert={narrow}
         aria-hidden={narrow || undefined}
-        className="flex min-h-0 flex-col [@media(max-width:640px)]:hidden"
+        className="flex min-h-0 flex-col narrow:hidden"
       >
         {sidebar}
       </div>
       <div className="flex flex-col min-w-0 min-h-0">
-        <div className="hidden flex-none items-center gap-2 border-b border-line px-3 py-2 [@media(max-width:640px)]:flex">
+        <div className="hidden flex-none items-center gap-2 border-b border-line px-3 py-2 narrow:flex">
           {navigation ? (
             <>
               <IconButton
@@ -83,6 +83,7 @@ export function Shell({
                 label="Open navigation"
                 aria-expanded={navigation.open && narrow}
                 onClick={() => navigation.onOpenChange(true)}
+                touchTarget
               >
                 <Menu size={16} />
               </IconButton>
@@ -314,17 +315,15 @@ export function PageHeader({
   actions,
   crumb,
   leading,
-  wrap = false,
 }: {
   title: ReactNode;
   status?: ReactNode;
   actions?: ReactNode;
   crumb?: Crumb | Crumb[];
   leading?: ReactNode;
-  wrap?: boolean;
 }) {
   return (
-    <header className="flex flex-col gap-2 pt-6 px-8 pb-4 flex-none max-[940px]:px-6 [@media(max-width:640px)]:px-3 [@media(max-width:640px)]:pt-3 [@media(max-width:640px)]:pb-3">
+    <header className="flex flex-col gap-2 pt-6 px-8 pb-4 flex-none max-[940px]:px-6 narrow:px-3 narrow:pt-3 narrow:pb-3">
       {Array.isArray(crumb) ? (
         <nav aria-label="Breadcrumb">
           <ol className="flex items-center flex-wrap gap-2 text-fg-muted text-xs wrap-anywhere">
@@ -353,39 +352,24 @@ export function PageHeader({
         <button
           type="button"
           className={clsx(crumbClasses, "-ml-1")}
-          onClick={crumb.onSelect}
+          onClick={crumb.label ? crumb.onSelect : undefined}
         >
           <ArrowLeft size={14} aria-hidden="true" />
           {crumb.label}
         </button>
       ) : null}
-      <div
-        className={clsx(
-          "flex items-start gap-4 [@media(max-width:640px)]:flex-wrap",
-          wrap && "flex-wrap",
-        )}
-      >
+      <div className="flex items-start gap-4 narrow:flex-wrap">
         {leading}
-        <div
-          className={clsx(
-            "flex-1 min-w-0 max-w-full flex flex-col gap-1",
-            wrap && "basis-auto",
-          )}
-        >
+        <div className="flex-1 min-w-0 max-w-full flex flex-col gap-1">
           <h1 className="wrap-anywhere">{title}</h1>
           {status ? (
-            <div
-              className={clsx(
-                "flex items-center gap-2 text-fg-muted",
-                wrap && "flex-wrap",
-              )}
-            >
+            <div className="flex items-center gap-2 text-fg-muted">
               {status}
             </div>
           ) : null}
         </div>
         {actions ? (
-          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 pt-0.5 [@media(max-width:640px)]:w-full">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 pt-0.5 narrow:w-full">
             {actions}
           </div>
         ) : null}
@@ -396,7 +380,7 @@ export function PageHeader({
 
 export function Toolbar({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 pt-0 px-8 pb-4 flex-none max-[940px]:px-6 [@media(max-width:640px)]:px-3">
+    <div className="flex flex-wrap items-center gap-2 pt-0 px-8 pb-4 flex-none max-[940px]:px-6 narrow:px-3">
       {children}
     </div>
   );
