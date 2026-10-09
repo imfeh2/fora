@@ -259,6 +259,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
                 <IconButton
                   size="sm"
                   label="New Discussion"
+                  touchTarget
                   onClick={() => {
                     if (!settingsSaving) closeThen(() => setCreating(true));
                   }}

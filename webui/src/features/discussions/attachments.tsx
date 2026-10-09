@@ -256,6 +256,7 @@ export function MessageAttachment({
         open={opened}
         onOpenChange={setOpened}
         title={attachment.name}
+        variant="history"
         footer={
           <Button disabled={downloading} onClick={() => void download()}>
             Download original

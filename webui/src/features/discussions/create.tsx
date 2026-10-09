@@ -95,6 +95,7 @@ export function CreateDiscussionDialog({
       open={open}
       onOpenChange={changeOpen}
       title="New Discussion"
+      variant="form"
       restoreFocus={restoreFocus}
       onClosed={closed}
       footer={

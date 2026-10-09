@@ -3,6 +3,7 @@
 @import "@/styles/tokens.css";
 
 @custom-variant narrow (@media (max-width: 640px));
+@custom-variant touch (@media (pointer: coarse));
 
 @layer base {
   *,

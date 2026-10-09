@@ -112,7 +112,7 @@ export function Button({
         "inline-flex items-center justify-center py-0 border rounded-sm font-medium leading-body whitespace-nowrap cursor-pointer transition-[background-color,border-color,color,box-shadow] duration-(--duration-fast) ease-linear disabled:cursor-not-allowed disabled:shadow-none [&_svg]:flex-none",
         buttonVariants[variant],
         buttonSizes[size],
-        touchTarget && "narrow:min-h-11 narrow:px-4",
+        touchTarget && "narrow:min-h-11 narrow:px-4 touch:min-h-11 touch:px-4",
         className,
       )}
     />
@@ -145,7 +145,8 @@ export function IconButton({
         className={clsx(
           "inline-flex items-center justify-center flex-none border rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color] duration-(--duration-fast) ease-linear hover:enabled:bg-surface-hover hover:enabled:border-line-hover disabled:not-aria-pressed:text-fg-disabled disabled:cursor-not-allowed aria-pressed:bg-blue-500/18 aria-pressed:text-blue-100",
           iconButtonSizes[size],
-          touchTarget && "narrow:size-11 narrow:min-w-11 narrow:min-h-11",
+          touchTarget &&
+            "narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11",
           className,
         )}
         aria-label={label}

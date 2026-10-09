@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNarrowViewport } from "@/components/layout/shell";
+import { useTouchOrNarrow } from "@/components/layout/shell";
 import {
   Avatar,
   autoGrowHeight,
@@ -176,6 +176,7 @@ export function Composer({
   onOpenVoiceSettings,
   focusOnReady = false,
   onFocused,
+  keyboardOffset = 0,
 }: {
   discussionId: number;
   members: Member[];
@@ -187,6 +188,7 @@ export function Composer({
   onOpenVoiceSettings: () => void;
   focusOnReady?: boolean;
   onFocused?: () => void;
+  keyboardOffset?: number;
 }) {
   const {
     controller,
@@ -444,7 +446,7 @@ export function Composer({
     onFocused?.();
   }, [focusOnReady, controller, onFocused, busy, view?.busy]);
   const menuId = useId();
-  const narrow = useNarrowViewport();
+  const isTouchOrNarrow = useTouchOrNarrow();
   const wrapper = useRef<HTMLDivElement>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const card = useRef<HTMLFieldSetElement>(null);
@@ -464,8 +466,8 @@ export function Composer({
     topFade.current.style.top = `${element.offsetTop}px`;
     bottomFade.current.style.top = `${element.offsetTop + element.offsetHeight - 32}px`;
   }, []);
-  const baseCompactHeight = narrow ? 52 : 48;
-  const compactPadding = narrow ? 52 : 44;
+  const baseCompactHeight = isTouchOrNarrow ? 52 : 48;
+  const compactPadding = isTouchOrNarrow ? 52 : 44;
   const [layout, setLayout] = useState({
     expanded: false,
     height: 48,
@@ -588,6 +590,52 @@ export function Composer({
     MENU_LIMIT,
   );
   const suggesting = mention !== null && candidates.length > 0 && !dismissed;
+  const [menuMaxHeight, setMenuMaxHeight] = useState<number | undefined>(
+    undefined,
+  );
+
+  const updateMenuHeight = useCallback(() => {
+    if (!card.current) return;
+    const rect = card.current.getBoundingClientRect();
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    const vvTop = vv ? vv.offsetTop : 0;
+    const available = Math.max(0, rect.top - vvTop - 8);
+    const clamped = Math.min(264, available);
+    setMenuMaxHeight(clamped);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!suggesting) return;
+    updateMenuHeight();
+    const cardElement = card.current;
+    let observer: ResizeObserver | null = null;
+    if (cardElement) {
+      observer = new ResizeObserver(updateMenuHeight);
+      observer.observe(cardElement);
+    }
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    window.addEventListener("resize", updateMenuHeight);
+    window.addEventListener("scroll", updateMenuHeight, true);
+    if (vv) {
+      vv.addEventListener("resize", updateMenuHeight);
+      vv.addEventListener("scroll", updateMenuHeight);
+    }
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateMenuHeight);
+      window.removeEventListener("scroll", updateMenuHeight, true);
+      if (vv) {
+        vv.removeEventListener("resize", updateMenuHeight);
+        vv.removeEventListener("scroll", updateMenuHeight);
+      }
+    };
+  }, [
+    suggesting,
+    updateMenuHeight,
+    layout.height,
+    extraHeight,
+    keyboardOffset,
+  ]);
   const active = candidates.length > 0 ? highlighted % candidates.length : 0;
   const elsewhereFrom = Math.min(
     grouped.inDiscussion.length,
@@ -631,8 +679,11 @@ export function Composer({
   return (
     <div
       ref={wrapper}
-      style={composerTheme}
-      className="pointer-events-none absolute inset-x-4 bottom-0 flex justify-center pb-4 narrow:inset-x-2 narrow:pb-[calc(8px+env(safe-area-inset-bottom,0px))]"
+      style={{
+        ...composerTheme,
+        bottom: keyboardOffset,
+      }}
+      className="pointer-events-none absolute inset-x-4 flex justify-center pb-4 narrow:inset-x-2 narrow:pb-[calc(8px+env(safe-area-inset-bottom,0px))]"
     >
       <div
         className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
@@ -662,7 +713,7 @@ export function Composer({
         }}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative flex flex-col min-h-0 overflow-hidden w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh]",
+          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh]",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
@@ -809,11 +860,10 @@ export function Composer({
         </div>
         {suggesting ? (
           <div
-            className="absolute bottom-full mb-2 left-0 right-0 z-(--layer-popover) max-h-66 narrow:max-h-40 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in"
+            className="absolute bottom-full mb-2 left-0 right-0 z-(--layer-popover) max-h-66 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in"
             style={{
-              maxHeight: narrow
-                ? "min(160px, calc(100dvh - 180px))"
-                : undefined,
+              maxHeight:
+                menuMaxHeight !== undefined ? `${menuMaxHeight}px` : undefined,
             }}
             id={menuId}
             role="listbox"
@@ -834,7 +884,7 @@ export function Composer({
                   <button
                     type="button"
                     className={clsx(
-                      "flex w-full items-center gap-2 rounded-xs border-0 px-2 py-1 text-left text-inherit cursor-pointer transition-[background-color] duration-(--duration-fast) ease-linear hover:bg-surface-hover",
+                      "flex w-full items-center gap-2 rounded-xs border-0 px-2 py-1 narrow:min-h-11 touch:min-h-11 text-left text-inherit cursor-pointer transition-[background-color] duration-(--duration-fast) ease-linear hover:bg-surface-hover",
                       index === active
                         ? "bg-surface-hover shadow-[inset_2px_0_0_var(--color-blue-300)]"
                         : "bg-transparent",
@@ -892,11 +942,11 @@ export function Composer({
             disabled={!controller}
             style={{
               paddingLeft: layout.expanded
-                ? narrow
+                ? isTouchOrNarrow
                   ? 14
                   : undefined
                 : compactPadding,
-              paddingRight: narrow ? 52 : undefined,
+              paddingRight: isTouchOrNarrow ? 52 : undefined,
               maxHeight: "100%",
             }}
             onPaste={(event) => {
@@ -980,7 +1030,7 @@ export function Composer({
           aria-hidden={!layout.expanded}
           inert={!layout.expanded ? true : undefined}
           className={clsx(
-            "absolute bottom-2 left-3 right-12 z-10 flex min-w-0 items-center gap-0 transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.275)] motion-reduce:transition-none",
+            "absolute bottom-2 left-3 right-12 narrow:right-14 touch:right-14 z-10 flex min-w-0 items-center gap-0 transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.275)] motion-reduce:transition-none",
             layout.expanded
               ? "opacity-100 blur-0 translate-y-0 pointer-events-auto"
               : "opacity-0 blur-sm translate-y-2 pointer-events-none",
@@ -991,7 +1041,7 @@ export function Composer({
               type="button"
               aria-label="Start voice input"
               onClick={() => void startRecording()}
-              className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
+              className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
             >
               <MicIcon />
             </button>
@@ -1029,7 +1079,7 @@ export function Composer({
             onClick={() => fileInput.current?.click()}
             aria-label="Attach files"
             title="Attach files"
-            className="ml-auto flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
+            className="ml-auto flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
           >
             <PlusIcon />
           </button>
@@ -1041,14 +1091,14 @@ export function Composer({
             title="Attach files"
             disabled={!controller}
             onClick={() => fileInput.current?.click()}
-            className="absolute left-2 bottom-2 narrow:left-1 narrow:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
+            className="absolute left-2 bottom-2 narrow:left-1 narrow:bottom-1 touch:left-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
           >
             <PlusIcon />
           </button>
         ) : null}
         <button
           type="button"
-          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
+          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 touch:right-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
           aria-label={
             recordingActive
               ? "Stop recording"

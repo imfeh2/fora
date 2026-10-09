@@ -65,6 +65,33 @@ function reportDiscussionWriteFailure(
   });
 }
 
+function getKeyboardOffset(): number {
+  if (typeof window === "undefined") return 0;
+  const vv = window.visualViewport;
+  if (!vv) return 0;
+  if (Math.abs(vv.scale - 1) > 0.01) return 0;
+  return Math.max(0, window.innerHeight - (vv.offsetTop + vv.height));
+}
+
+export function getAvailableViewport(
+  root: HTMLElement,
+  composerHeight: number,
+  keyboardOffset = 0,
+) {
+  const bounds = root.getBoundingClientRect();
+  const vv = typeof window !== "undefined" ? window.visualViewport : null;
+  const viewportTop = vv ? vv.offsetTop : bounds.top;
+  const viewportBottom = vv ? vv.offsetTop + vv.height : bounds.bottom;
+  const effectiveTop = Math.max(bounds.top, viewportTop);
+  const composerTop = bounds.bottom - keyboardOffset - composerHeight;
+  const effectiveBottom = Math.min(bounds.bottom, viewportBottom, composerTop);
+  return {
+    top: effectiveTop,
+    bottom: effectiveBottom,
+    end: effectiveBottom,
+  };
+}
+
 type ThreadPageProps = {
   id: number;
   focusComposer?: boolean;
@@ -89,10 +116,13 @@ function ThreadSession({
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [composerSize, setComposerSize] = useState(64);
+  const composerSizeRef = useRef(64);
+  const [keyboardOffset, setKeyboardOffset] = useState(getKeyboardOffset);
+  const keyboardOffsetRef = useRef(keyboardOffset);
   const [lastVisible, setLastVisible] = useState(0);
   const scroll = useRef<HTMLDivElement>(null);
   const ready = useRef(false);
-  const preserveBottom = useRef(false);
+  const shouldFollowBottom = useRef(false);
   const positioning = useRef(false);
   const positioningInterrupted = useRef(false);
   const positionStableFrames = useRef(0);
@@ -107,12 +137,14 @@ function ThreadSession({
     anchorTo: "end",
     followOnAppend: detail !== null && !detail.hasAfter,
     paddingStart: 16,
-    paddingEnd: composerSize + 24,
+    paddingEnd: composerSize + keyboardOffset + 24,
     scrollEndThreshold: 1,
   });
   const resizeComposer = useCallback(
     (height: number) => {
-      preserveBottom.current = ready.current && virtual.isAtEnd();
+      if (composerSizeRef.current === height) return;
+      composerSizeRef.current = height;
+      shouldFollowBottom.current = ready.current && virtual.isAtEnd();
       setComposerSize(height);
     },
     [virtual],
@@ -128,18 +160,20 @@ function ThreadSession({
       const root = scroll.current;
       const current = thread.current.current;
       if (!root || !ready.current || !current) return;
-      const bounds = root.getBoundingClientRect();
-      const vv = typeof window !== "undefined" ? window.visualViewport : null;
-      const viewportBottom = vv ? vv.offsetTop + vv.height : bounds.bottom;
-      const effectiveBottom = Math.min(bounds.bottom, viewportBottom);
-      const end = effectiveBottom - composerSize;
+      const { top: effectiveTop, end } = getAvailableViewport(
+        root,
+        composerSize,
+        keyboardOffset,
+      );
       const visible: number[] = [];
-      for (const element of root.querySelectorAll<HTMLElement>(
-        "[data-message-id]",
-      )) {
-        const rect = element.getBoundingClientRect();
-        if (rect.bottom > bounds.top && rect.top < end)
-          visible.push(Number(element.dataset.messageId));
+      if (end > effectiveTop) {
+        for (const element of root.querySelectorAll<HTMLElement>(
+          "[data-message-id]",
+        )) {
+          const rect = element.getBoundingClientRect();
+          if (rect.bottom > effectiveTop && rect.top < end)
+            visible.push(Number(element.dataset.messageId));
+        }
       }
       setLastVisible(visible.length ? Math.max(...visible) : 0);
       thread.view(visible, virtual.isAtEnd());
@@ -167,10 +201,11 @@ function ThreadSession({
           void thread.request("after");
       }
     },
-    [composerSize, thread, virtual],
+    [composerSize, keyboardOffset, thread, virtual],
   );
 
   const stopPositioning = useCallback(() => {
+    shouldFollowBottom.current = false;
     if (!positioning.current) return;
     positioning.current = false;
     positioningInterrupted.current = true;
@@ -242,12 +277,25 @@ function ThreadSession({
         return;
       }
       missingMarkerFrames = 0;
+      const available = getAvailableViewport(
+        root,
+        composerSize,
+        keyboardOffset,
+      );
+      if (
+        root.clientHeight === 0 ||
+        bounds.height === 0 ||
+        available.end <= available.top
+      ) {
+        frame.current = requestAnimationFrame(positionNewMarker);
+        return;
+      }
       const target = centeredScrollTop(
         root.scrollTop,
         root.scrollHeight - root.clientHeight,
         marker.getBoundingClientRect().top,
-        bounds.top,
-        bounds.bottom - composerSize,
+        available.top,
+        available.end,
       );
       const needsCorrection = Math.abs(target - root.scrollTop) >= 0.5;
       virtual.scrollToOffset(target);
@@ -272,6 +320,7 @@ function ThreadSession({
     virtual,
     thread.positioned,
     composerSize,
+    keyboardOffset,
   ]);
 
   useEffect(() => {
@@ -282,8 +331,11 @@ function ThreadSession({
     document.addEventListener("visibilitychange", changed);
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
     const onViewport = () => {
-      if (ready.current && virtual.isAtEnd()) {
-        virtual.scrollToEnd();
+      const nextOffset = getKeyboardOffset();
+      if (keyboardOffsetRef.current !== nextOffset) {
+        keyboardOffsetRef.current = nextOffset;
+        shouldFollowBottom.current = ready.current && virtual.isAtEnd();
+        setKeyboardOffset(nextOffset);
       } else {
         sample();
       }
@@ -304,8 +356,13 @@ function ThreadSession({
   }, [sample, items, virtual]);
 
   useLayoutEffect(() => {
-    if (ready.current && preserveBottom.current) virtual.scrollToEnd();
-  }, [composerSize, virtual]);
+    const follow = shouldFollowBottom.current;
+    shouldFollowBottom.current = false;
+    if (ready.current && follow) {
+      virtual.scrollToEnd();
+    }
+    sample();
+  }, [composerSize, keyboardOffset, virtual, sample]);
 
   const load = thread.invalidate;
 
@@ -474,6 +531,7 @@ function ThreadSession({
             ref={scroll}
             className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 narrow:px-3 [overflow-anchor:none]"
             onScroll={() => {
+              shouldFollowBottom.current = false;
               if (positioningInterrupted.current && scroll.current)
                 virtual.scrollToOffset(scroll.current.scrollTop);
               sample(true);
@@ -489,7 +547,7 @@ function ThreadSession({
             !loadFailed ? (
               <div
                 className="flex min-h-full flex-col"
-                style={{ paddingBottom: composerSize + 24 }}
+                style={{ paddingBottom: composerSize + keyboardOffset + 24 }}
               >
                 <StatePanel
                   icons={[MessageCircle, MessagesSquare, Send]}
@@ -562,7 +620,7 @@ function ThreadSession({
           {detail && detail.latest > lastVisible ? (
             <div
               className="absolute right-8 narrow:right-3"
-              style={{ bottom: composerSize + 8 }}
+              style={{ bottom: composerSize + keyboardOffset + 8 }}
             >
               <Button
                 disabled={thread.loading}
@@ -585,6 +643,7 @@ function ThreadSession({
             onHeightChange={resizeComposer}
             focusOnReady={focusComposer}
             onFocused={onComposerFocused}
+            keyboardOffset={keyboardOffset}
             onOpenVoiceSettings={() =>
               navigate({ name: "settings", section: "voice" })
             }

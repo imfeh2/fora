@@ -31,10 +31,38 @@ function subscribeViewport(listener: () => void) {
   return () => window.removeEventListener("resize", listener);
 }
 
+function subscribeTouchOrNarrow(listener: () => void) {
+  const mqlCoarse =
+    typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia("(pointer: coarse)")
+      : null;
+  window.addEventListener("resize", listener);
+  mqlCoarse?.addEventListener?.("change", listener);
+  return () => {
+    window.removeEventListener("resize", listener);
+    mqlCoarse?.removeEventListener?.("change", listener);
+  };
+}
+
+function getTouchOrNarrowSnapshot(): boolean {
+  if (typeof window === "undefined") return false;
+  const isNarrow = window.innerWidth <= 640;
+  const isCoarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  return isNarrow || isCoarse;
+}
+
 export function useNarrowViewport() {
   return useSyncExternalStore(
     subscribeViewport,
     () => window.innerWidth <= 640,
+    () => false,
+  );
+}
+
+export function useTouchOrNarrow(): boolean {
+  return useSyncExternalStore(
+    subscribeTouchOrNarrow,
+    getTouchOrNarrowSnapshot,
     () => false,
   );
 }
@@ -210,7 +238,7 @@ export function NavItem({
         <button
           type="button"
           className={clsx(
-            "flex-1 min-w-0 flex items-center gap-2 h-[30px] py-0 pr-2 pl-4 border-0 rounded-sm bg-transparent text-sm font-medium text-left cursor-pointer transition-[color] duration-(--duration-fast) ease-linear group-hover:text-fg",
+            "flex-1 min-w-0 flex items-center gap-2 h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-4 border-0 rounded-sm bg-transparent text-sm font-medium text-left cursor-pointer transition-[color] duration-(--duration-fast) ease-linear group-hover:text-fg",
             active ? "text-fg" : "text-fg-muted",
           )}
           data-nav="item"
@@ -260,7 +288,7 @@ export function NavSubItem({
       <button
         type="button"
         className={clsx(
-          "relative flex items-center gap-2 w-full h-[26px] py-0 pr-2 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
+          "relative flex items-center gap-2 w-full h-[26px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
           active
             ? "bg-gray-800 text-fg font-medium"
             : "bg-transparent text-fg-muted",

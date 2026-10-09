@@ -69,7 +69,7 @@ export function OverflowMenu({
     <div className="relative inline-flex" ref={wrapper}>
       <button
         type="button"
-        className="inline-flex items-center justify-center size-7 border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg"
+        className="inline-flex items-center justify-center size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg"
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -123,7 +123,7 @@ export function OverflowMenu({
               type="button"
               role="menuitem"
               className={clsx(
-                "flex items-center gap-2 w-full h-7 py-0 px-2 border-0 rounded-xs bg-transparent text-sm text-left whitespace-nowrap cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear focus-visible:bg-surface-hover disabled:cursor-not-allowed",
+                "flex items-center gap-2 w-full h-7 narrow:min-h-11 touch:min-h-11 py-0 px-2 border-0 rounded-xs bg-transparent text-sm text-left whitespace-nowrap cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear focus-visible:bg-surface-hover disabled:cursor-not-allowed",
                 menuItemTones[action.tone ?? "default"],
               )}
               disabled={action.disabled}

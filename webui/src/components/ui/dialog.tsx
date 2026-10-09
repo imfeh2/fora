@@ -76,13 +76,16 @@ export function Modal({
     if (node) return registerToastHost(node);
   }, []);
 
-  const modalKind = variant ?? (wide ? "history" : "form");
+  const modalKind = variant ?? "form";
   const maxDvhClass =
-    modalKind === "history" ? "narrow:max-h-[90dvh]" : "narrow:max-h-[85dvh]";
-  const wideWidth =
-    modalKind === "history" || wide
-      ? "w-[min(960px,calc(100vw-32px))]"
-      : "w-[min(440px,calc(100vw-48px))]";
+    modalKind === "confirm"
+      ? ""
+      : modalKind === "history"
+        ? "narrow:max-h-[90dvh]"
+        : "narrow:max-h-[85dvh]";
+  const wideWidth = wide
+    ? "w-[min(960px,calc(100vw-32px))]"
+    : "w-[min(440px,calc(100vw-48px))]";
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -170,7 +173,7 @@ export function Modal({
           {footer ? (
             <div
               ref={footerElement}
-              className="flex justify-end gap-2 shrink-0 narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11"
+              className="flex justify-end gap-2 shrink-0 narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11 touch:flex-col-reverse touch:*:w-full touch:*:min-h-11"
             >
               {footer}
             </div>
@@ -237,6 +240,7 @@ export function PromptDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={title}
+      variant="form"
       description={description}
       footer={
         <>

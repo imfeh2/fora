@@ -402,6 +402,7 @@ export function WorkspaceSection({
         open={path !== null}
         onOpenChange={(open) => !open && setPath(null)}
         title={path ?? ""}
+        variant="history"
         footer={null}
       >
         {file ? <WorkspaceContent file={file} /> : null}
@@ -822,6 +823,7 @@ function TurnHistoryModal({
       open={open}
       onOpenChange={onOpenChange}
       title={`Turn #${sequence}`}
+      variant="history"
       wide
       footer={<Button onClick={() => onOpenChange(false)}>Close</Button>}
     >
@@ -1494,6 +1496,7 @@ function HistoryImagePreview({
         open={zoom}
         onOpenChange={setZoom}
         title="History image"
+        variant="history"
         wide
         footer={<Button onClick={() => setZoom(false)}>Close</Button>}
       >

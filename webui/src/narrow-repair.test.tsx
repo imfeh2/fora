@@ -1,8 +1,11 @@
+import "fake-indexeddb/auto";
+import { IDBFactory } from "fake-indexeddb";
 import type { ReactNode } from "react";
 import {
   afterAll,
   afterEach,
   beforeAll,
+  beforeEach,
   describe,
   expect,
   it,
@@ -16,66 +19,42 @@ vi.mock("@radix-ui/react-dialog", async (importOriginal) => ({
 
 vi.mock("@/app/organization", () => ({
   useOrganization: () => ({
-    members: [],
+    members: [
+      { id: 1, name: "You", type: "human", state: "idle" },
+      { id: 2, name: "Alice", type: "human", state: "idle" },
+      { id: 3, name: "Bob", type: "human", state: "idle" },
+    ],
     humanId: 1,
     discussions: [],
     refresh: vi.fn(),
   }),
 }));
 
-let currentDraft = { body: "", pending: null as unknown };
-const draftListeners = new Set<() => void>();
-
-const mockDraftController = {
-  snapshot: () => ({
-    draft: currentDraft,
-    files: [],
-    busy: false,
-    storageError: null,
-    error: null,
-  }),
-  subscribe: (cb: () => void) => {
-    draftListeners.add(cb);
-    return () => draftListeners.delete(cb);
-  },
-  send: vi.fn(),
-  addFiles: vi.fn(),
-  removeFile: vi.fn(),
-  setBody: vi.fn((next: string) => {
-    currentDraft = { ...currentDraft, body: next };
-    draftListeners.forEach((l) => {
-      l();
-    });
-  }),
-  saveAgain: vi.fn(),
-  cancel: vi.fn(),
-  checkResult: vi.fn(),
-  discardAttempt: vi.fn(),
-};
-
-vi.mock("@/features/discussions/draft", async (original) => ({
-  ...(await original<typeof import("@/features/discussions/draft")>()),
-  useDraft: () => ({
-    controller: mockDraftController,
-    view: mockDraftController.snapshot(),
-    error: null,
-  }),
-}));
-
+import { NavItem, NavSubItem } from "@/components/layout/shell";
 import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
 import { Button, IconButton } from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionCard } from "@/features/discussions/list";
-import { MessageRow } from "@/features/discussions/thread";
+import {
+  getAvailableViewport,
+  MessageRow,
+} from "@/features/discussions/thread";
 import { MemberCard } from "@/features/members/list";
-import type { DiscussionSummary, Member, Message } from "@/lib/backend";
+import {
+  backend,
+  type DiscussionSummary,
+  type Member,
+  type Message,
+} from "@/lib/backend";
 
 describe("Mobile adaptation repair verification", () => {
   let cleanup: typeof import("@testing-library/react").cleanup;
   let render: typeof import("@testing-library/react").render;
   let screen: typeof import("@testing-library/react").screen;
   let fireEvent: typeof import("@testing-library/react").fireEvent;
+  let waitFor: typeof import("@testing-library/react").waitFor;
   let closeDom: (() => void) | undefined;
 
   beforeAll(async () => {
@@ -97,6 +76,14 @@ describe("Mobile adaptation repair verification", () => {
     vi.stubGlobal("window", dom.window);
     vi.stubGlobal("document", dom.window.document);
     vi.stubGlobal("navigator", dom.window.navigator);
+    vi.stubGlobal("sessionStorage", dom.window.sessionStorage);
+    dom.window.sessionStorage.setItem("fora.draft-tab", "test-tab-repair");
+    Object.defineProperty(dom.window.navigator, "locks", {
+      configurable: true,
+      value: {
+        request: vi.fn(async (_name, _options, callback) => callback({})),
+      },
+    });
     vi.stubGlobal("HTMLElement", dom.window.HTMLElement);
     vi.stubGlobal("HTMLInputElement", dom.window.HTMLInputElement);
     vi.stubGlobal("HTMLTextAreaElement", dom.window.HTMLTextAreaElement);
@@ -135,7 +122,22 @@ describe("Mobile adaptation repair verification", () => {
     render = testing.render;
     screen = testing.screen;
     fireEvent = testing.fireEvent;
+    waitFor = testing.waitFor;
   }, 30000);
+
+  beforeEach(() => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    vi.spyOn(backend, "organization").mockResolvedValue({
+      uuid: "test-org",
+      human_id: 1,
+    } as Awaited<ReturnType<typeof backend.organization>>);
+    vi.spyOn(backend, "onEvent").mockReturnValue(() => {});
+    vi.spyOn(backend, "sendStatus").mockResolvedValue({
+      state: "unknown",
+      message: null,
+    });
+    vi.spyOn(backend, "cancelUploads").mockResolvedValue({ cancelled: 1 });
+  });
 
   afterEach(async () => {
     cleanup();
@@ -163,7 +165,8 @@ describe("Mobile adaptation repair verification", () => {
       );
 
       const dialog = await screen.findByRole("dialog");
-      expect(dialog.className).toContain("narrow:max-h-[85dvh]");
+      expect(dialog.className).not.toContain("narrow:max-h-[85dvh]");
+      expect(dialog.className).not.toContain("narrow:max-h-[90dvh]");
       expect(dialog.className).toContain("narrow:inset-x-0");
       expect(dialog.className).toContain("narrow:bottom-0");
 
@@ -232,6 +235,26 @@ describe("Mobile adaptation repair verification", () => {
         "Long turn history transcript",
       );
     });
+
+    it("ensures Modal wide prop only controls width and does not alter variant", async () => {
+      render(
+        <TooltipProvider>
+          <Modal
+            open
+            onOpenChange={() => {}}
+            title="Form with Wide Layout"
+            wide
+          >
+            <div>Form contents</div>
+          </Modal>
+        </TooltipProvider>,
+      );
+
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog.className).toContain("w-[min(960px,calc(100vw-32px))]");
+      expect(dialog.className).toContain("narrow:max-h-[85dvh]");
+      expect(dialog.className).not.toContain("narrow:max-h-[90dvh]");
+    });
   });
 
   describe("Touch targets for interactive buttons", () => {
@@ -258,6 +281,49 @@ describe("Mobile adaptation repair verification", () => {
 
       const button = screen.getByRole("button", { name: "Mark handled" });
       expect(button.className).toContain("narrow:min-h-11");
+    });
+
+    it("ensures touch targets on overflow menu trigger and items", () => {
+      const actions = [{ id: "edit", label: "Edit item", onSelect: () => {} }];
+      render(
+        <TooltipProvider>
+          <OverflowMenu label="Actions menu" actions={actions} />
+        </TooltipProvider>,
+      );
+
+      const trigger = screen.getByRole("button", { name: "Actions menu" });
+      expect(trigger.className).toContain("narrow:min-w-11");
+      expect(trigger.className).toContain("narrow:min-h-11");
+      expect(trigger.className).toContain("touch:min-w-11");
+      expect(trigger.className).toContain("touch:min-h-11");
+
+      fireEvent.click(trigger);
+      const menuItem = screen.getByRole("menuitem", { name: "Edit item" });
+      expect(menuItem.className).toContain("narrow:min-h-11");
+      expect(menuItem.className).toContain("touch:min-h-11");
+    });
+
+    it("ensures NavItem and NavSubItem buttons provide 44px touch targets on mobile", () => {
+      render(
+        <nav>
+          <NavItem
+            icon={<span>Icon</span>}
+            label="Discussions"
+            active={false}
+            onSelect={() => {}}
+          >
+            <NavSubItem label="General" active={false} onSelect={() => {}} />
+          </NavItem>
+        </nav>,
+      );
+
+      const navItemBtn = screen.getByRole("button", { name: "Discussions" });
+      expect(navItemBtn.className).toContain("narrow:min-h-11");
+      expect(navItemBtn.className).toContain("touch:min-h-11");
+
+      const navSubItemBtn = screen.getByRole("button", { name: "General" });
+      expect(navSubItemBtn.className).toContain("narrow:min-h-11");
+      expect(navSubItemBtn.className).toContain("touch:min-h-11");
     });
 
     it("ensures MessageRow action buttons carry touchTarget on mobile", () => {
@@ -335,12 +401,11 @@ describe("Mobile adaptation repair verification", () => {
 
       const fieldset = screen.getByRole("group", { name: "Message composer" });
       expect(fieldset.className).toContain("narrow:max-h-[35dvh]");
-      expect(fieldset.className).toContain("overflow-hidden");
+      expect(fieldset.className).not.toContain("overflow-hidden");
       expect(fieldset.className).toContain("flex");
       expect(fieldset.className).toContain("flex-col");
 
       const wrapper = fieldset.parentElement;
-      expect(wrapper?.className).toContain("bottom-0");
       expect(wrapper?.className).toContain(
         "narrow:pb-[calc(8px+env(safe-area-inset-bottom,0px))]",
       );
@@ -359,6 +424,26 @@ describe("Mobile adaptation repair verification", () => {
 
       const collapsedToolbar = fieldset.querySelector("[inert]");
       expect(collapsedToolbar).not.toBeNull();
+    });
+
+    it("renders composer with dynamic keyboardOffset for Visual Viewport coordination", () => {
+      render(
+        <Composer
+          discussionId={1}
+          members={[]}
+          memberIds={new Set<number>()}
+          busy={false}
+          placeholder="Message"
+          keyboardOffset={280}
+          onSend={async () => true}
+          onHeightChange={() => {}}
+          onOpenVoiceSettings={() => {}}
+        />,
+      );
+
+      const fieldset = screen.getByRole("group", { name: "Message composer" });
+      const wrapper = fieldset.parentElement as HTMLElement;
+      expect(wrapper.style.bottom).toBe("280px");
     });
 
     it("distinguishes touch swipe from touch tap for mention candidates", async () => {
@@ -380,14 +465,16 @@ describe("Mobile adaptation repair verification", () => {
         />,
       );
 
-      const textarea = screen.getByRole("combobox", {
+      const textarea = (await screen.findByRole("combobox", {
         name: "Message",
-      }) as HTMLTextAreaElement;
+      })) as HTMLTextAreaElement;
+      await waitFor(() => expect(textarea.disabled).toBe(false));
       Object.defineProperty(textarea, "selectionStart", {
         configurable: true,
         get: () => 2,
       });
       fireEvent.change(textarea, { target: { value: "@A" } });
+      fireEvent.select(textarea);
 
       const option = await screen.findByRole("option", { name: /Alice/i });
       expect(option).not.toBeNull();
@@ -407,6 +494,78 @@ describe("Mobile adaptation repair verification", () => {
         changedTouches: [{ clientX: 102, clientY: 103 }],
       });
       expect((textarea as HTMLTextAreaElement).value).toContain("@Alice ");
+    });
+
+    it("persists and restores draft in isolated IndexedDB across discussion switching in narrow viewport", async () => {
+      const { unmount } = render(
+        <Composer
+          discussionId={1001}
+          members={[]}
+          memberIds={new Set<number>()}
+          busy={false}
+          placeholder="Message"
+          onSend={async () => true}
+          onHeightChange={() => {}}
+          onOpenVoiceSettings={() => {}}
+        />,
+      );
+
+      const textarea1 = (await screen.findByRole("combobox", {
+        name: "Message",
+      })) as HTMLTextAreaElement;
+      await waitFor(() => expect(textarea1.disabled).toBe(false));
+
+      fireEvent.change(textarea1, {
+        target: { value: "Draft message for Discussion 1001" },
+      });
+      await waitFor(() =>
+        expect(textarea1.value).toBe("Draft message for Discussion 1001"),
+      );
+
+      unmount();
+
+      const secondRender = render(
+        <Composer
+          discussionId={1002}
+          members={[]}
+          memberIds={new Set<number>()}
+          busy={false}
+          placeholder="Message"
+          onSend={async () => true}
+          onHeightChange={() => {}}
+          onOpenVoiceSettings={() => {}}
+        />,
+      );
+
+      const textarea2 = (await screen.findByRole("combobox", {
+        name: "Message",
+      })) as HTMLTextAreaElement;
+      await waitFor(() => expect(textarea2.disabled).toBe(false));
+      expect(textarea2.value).toBe("");
+
+      secondRender.unmount();
+
+      render(
+        <Composer
+          discussionId={1001}
+          members={[]}
+          memberIds={new Set<number>()}
+          busy={false}
+          placeholder="Message"
+          onSend={async () => true}
+          onHeightChange={() => {}}
+          onOpenVoiceSettings={() => {}}
+        />,
+      );
+
+      const textareaRestored = (await screen.findByRole("combobox", {
+        name: "Message",
+      })) as HTMLTextAreaElement;
+      await waitFor(() =>
+        expect(textareaRestored.value).toBe(
+          "Draft message for Discussion 1001",
+        ),
+      );
     });
   });
 
@@ -471,6 +630,256 @@ describe("Mobile adaptation repair verification", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "WorkerBot" }));
       expect(onOpen).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("Touch media conditions and dynamic candidate geometry", () => {
+    it("ensures wide viewport with coarse pointer applies touch padding and prevents overlap", async () => {
+      const originalInnerWidth = window.innerWidth;
+      const originalMatchMedia = window.matchMedia;
+
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: 1024,
+      });
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }));
+
+      try {
+        render(
+          <Composer
+            discussionId={2001}
+            members={[]}
+            memberIds={new Set<number>()}
+            busy={false}
+            placeholder="Message"
+            onSend={async () => true}
+            onHeightChange={() => {}}
+            onOpenVoiceSettings={() => {}}
+          />,
+        );
+
+        const textarea = (await screen.findByRole("combobox", {
+          name: "Message",
+        })) as HTMLTextAreaElement;
+        await waitFor(() => expect(textarea.disabled).toBe(false));
+
+        expect(textarea.style.paddingLeft).toBe("52px");
+        expect(textarea.style.paddingRight).toBe("52px");
+      } finally {
+        Object.defineProperty(window, "innerWidth", {
+          configurable: true,
+          value: originalInnerWidth,
+        });
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
+    it("ensures mention candidates height clamps strictly to available viewport and updates on keyboard offset", async () => {
+      const mockMembers: Member[] = [
+        { id: 2, name: "Alice", type: "human", state: "idle" },
+      ];
+
+      const { rerender } = render(
+        <Composer
+          discussionId={2002}
+          members={mockMembers}
+          memberIds={new Set([2])}
+          busy={false}
+          placeholder="Message"
+          keyboardOffset={0}
+          onSend={async () => true}
+          onHeightChange={() => {}}
+          onOpenVoiceSettings={() => {}}
+        />,
+      );
+
+      const textarea = (await screen.findByRole("combobox", {
+        name: "Message",
+      })) as HTMLTextAreaElement;
+      await waitFor(() => expect(textarea.disabled).toBe(false));
+
+      const card = screen.getByRole("group", { name: "Message composer" });
+      vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+        top: 50,
+        bottom: 102,
+        left: 0,
+        right: 375,
+        width: 375,
+        height: 52,
+        x: 0,
+        y: 50,
+        toJSON: () => {},
+      });
+
+      fireEvent.change(textarea, { target: { value: "@A" } });
+      fireEvent.select(textarea);
+
+      const listbox = await screen.findByRole("listbox", { name: "Members" });
+      expect(listbox.style.maxHeight).toBe("42px");
+
+      vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+        top: 8,
+        bottom: 60,
+        left: 0,
+        right: 375,
+        width: 375,
+        height: 52,
+        x: 0,
+        y: 8,
+        toJSON: () => {},
+      });
+
+      rerender(
+        <Composer
+          discussionId={2002}
+          members={mockMembers}
+          memberIds={new Set([2])}
+          busy={false}
+          placeholder="Message"
+          keyboardOffset={100}
+          onSend={async () => true}
+          onHeightChange={() => {}}
+          onOpenVoiceSettings={() => {}}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(listbox.style.maxHeight).toBe("0px");
+      });
+    });
+
+    it("ensures candidate height factors in visual viewport offset top during zoomed panning", async () => {
+      const mockMembers: Member[] = [
+        { id: 2, name: "Alice", type: "human", state: "idle" },
+      ];
+
+      const originalVisualViewport = window.visualViewport;
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: {
+          offsetTop: 60,
+          offsetLeft: 0,
+          width: 375,
+          height: 500,
+          scale: 1.5,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        },
+      });
+
+      try {
+        render(
+          <Composer
+            discussionId={2003}
+            members={mockMembers}
+            memberIds={new Set([2])}
+            busy={false}
+            placeholder="Message"
+            keyboardOffset={0}
+            onSend={async () => true}
+            onHeightChange={() => {}}
+            onOpenVoiceSettings={() => {}}
+          />,
+        );
+
+        const textarea = (await screen.findByRole("combobox", {
+          name: "Message",
+        })) as HTMLTextAreaElement;
+        await waitFor(() => expect(textarea.disabled).toBe(false));
+
+        const card = screen.getByRole("group", { name: "Message composer" });
+        vi.spyOn(card, "getBoundingClientRect").mockReturnValue({
+          top: 150,
+          bottom: 202,
+          left: 0,
+          right: 375,
+          width: 375,
+          height: 52,
+          x: 0,
+          y: 150,
+          toJSON: () => {},
+        });
+
+        fireEvent.change(textarea, { target: { value: "@A" } });
+        fireEvent.select(textarea);
+
+        const listbox = await screen.findByRole("listbox", { name: "Members" });
+        expect(listbox.style.maxHeight).toBe("82px");
+      } finally {
+        Object.defineProperty(window, "visualViewport", {
+          configurable: true,
+          value: originalVisualViewport,
+        });
+      }
+    });
+
+    it("ensures getAvailableViewport respects actual composer occlusion and visual viewport boundaries without unconditional subtraction", () => {
+      const root = document.createElement("div");
+      vi.spyOn(root, "getBoundingClientRect").mockReturnValue({
+        top: 0,
+        bottom: 800,
+        left: 0,
+        right: 375,
+        width: 375,
+        height: 800,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
+      });
+
+      const originalVisualViewport = window.visualViewport;
+      Object.defineProperty(window, "visualViewport", {
+        configurable: true,
+        value: {
+          offsetTop: 200,
+          offsetLeft: 0,
+          width: 375,
+          height: 400,
+          scale: 2,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        },
+      });
+
+      try {
+        const zoomed = getAvailableViewport(root, 64, 0);
+        expect(zoomed.top).toBe(200);
+        expect(zoomed.end).toBe(600);
+
+        Object.defineProperty(window, "visualViewport", {
+          configurable: true,
+          value: {
+            offsetTop: 0,
+            offsetLeft: 0,
+            width: 375,
+            height: 500,
+            scale: 1,
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+          },
+        });
+
+        const keyboard = getAvailableViewport(root, 64, 300);
+        expect(keyboard.top).toBe(0);
+        expect(keyboard.end).toBe(436);
+
+        const empty = getAvailableViewport(root, 750, 100);
+        expect(empty.end).toBeLessThanOrEqual(empty.top);
+      } finally {
+        Object.defineProperty(window, "visualViewport", {
+          configurable: true,
+          value: originalVisualViewport,
+        });
+      }
     });
   });
 });

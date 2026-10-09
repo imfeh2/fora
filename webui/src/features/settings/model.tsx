@@ -211,6 +211,7 @@ export function AgentCreateDialog({
         if (!open && !busy) onClose();
       }}
       title="New Agent"
+      variant="form"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>

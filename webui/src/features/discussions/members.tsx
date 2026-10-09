@@ -116,6 +116,7 @@ export function DiscussionMembersDialog({
         if (!open && !busy) onClose();
       }}
       title="Discussion members"
+      variant="form"
       footer={
         <>
           <Button disabled={busy} onClick={onClose}>
