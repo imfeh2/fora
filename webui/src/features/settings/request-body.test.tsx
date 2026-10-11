@@ -295,7 +295,10 @@ describe("Provider request body form", () => {
       expect(input.value).toBe('{"extension":2}');
       expect(key.value).toBe("test-only-key");
       key.focus();
-      await testing.act(async () => events({ type: "connection.restored" }));
+      await testing.act(async () => {
+        for (const listener of Array.from(events))
+          listener({ type: "connection.restored" });
+      });
       expect(document.activeElement).toBe(key);
       expect(input.value).toBe('{"extension":2}');
       expect(key.value).toBe("test-only-key");
