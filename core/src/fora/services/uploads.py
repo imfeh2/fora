@@ -41,7 +41,9 @@ class Uploads:
             media_type,
         )
 
-    def status(self, upload_id: str, owner_id: int) -> Upload:
+    def status(
+        self, upload_id: str, owner_id: int, *, cleanup_invalid: bool = True
+    ) -> Upload:
         identifier(upload_id)
         with self._lock:
             record = self.store.get_upload(upload_id, owner_id)
@@ -51,7 +53,7 @@ class Uploads:
                     with self.files.reader(attachment):
                         pass
                 except DomainError as error:
-                    if error.code not in {
+                    if not cleanup_invalid or error.code not in {
                         "attachment_missing",
                         "attachment_invalid",
                         "attachment_changed",

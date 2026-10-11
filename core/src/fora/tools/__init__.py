@@ -569,7 +569,11 @@ class AgentTools:
         if state == "unknown":
             try:
                 for upload_id in attachment_ids:
-                    self._uploads().status(upload_id, self._actor.member_id)
+                    self._uploads().status(
+                        upload_id,
+                        self._actor.member_id,
+                        cleanup_invalid=not self._actor.is_agent,
+                    )
             except (DomainError, OSError):
                 if client_message_id is not None:
                     state, _ = self._deps.store.send_outcome(

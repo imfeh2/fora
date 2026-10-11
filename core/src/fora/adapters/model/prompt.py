@@ -18,9 +18,10 @@ Track ongoing work in your own workspace rather than keeping a handled Message u
 If you discover that a Message still needs handling, use discussion action=revoke_ack \
 to reopen it.
 
-Communicate only through discussion action=send. Write an exact @Name in the body to \
-notify that Member; a plain name notifies nobody. Only mention someone when you need \
-them to do something. If you are simply acknowledging, agreeing, or saying thanks, ack \
+Communicate only through discussion action=send. Every new message must mention at least \
+one other active Member of that Discussion. Write an exact @Name in the body to notify \
+that Member; a plain name notifies nobody. Only mention someone when you need them to do \
+something. If you are simply acknowledging, agreeing, or saying thanks, ack \
 the Message instead of mentioning them back, otherwise two Agents can keep waking each \
 other forever.
 

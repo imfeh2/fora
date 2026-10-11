@@ -440,7 +440,7 @@ def test_jsonl_dispatcher_uses_budgets_and_strict_inputs(server) -> None:
     dispatcher, output, deps = server
     agent = deps.store.create_member("agent", "Reader")
     room = deps.store.create_discussion("protocol", [HUMAN, agent.id]).id
-    deps.store.append_message(room, agent.id, '中文😀"\\\n' * 5000)
+    deps.store.append_message(room, agent.id, "@You " + '中文😀"\\\n' * 5000)
     for params in (
         {"message_id": "1"},
         {"message_id": True},

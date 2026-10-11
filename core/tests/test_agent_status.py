@@ -191,7 +191,7 @@ def test_pause_allows_current_model_and_tool_to_finish(model_settings):
                         {
                             "action": "send",
                             "discussion_id": room,
-                            "body": "real effect",
+                            "body": "@You real effect",
                         },
                         "send-result",
                     )
@@ -216,7 +216,7 @@ def test_pause_allows_current_model_and_tool_to_finish(model_settings):
         turn_thread(scheduler, MAIN).join(5)
         assert not turn_thread(scheduler, MAIN).is_alive()
         assert len(calls) == 2
-        assert world.store.messages(room)[-1].body == "real effect"
+        assert world.store.messages(room)[-1].body == "@You real effect"
         assert scheduler.agent_status(MAIN)["state"] == "paused"
         assert world.history.runs(MAIN)[0].status == "completed"
         assert MAIN not in scheduler._reserved
@@ -249,7 +249,7 @@ def test_resume_during_running_turn_clears_intent_and_preserves_effects(world):
     def respond(request, tools):
         entered.set()
         assert release.wait(10)
-        tools.send_message(room, "continued")
+        tools.send_message(room, "@You continued")
         return TurnOutcome("[]")
 
     scheduler = Scheduler(world, RecordingRunner(respond))
@@ -265,7 +265,7 @@ def test_resume_during_running_turn_clears_intent_and_preserves_effects(world):
         release.set()
         turn_thread(scheduler, MAIN).join(5)
         assert scheduler.agent_status(MAIN)["state"] == "idle"
-        assert world.store.messages(room)[-1].body == "continued"
+        assert world.store.messages(room)[-1].body == "@You continued"
     finally:
         release.set()
         scheduler.stop()

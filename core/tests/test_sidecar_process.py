@@ -333,11 +333,11 @@ def test_discussion_management_and_pagination_survive_the_pipe(tmp_path: Path) -
         (1, "needle first"),
         (2, "needle second @You @Other"),
         (1, "third"),
-        (2, "fourth"),
+        (2, "fourth @You"),
     ]:
         store.append_message(1, sender, body)
-    store.append_message(2, 3, "needle retained")
-    store.append_message(3, 2, "needle hidden")
+    store.append_message(2, 3, "needle retained @You")
+    store.append_message(3, 2, "needle hidden @Other")
     store.close()
     requests = [
         ("discussion.add_members", {"discussion_id": 1, "member_ids": [3]}),

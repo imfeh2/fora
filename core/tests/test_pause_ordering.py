@@ -43,7 +43,7 @@ def test_pause_after_commit_before_thread_execution(world, monkeypatch, resume, 
     def respond(request, tools):
         calls.append(request.agent_id)
         assert model_release.wait(10)
-        tools.send_message(room, "finished current work")
+        tools.send_message(room, "@You finished current work")
         return TurnOutcome("[]", error="model failed" if failed else None)
 
     scheduler = Scheduler(world, RecordingRunner(respond))
@@ -64,7 +64,7 @@ def test_pause_after_commit_before_thread_execution(world, monkeypatch, resume, 
         turn_thread(scheduler, MAIN).join(5)
         assert starts == [(MAIN,)]
         assert calls == [MAIN]
-        assert world.store.messages(room)[-1].body == "finished current work"
+        assert world.store.messages(room)[-1].body == "@You finished current work"
         assert scheduler.agent_status(MAIN)["state"] == (
             "paused" if not resume else "error" if failed else "idle"
         )
@@ -85,7 +85,7 @@ def test_operation_after_finalization_uses_committed_state(world, resume):
     def respond(request, tools):
         entered.set()
         assert release.wait(10)
-        tools.send_message(room, "completed")
+        tools.send_message(room, "@You completed")
         return TurnOutcome("[]")
 
     scheduler = Scheduler(world, RecordingRunner(respond))

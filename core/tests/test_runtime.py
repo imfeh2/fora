@@ -216,6 +216,91 @@ def test_reminder_names_the_topic_and_sender(world) -> None:
     assert reminder.items[0].sender_name == "You"
 
 
+@pytest.mark.parametrize("corrected", [False, True])
+def test_model_send_requires_mention_and_supports_retry(
+    world, monkeypatch, corrected
+) -> None:
+    from pydantic_ai import models
+    from pydantic_ai.messages import (
+        ModelResponse,
+        RetryPromptPart,
+        TextPart,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+    from pydantic_ai.models.function import FunctionModel
+
+    from fora.adapters.model.runner import PydanticModelRunner
+
+    room = mention(world)
+    retries = []
+    returned = []
+    calls = 0
+
+    def respond(messages, info):
+        nonlocal calls
+        for part in messages[-1].parts:
+            if isinstance(part, RetryPromptPart):
+                retries.append(part.content)
+                assert world.store.message_count(room) == 1
+                assert world.store.watermark(room, MAIN) == 0
+                assert world.history.effects(MAIN) == ()
+            elif isinstance(part, ToolReturnPart):
+                returned.append(part.content)
+        if returned:
+            return ModelResponse(parts=[TextPart("Completed")])
+        body = "@You completed" if corrected and calls else "Completed"
+        calls += 1
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "discussion",
+                    {"action": "send", "discussion_id": room, "body": body},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    runner = PydanticModelRunner(
+        world.settings, build_model=lambda config: FunctionModel(respond)
+    )
+    record = Scheduler(world, runner).run_turn(MAIN)
+    assert record is not None
+    assert record.status == ("completed" if corrected else "failed")
+    assert retries and all("mention_required" in str(item) for item in retries)
+    assert "mention_required" in world.history.latest_messages(MAIN)
+    if corrected:
+        assert returned[0]["mentioned"] == [HUMAN]
+        assert world.store.message_count(room) == 2
+        assert world.store.watermark(room, MAIN) == 2
+        assert [item.tool for item in world.history.effects(MAIN)] == ["send"]
+    else:
+        assert record.error
+        assert world.store.message_count(room) == 1
+        assert world.store.watermark(room, MAIN) == 0
+        assert world.history.effects(MAIN) == ()
+
+
+def test_agent_mention_to_paused_recipient_preserves_work_until_resume(world) -> None:
+    room = world.store.create_discussion("Work", [HUMAN, MAIN, HELPER]).id
+    world.store.set_agent_state(HELPER, "paused")
+    scheduler = Scheduler(world, RecordingRunner())
+    result = scheduler.tools_for(MAIN).send_message(room, "@Helper review")
+    assert result["mentioned"] == [HELPER]
+    assert len(world.store.pending(HELPER)) == 1
+    assert scheduler.runnable_agents() == ()
+    assert scheduler.run_turn(HELPER) is None
+    scheduler.tools_for(HUMAN).resume_agent(HELPER)
+    assert scheduler.runnable_agents() == (HELPER,)
+    record = scheduler.run_turn(HELPER)
+    assert record is not None and record.status == "completed"
+    assert len(world.store.pending(HELPER)) == 1
+
+
 def test_model_discussion_list_defaults_to_twenty(world, monkeypatch) -> None:
     from pydantic_ai import models
     from pydantic_ai.messages import (
@@ -2481,7 +2566,8 @@ def test_a_long_back_and_forth_produces_a_nudge(world) -> None:
     room = world.store.create_discussion("ping pong", [HUMAN, MAIN, HELPER])
     for index in range(6):
         sender = MAIN if index % 2 == 0 else HELPER
-        world.store.append_message(room.id, sender, f"turn {index}")
+        target = "Helper" if sender == MAIN else "Main"
+        world.store.append_message(room.id, sender, f"turn {index} @{target}")
     world.store.append_message(room.id, HELPER, "@Main again")
 
     runner = RecordingRunner()
@@ -2494,7 +2580,11 @@ def test_a_long_back_and_forth_produces_a_nudge(world) -> None:
 
 def test_nudge_threshold_is_read_again_for_each_model_call(world) -> None:
     room = world.store.create_discussion("exchange", [MAIN, HELPER])
-    for sender, body in [(HELPER, "one"), (MAIN, "two"), (HELPER, "three @Main")]:
+    for sender, body in [
+        (HELPER, "one @Main"),
+        (MAIN, "two @Helper"),
+        (HELPER, "three @Main"),
+    ]:
         world.store.append_message(room.id, sender, body)
     runner = RecordingRunner()
     scheduler = Scheduler(world, runner)
@@ -2510,7 +2600,8 @@ def test_no_nudge_when_a_third_member_is_involved(world) -> None:
     room = world.store.create_discussion("group", [HUMAN, MAIN, HELPER])
     for index in range(6):
         sender = [MAIN, HELPER, HUMAN][index % 3]
-        world.store.append_message(room.id, sender, f"turn {index} @Main")
+        target = "Helper" if sender == MAIN else "Main"
+        world.store.append_message(room.id, sender, f"turn {index} @{target}")
 
     runner = RecordingRunner()
     Scheduler(world, runner).run_turn(MAIN)
@@ -2519,7 +2610,7 @@ def test_no_nudge_when_a_third_member_is_involved(world) -> None:
 
 def test_no_nudge_for_a_short_exchange(world) -> None:
     room = world.store.create_discussion("brief", [HUMAN, MAIN])
-    world.store.append_message(room.id, MAIN, "one")
+    world.store.append_message(room.id, MAIN, "@You one")
     world.store.append_message(room.id, HUMAN, "two @Main")
 
     runner = RecordingRunner()
@@ -2543,7 +2634,8 @@ def test_the_nudge_reaches_the_model_but_not_the_history(world) -> None:
     world.store.set_discussion_members(room, [HUMAN, MAIN, HELPER])
     for index in range(6):
         sender = MAIN if index % 2 == 0 else HELPER
-        world.store.append_message(room, sender, f"turn {index}")
+        target = "Helper" if sender == MAIN else "Main"
+        world.store.append_message(room, sender, f"turn {index} @{target}")
     world.store.append_message(room, HELPER, "@Main once more")
 
     runner = RecordingRunner()

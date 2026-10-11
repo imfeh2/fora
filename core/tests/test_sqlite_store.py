@@ -10,6 +10,7 @@ import pytest
 
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.discussion import MessageMention
+from fora.core.errors import DomainError
 from fora.core.mention import Mention
 from fora.core.pending import Ack, ack_keys, pending_for
 from fora.ports.store import OrganizationStore
@@ -121,7 +122,15 @@ def test_sql_pending_matches_the_core_formula_under_random_operations(
             current = store.get_discussion(room.id)
             assert current is not None
             sender_id = member.id if member.id in current.member_ids else human.id
-            store.append_message(room.id, sender_id, f"hello @{target.name} please")
+            body = f"hello @{target.name} please"
+            if sender_id != human.id and (
+                sender_id == target.id or target.id not in current.member_ids
+            ):
+                with pytest.raises(DomainError) as error:
+                    store.append_message(room.id, sender_id, body)
+                assert error.value.code == "mention_required"
+            else:
+                store.append_message(room.id, sender_id, body)
         elif action < 0.6:
             pending = store.pending(member.id)
             if pending:
@@ -324,7 +333,7 @@ def test_unread_counts_ignore_own_messages(store: SqliteStore) -> None:
     agent = store.create_member("agent", "Main")
     room = store.create_discussion("topic", [human.id, agent.id])
     store.append_message(room.id, human.id, "one")
-    store.append_message(room.id, agent.id, "two")
+    store.append_message(room.id, agent.id, "@You two")
     assert store.unread_counts(human.id)[room.id] == 1
     assert store.unread_counts(agent.id)[room.id] == 1
     store.set_watermark(room.id, human.id, 2)
@@ -490,7 +499,7 @@ def test_ui_page_read_snapshot_is_one_database_transaction(store, monkeypatch) -
     human = store.create_member("human", "You")
     agent = store.create_member("agent", "Helper")
     room = store.create_discussion("snapshot", [human.id, agent.id])
-    store.append_message(room.id, agent.id, "first")
+    store.append_message(room.id, agent.id, "@You first")
     other = sqlite3.connect(store._path)
     original = store.messages
 

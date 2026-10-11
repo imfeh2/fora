@@ -288,7 +288,10 @@ def test_cancelled_send_after_attachment_cleanup(
 
     if during_validation:
 
-        def status(*args):
+        def status(upload_id, owner_id, *, cleanup_invalid=True):
+            assert upload_id == record.id
+            assert owner_id == HUMAN_ID
+            assert cleanup_invalid
             cancel()
             raise DomainError("attachment_missing", "Attachment removed")
 

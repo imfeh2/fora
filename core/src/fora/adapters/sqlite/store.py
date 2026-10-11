@@ -1149,6 +1149,11 @@ class SqliteStore:
             mentions = build_mentions(
                 discussion_id, message_id, body, members, sender_id=sender_id
             )
+            if sender.is_agent and not mentions:
+                raise DomainError(
+                    "mention_required",
+                    "Mention at least one other member of this discussion.",
+                )
             message = Message(
                 discussion_id=discussion_id,
                 id=message_id,

@@ -438,11 +438,12 @@ def test_discussion_list_orders_last_message_and_limits_after_filtering(
     archived = human.create_discussion("Archived", [MAIN])["id"]
     send(archived, "2026-01-30T00:00:00Z")
     human.archive_discussion(archived)
-    hidden = world.store.create_discussion("Hidden", [OTHER])
+    reader = world.store.create_member("human", "Hidden Reader")
+    hidden = world.store.create_discussion("Hidden", [OTHER, reader.id])
     monkeypatch.setattr(
         "fora.adapters.sqlite.store.now", lambda: "2026-01-31T00:00:00Z"
     )
-    world.store.append_message(hidden.id, OTHER, "needle")
+    world.store.append_message(hidden.id, OTHER, "@Hidden Reader needle")
     actor = tools_for(world, actor_id)
     pending = world.store.pending(actor_id)
     watermarks = [world.store.watermark(room, actor_id) for room in rooms]
@@ -671,7 +672,7 @@ def test_reading_a_mention_preserves_context_boundaries(
         "More details",
     ):
         human.send_message(room["id"], body)
-    tools_for(world, OTHER).send_message(room["id"], "A different sender")
+    tools_for(world, OTHER).send_message(room["id"], "@Main A different sender")
     world.store.set_watermark(room["id"], MAIN, watermark)
 
     result = tools_for(world, MAIN).read_discussion(room["id"], message_id=4)
@@ -1153,14 +1154,14 @@ def test_read_reports_what_is_waiting_for_you(world) -> None:
 
 def test_read_reports_the_position_you_had_reached_before_reading(world) -> None:
     human = tools_for(world, HUMAN)
-    room = human.create_discussion("watermark", [MAIN])
-    world.store.append_message(room["id"], MAIN, "one")
-    world.store.append_message(room["id"], MAIN, "two")
+    room = human.create_discussion("watermark", [MAIN, OTHER])
+    world.store.append_message(room["id"], MAIN, "@Other one")
+    world.store.append_message(room["id"], MAIN, "@Other two")
 
     first = human.read_discussion(room["id"])
     assert first["read_through"] == 0
 
-    world.store.append_message(room["id"], MAIN, "three")
+    world.store.append_message(room["id"], MAIN, "@Other three")
     second = human.read_discussion(room["id"])
     assert second["read_through"] == 2
     assert second["awaiting_ack"] == []
@@ -1180,7 +1181,7 @@ def test_awaiting_ack_only_covers_the_discussion_you_read(world) -> None:
 def test_a_turn_records_what_it_produced(world) -> None:
     tools = tools_for(world, MAIN, turn=TurnBinding(MAIN, 1))
     discussion = tools.create_discussion("Work", [OTHER])["id"]
-    sent = tools.send_message(discussion, "Starting now")["id"]
+    sent = tools.send_message(discussion, "@Other Starting now")["id"]
     tools.run([sys.executable, "-c", "print('hi')"])
     world.workspace_tree_for(MAIN).write("notes.md", "content")
     tools.edit("workspace/notes.md", [{"old_text": "content", "new_text": "updated"}])
@@ -1190,10 +1191,134 @@ def test_a_turn_records_what_it_produced(world) -> None:
     assert str(sent) in recorded[0].summary
 
 
+def test_required_mention_rejection_has_no_success_effect_or_event(world) -> None:
+    from uuid import uuid4
+
+    room = tools_for(world, HUMAN).create_discussion("Work", [MAIN, OTHER])["id"]
+    tools_for(world, HUMAN).send_message(room, "@Main work")
+    events = []
+    agent = tools_for(
+        world,
+        MAIN,
+        turn=TurnBinding(MAIN, 1),
+        on_change=lambda name, payload: events.append((name, payload)),
+    )
+    receipt = str(uuid4())
+    for body in ("Completed", "@Main completed", "@Missing completed"):
+        with pytest.raises(DomainError) as error:
+            agent.send_message(room, body, client_message_id=receipt)
+        assert error.value.code == "mention_required"
+        assert world.store.message_count(room) == 1
+        assert world.store.watermark(room, MAIN) == 0
+        assert len(world.store.pending(MAIN)) == 1
+        assert world.store.pending(OTHER) == ()
+        assert world.history.effects(MAIN) == ()
+        assert events == []
+        assert agent.send_status(room, receipt)["state"] == "unknown"
+    sent = agent.send_message(room, "@Other completed", client_message_id=receipt)
+    assert sent["id"] == 2 and sent["mentioned"] == [OTHER]
+    assert world.store.watermark(room, MAIN) == 2
+    assert [item.tool for item in world.history.effects(MAIN)] == ["send"]
+    assert len(events) == 1 and events[0][0] == "message.created"
+    world.store.rename_member(OTHER, "Renamed")
+    tools_for(world, HUMAN).send_message(room, "Background")
+    repeated = agent.send_message(room, "@Other completed", client_message_id=receipt)
+    assert repeated["id"] == 2 and repeated["mentioned"] == []
+    assert world.store.watermark(room, MAIN) == 2
+    assert len(events) == len(world.history.effects(MAIN)) == 1
+
+
+@pytest.mark.parametrize("valid_mention", [False, True])
+@pytest.mark.parametrize("file_state", ["ready", "missing", "size", "type", "changed"])
+def test_agent_attachment_precheck_preserves_files_and_upload_state(
+    world, tmp_path, valid_mention, file_state
+) -> None:
+    from uuid import uuid4
+
+    from fora.adapters.files.uploads import DirectoryUploads
+    from fora.services.uploads import Uploads
+
+    room = tools_for(world, HUMAN).create_discussion("Files", [MAIN])["id"]
+    world.uploads = Uploads(world.store, DirectoryUploads(tmp_path / "uploads"))
+    data = b"review attachment"
+    upload = world.uploads.create(
+        room, MAIN, str(uuid4()), "review.txt", len(data), "text/plain"
+    )
+    active, target = world.uploads.begin(upload.id, MAIN)
+    with target:
+        target.write(data)
+    world.uploads.complete(active)
+    world.uploads.end(active)
+    path = Path(world.uploads.files.path(upload.id))
+    if file_state == "missing":
+        path.unlink()
+    elif file_state == "size":
+        path.write_bytes(data + b"!")
+    elif file_state == "type":
+        path.unlink()
+        path.mkdir()
+    elif file_state == "changed":
+        path.write_bytes(b"X" * len(data))
+    before = tuple(
+        tuple(row) for row in world.store._db.execute("SELECT * FROM uploads")
+    )
+    bytes_before = path.read_bytes() if path.is_file() else None
+    events = []
+    agent = tools_for(
+        world,
+        MAIN,
+        turn=TurnBinding(MAIN, 1),
+        on_change=lambda name, payload: events.append(name),
+    )
+    receipt = str(uuid4())
+    body = "@You review" if valid_mention else "Review"
+    if file_state == "ready" and valid_mention:
+        result = agent.send_message(
+            room, body, attachment_ids=[upload.id], client_message_id=receipt
+        )
+        path.unlink()
+        repeated = agent.send_message(
+            room, body, attachment_ids=[upload.id], client_message_id=receipt
+        )
+        assert repeated["id"] == result["id"] == 1
+        assert len(events) == len(world.history.effects(MAIN)) == 1
+        return
+    expected = {
+        "ready": "mention_required",
+        "missing": "attachment_missing",
+        "size": "attachment_invalid",
+        "type": "attachment_invalid",
+        "changed": "attachment_changed",
+    }[file_state]
+    with pytest.raises(DomainError) as error:
+        agent.send_message(
+            room, body, attachment_ids=[upload.id], client_message_id=receipt
+        )
+    assert error.value.code == expected
+    assert (
+        tuple(tuple(row) for row in world.store._db.execute("SELECT * FROM uploads"))
+        == before
+    )
+    assert (path.read_bytes() if path.is_file() else None) == bytes_before
+    assert path.is_dir() == (file_state == "type")
+    assert path.exists() == (file_state != "missing")
+    assert world.store.message_count(room) == 0
+    assert world.store.mentions_by_message(room) == {}
+    assert world.store.watermark(room, MAIN) == 0
+    assert agent.send_status(room, receipt)["state"] == "unknown"
+    assert world.history.effects(MAIN) == () and events == []
+    if file_state == "ready":
+        sent = agent.send_message(
+            room, "@You review", attachment_ids=[upload.id], client_message_id=receipt
+        )
+        assert sent["id"] == 1 and sent["mentioned"] == [HUMAN]
+        assert world.store.get_upload(upload.id, MAIN).state == "attached"
+
+
 def test_tools_outside_a_turn_record_nothing(world) -> None:
     tools = tools_for(world, MAIN)
     discussion = tools.create_discussion("Work", [OTHER])["id"]
-    tools.send_message(discussion, "Starting now")
+    tools.send_message(discussion, "@Other Starting now")
     assert world.history.effects(MAIN) == ()
 
 
@@ -1623,7 +1748,7 @@ def test_ui_entry_context_keeps_id_gaps_and_page_cursors_contiguous(world) -> No
     agent = tools_for(world, MAIN)
     room = human.create_discussion("entry gap", [MAIN])["id"]
     for index in range(7):
-        agent.send_message(room, f"message {index}")
+        agent.send_message(room, f"@You message {index}")
     with world.store._db:
         world.store._db.execute(
             "DELETE FROM messages WHERE discussion_id = ? AND id = 2", (room,)
@@ -1652,7 +1777,7 @@ def test_ui_entry_returns_short_page_when_newer_messages_are_insufficient(
     agent = tools_for(world, MAIN)
     room = human.create_discussion("short context", [MAIN])["id"]
     for _ in range(3):
-        agent.send_message(room, "unread")
+        agent.send_message(room, "@You unread")
     human.mark_read(room, 2)
     page = human.discussion_page(room, entry=True, limit=5)
     assert page["first_unread_id"] == 3
@@ -1730,7 +1855,7 @@ def test_ui_operations_require_human_membership_and_valid_message(world) -> None
     human = tools_for(world, HUMAN)
     agent = tools_for(world, MAIN)
     room = agent.create_discussion("private", [OTHER])["id"]
-    agent.send_message(room, "body")
+    agent.send_message(room, "@Other body")
     for action in (
         lambda: human.discussion_page(room),
         lambda: human.mark_read(room, 1),
