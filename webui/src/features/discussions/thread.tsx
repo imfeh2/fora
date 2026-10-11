@@ -4,6 +4,8 @@ import {
   Archive,
   ArchiveRestore,
   Check,
+  ChevronDown,
+  Loader2,
   MessageCircle,
   MessagesSquare,
   Send,
@@ -42,6 +44,8 @@ import {
 import { renderMentions } from "@/features/mentions";
 import { BackendError, backend, type Message } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
+
+type PositioningKind = "none" | "entry" | "latest" | "follow";
 
 function discussionWriteToastId(id: number, title: string): string {
   return `discussion-write:${id}:${title}`;
@@ -119,14 +123,24 @@ function ThreadSession({
   const composerSizeRef = useRef(64);
   const [keyboardOffset, setKeyboardOffset] = useState(getKeyboardOffset);
   const keyboardOffsetRef = useRef(keyboardOffset);
-  const [lastVisible, setLastVisible] = useState(0);
+  const [atBottom, setAtBottom] = useState(true);
+  const activePositioningSequence = useRef<number | null>(null);
+  const positioningKind = useRef<PositioningKind>("none");
+  const scrollButtonRef = useRef<HTMLButtonElement>(null);
+  const buttonHeldFocus = useRef(false);
   const scroll = useRef<HTMLDivElement>(null);
+  const initialReady = useRef(false);
   const ready = useRef(false);
   const shouldFollowBottom = useRef(false);
   const positioning = useRef(false);
   const positioningInterrupted = useRef(false);
   const positionStableFrames = useRef(0);
   const frame = useRef(0);
+  const interruptFrame = useRef(0);
+  const monitorFrame = useRef(0);
+  const monitoring = useRef(false);
+  const monitorStaleFrames = useRef(0);
+  const monitorLastTop = useRef(-1);
   const messages = detail?.messages ?? [];
   const virtual = useVirtualizer({
     count: messages.length,
@@ -175,7 +189,7 @@ function ThreadSession({
             visible.push(Number(element.dataset.messageId));
         }
       }
-      setLastVisible(visible.length ? Math.max(...visible) : 0);
+      setAtBottom(virtual.isAtEnd());
       thread.view(visible, virtual.isAtEnd());
       if (
         document.visibilityState === "visible" &&
@@ -204,49 +218,193 @@ function ThreadSession({
     [composerSize, keyboardOffset, thread, virtual],
   );
 
-  const stopPositioning = useCallback(() => {
-    shouldFollowBottom.current = false;
-    if (!positioning.current) return;
-    positioning.current = false;
-    positioningInterrupted.current = true;
-    cancelAnimationFrame(frame.current);
-    ready.current = true;
-    thread.positioned();
+  const sampleRef = useRef(sample);
+  useEffect(() => {
+    sampleRef.current = sample;
+  }, [sample]);
+
+  const terminateOwnedTarget = useCallback(() => {
     const root = scroll.current;
-    if (root) virtual.scrollToOffset(root.scrollTop);
-    frame.current = requestAnimationFrame(() => {
-      const currentRoot = scroll.current;
-      if (currentRoot) virtual.scrollToOffset(currentRoot.scrollTop);
-      positioningInterrupted.current = false;
-    });
+    if (!root) return;
+    virtual.scrollToOffset(root.scrollTop, { behavior: "auto" });
+  }, [virtual]);
+
+  const endPositioning = useCallback(() => {
+    cancelAnimationFrame(frame.current);
+    cancelAnimationFrame(monitorFrame.current);
+    positioning.current = false;
+    positioningKind.current = "none";
+    monitoring.current = false;
+    activePositioningSequence.current = null;
+    ready.current = true;
+    initialReady.current = true;
+    thread.positioned();
+    setAtBottom(virtual.isAtEnd());
   }, [thread.positioned, virtual]);
 
+  const followToEnd = useCallback(
+    (landAtEnd: () => void) => {
+      cancelAnimationFrame(frame.current);
+      positioning.current = true;
+      positioningKind.current = "follow";
+      landAtEnd();
+      frame.current = requestAnimationFrame(() => {
+        if (positioningKind.current !== "follow") return;
+        endPositioning();
+      });
+    },
+    [endPositioning],
+  );
+
+  const monitorSmoothScroll = useCallback(() => {
+    const root = scroll.current;
+    if (!positioning.current || positioningKind.current !== "latest" || !root) {
+      monitoring.current = false;
+      return;
+    }
+    const currentTop = root.scrollTop;
+    if (currentTop === monitorLastTop.current) monitorStaleFrames.current += 1;
+    else {
+      monitorStaleFrames.current = 0;
+      monitorLastTop.current = currentTop;
+    }
+    if (virtual.isAtEnd()) {
+      endPositioning();
+      sampleRef.current();
+      return;
+    }
+    if (monitorStaleFrames.current >= 5) {
+      terminateOwnedTarget();
+      endPositioning();
+      sampleRef.current();
+      return;
+    }
+    monitorFrame.current = requestAnimationFrame(monitorSmoothScroll);
+  }, [endPositioning, terminateOwnedTarget, virtual]);
+
+  const startMonitoring = useCallback(() => {
+    if (monitoring.current) return;
+    monitoring.current = true;
+    monitorStaleFrames.current = 0;
+    monitorLastTop.current = scroll.current?.scrollTop ?? -1;
+    monitorFrame.current = requestAnimationFrame(monitorSmoothScroll);
+  }, [monitorSmoothScroll]);
+
+  useEffect(
+    () => () => {
+      monitoring.current = false;
+      cancelAnimationFrame(monitorFrame.current);
+      cancelAnimationFrame(frame.current);
+      cancelAnimationFrame(interruptFrame.current);
+    },
+    [],
+  );
+
+  const stopPositioning = useCallback(() => {
+    shouldFollowBottom.current = false;
+    thread.cancelPositioningIntent();
+    if (!positioning.current) return;
+    positioningInterrupted.current = true;
+    terminateOwnedTarget();
+    endPositioning();
+    cancelAnimationFrame(interruptFrame.current);
+    interruptFrame.current = requestAnimationFrame(() => {
+      terminateOwnedTarget();
+      positioningInterrupted.current = false;
+      sampleRef.current();
+    });
+  }, [endPositioning, terminateOwnedTarget, thread]);
+
+  const returnFocusToStableTarget = useCallback(() => {
+    const currentActive = document.activeElement;
+    const btn = scrollButtonRef.current;
+    const isTargetingButton =
+      btn !== null && (currentActive === btn || btn.contains(currentActive));
+    const isDroppedToBodyFromButton =
+      buttonHeldFocus.current &&
+      (currentActive === document.body || currentActive === null);
+
+    if (isTargetingButton || isDroppedToBodyFromButton) {
+      buttonHeldFocus.current = false;
+      const input =
+        scroll.current?.parentElement?.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Message"]',
+        );
+      input?.focus();
+    }
+  }, []);
+
   useEffect(() => {
-    if (!thread.position || !detail || detail.divider === null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (!positioning.current && thread.positioningIntent.current === null)
+        return;
+      if (event.defaultPrevented) return;
       const target = event.target;
-      if (
-        target instanceof Element &&
-        scroll.current?.contains(target) &&
-        shouldStopPositioningForKey(event.key, target)
-      )
+      if (!(target instanceof Element)) return;
+      const inThreadScope =
+        scroll.current?.contains(target) ||
+        scrollButtonRef.current?.contains(target) ||
+        target === document.body;
+      if (inThreadScope && shouldStopPositioningForKey(event.key, target))
         stopPositioning();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [thread.position, detail, stopPositioning]);
+  }, [stopPositioning]);
 
   useLayoutEffect(() => {
     if (!thread.position || !detail || !scroll.current) return;
-    ready.current = false;
-    positioning.current = false;
-    if (thread.position === "latest" || detail.divider === null) {
-      virtual.scrollToEnd();
-      frame.current = requestAnimationFrame(() => {
-        ready.current = true;
-        thread.positioned();
-      });
-      return () => cancelAnimationFrame(frame.current);
+    const position = thread.position;
+
+    if (position.mode === "latest") {
+      if (position.source === "user") {
+        const alreadyOwned =
+          positioning.current &&
+          positioningKind.current === "latest" &&
+          activePositioningSequence.current === position.sequence;
+        if (alreadyOwned) {
+          startMonitoring();
+          return;
+        }
+        if (!thread.consumePositioningIntent(position.sequence)) {
+          endPositioning();
+          return;
+        }
+        cancelAnimationFrame(frame.current);
+        cancelAnimationFrame(monitorFrame.current);
+        monitoring.current = false;
+        activePositioningSequence.current = position.sequence;
+        positioningKind.current = "latest";
+        ready.current = false;
+        positioning.current = true;
+        const prefersReducedMotion =
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        virtual.scrollToEnd({
+          behavior: prefersReducedMotion ? "auto" : "smooth",
+        });
+        startMonitoring();
+        return;
+      }
+
+      if (!initialReady.current && detail.divider === null) {
+        followToEnd(() => virtual.scrollToEnd());
+        return;
+      }
+
+      if (shouldFollowBottom.current || atBottom) {
+        followToEnd(() => virtual.scrollToEnd({ behavior: "auto" }));
+        return;
+      }
+
+      endPositioning();
+      return;
+    }
+
+    if (detail.divider === null) {
+      if (initialReady.current) endPositioning();
+      else followToEnd(() => virtual.scrollToEnd());
+      return;
     }
 
     const index = messages.findIndex(
@@ -254,12 +412,13 @@ function ThreadSession({
     );
     if (index < 0) throw new Error("Entry divider is missing from its page");
     positioning.current = true;
+    positioningKind.current = "entry";
     positionStableFrames.current = 0;
     let missingMarkerFrames = 0;
     virtual.scrollToIndex(index, { align: "center" });
 
     const positionNewMarker = () => {
-      if (!positioning.current) return;
+      if (!positioning.current || positioningKind.current !== "entry") return;
       const root = scroll.current;
       if (!root) return;
       const bounds = root.getBoundingClientRect();
@@ -303,22 +462,26 @@ function ThreadSession({
       else positionStableFrames.current += 1;
       if (positionStableFrames.current >= 2) {
         virtual.scrollToOffset(root.scrollTop);
-        positioning.current = false;
-        ready.current = true;
-        thread.positioned();
+        endPositioning();
         sample();
       } else {
         frame.current = requestAnimationFrame(positionNewMarker);
       }
     };
     frame.current = requestAnimationFrame(positionNewMarker);
-    return () => cancelAnimationFrame(frame.current);
+    return () => {
+      if (positioningKind.current === "entry")
+        cancelAnimationFrame(frame.current);
+    };
   }, [
     thread.position,
+    thread.consumePositioningIntent,
     detail?.divider,
     messages,
     virtual,
-    thread.positioned,
+    startMonitoring,
+    endPositioning,
+    followToEnd,
     composerSize,
     keyboardOffset,
   ]);
@@ -458,6 +621,31 @@ function ThreadSession({
   const names = (detail?.members ?? []).map((member) => member.name);
   const topic =
     discussions.find((item) => item.id === id)?.topic ?? detail?.topic ?? "";
+
+  const handleScrollToBottom = useCallback(() => {
+    if (thread.loading) return;
+    buttonHeldFocus.current =
+      scrollButtonRef.current !== null &&
+      (document.activeElement === scrollButtonRef.current ||
+        scrollButtonRef.current.contains(document.activeElement));
+    void thread.request("latest", { source: "user" });
+  }, [thread]);
+
+  const discussionSummary = discussions.find((item) => item.id === id);
+  const unreadCount = discussionSummary?.unread ?? 0;
+  const showScrollButton =
+    initialReady.current &&
+    detail !== null &&
+    messages.length > 0 &&
+    (!atBottom || detail.hasAfter);
+
+  const prevShowScrollButton = useRef(showScrollButton);
+  useEffect(() => {
+    if (prevShowScrollButton.current && !showScrollButton) {
+      returnFocusToStableTarget();
+    }
+    prevShowScrollButton.current = showScrollButton;
+  }, [showScrollButton, returnFocusToStableTarget]);
 
   return (
     <Page>
@@ -617,19 +805,28 @@ function ThreadSession({
               })}
             </ol>
           </div>
-          {detail && detail.latest > lastVisible ? (
+          {showScrollButton ? (
             <div
-              className="absolute right-8 narrow:right-3"
+              className="absolute right-8 narrow:right-3 z-10"
               style={{ bottom: composerSize + keyboardOffset + 8 }}
             >
-              <Button
-                disabled={thread.loading}
-                onClick={() => {
-                  void thread.request("latest");
+              <ScrollToBottomButton
+                buttonRef={scrollButtonRef}
+                unreadCount={unreadCount}
+                loading={thread.loading}
+                onClick={handleScrollToBottom}
+                onFocus={() => {
+                  buttonHeldFocus.current = true;
                 }}
-              >
-                New messages
-              </Button>
+                onBlur={(event) => {
+                  if (
+                    event.relatedTarget &&
+                    event.relatedTarget !== document.body
+                  ) {
+                    buttonHeldFocus.current = false;
+                  }
+                }}
+              />
             </div>
           ) : null}
 
@@ -665,6 +862,62 @@ function ThreadSession({
         />
       ) : null}
     </Page>
+  );
+}
+
+export function ScrollToBottomButton({
+  unreadCount,
+  loading,
+  onClick,
+  buttonRef,
+  onFocus,
+  onBlur,
+}: {
+  unreadCount: number;
+  loading: boolean;
+  onClick: () => void;
+  buttonRef?: React.Ref<HTMLButtonElement>;
+  onFocus?: React.FocusEventHandler<HTMLButtonElement>;
+  onBlur?: React.FocusEventHandler<HTMLButtonElement>;
+}) {
+  const badgeText =
+    unreadCount > 99 ? "99+" : unreadCount > 0 ? String(unreadCount) : null;
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      aria-label={
+        unreadCount > 0
+          ? `Scroll to latest messages (${badgeText} unread)`
+          : "Scroll to latest messages"
+      }
+      disabled={loading}
+      onClick={onClick}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      className={clsx(
+        "relative flex size-10 items-center justify-center rounded-full border border-line-interactive bg-surface text-fg shadow-md transition-all duration-(--duration-fast) ease-linear",
+        "hover:enabled:border-line-hover hover:enabled:bg-surface-hover hover:enabled:text-fg active:enabled:bg-gray-600",
+        "focus-visible:border-line-focus focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ring)_40%,transparent)]",
+        "disabled:cursor-not-allowed disabled:opacity-60",
+        "narrow:before:absolute narrow:before:-inset-0.5 narrow:before:content-[''] touch:before:absolute touch:before:-inset-0.5 touch:before:content-['']",
+      )}
+    >
+      {loading ? (
+        <Loader2 size={18} className="animate-spin text-fg-muted" />
+      ) : (
+        <ChevronDown size={18} />
+      )}
+      {badgeText ? (
+        <span
+          data-unread-badge
+          aria-hidden="true"
+          className="absolute -top-1.5 -right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-surface bg-blue-500 px-1 text-[11px] font-semibold leading-none text-gray-0 select-none"
+        >
+          {badgeText}
+        </span>
+      ) : null}
+    </button>
   );
 }
 

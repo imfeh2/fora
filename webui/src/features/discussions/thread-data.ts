@@ -29,6 +29,19 @@ export type ThreadData = {
   previousSender: number | null;
 };
 export type PageMode = "entry" | "latest" | "before" | "after" | "refresh";
+export type PositionTarget =
+  | { mode: "entry" }
+  | { mode: "latest"; source: "user" | "auto"; sequence: number }
+  | null;
+export type PageRequestOptions = {
+  source?: "user" | "auto";
+};
+export type RequestOutcome = {
+  accepted: boolean;
+  sequence?: number;
+};
+export type RequestHandle = Promise<boolean> & RequestOutcome;
+export type PositioningIntent = { sequence: number; cancelled: boolean };
 
 export function eventDiscussion(event: BackendEvent): number | undefined {
   const value =
@@ -105,7 +118,8 @@ export function useThreadData(id: number, memberId: number) {
   const [missing, setMissing] = useState(false);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [position, setPosition] = useState<"entry" | "latest" | null>(null);
+  const [position, setPosition] = useState<PositionTarget>(null);
+  const sequenceCounter = useRef(0);
   const current = useRef(data);
   const live = useRef(false);
   const generation = useRef(0);
@@ -119,22 +133,41 @@ export function useThreadData(id: number, memberId: number) {
   const readingTarget = useRef(0);
   const readingFailed = useRef(false);
   const blocked = useRef(false);
-  const requestRef = useRef<(mode: PageMode) => Promise<void>>(async () => {});
+  const positioningIntent = useRef<PositioningIntent | null>(null);
+  const requestRef = useRef<
+    (mode: PageMode, options?: PageRequestOptions) => RequestHandle
+  >(() => {
+    const fallback = Promise.resolve(false) as RequestHandle;
+    fallback.accepted = false;
+    return fallback;
+  });
   const commit = useCallback((next: ThreadData) => {
     current.current = next;
     setData(next);
   }, []);
 
   const request = useCallback(
-    async (mode: PageMode) => {
-      if (!live.current || inFlight.current) return;
+    (mode: PageMode, options?: PageRequestOptions): RequestHandle => {
+      if (!live.current || inFlight.current) {
+        const failure = Promise.resolve(false) as RequestHandle;
+        failure.accepted = false;
+        return failure;
+      }
       const snapshot = current.current;
-      if (mode !== "entry" && mode !== "latest" && !snapshot) return;
+      if (mode !== "entry" && mode !== "latest" && !snapshot) {
+        const failure = Promise.resolve(false) as RequestHandle;
+        failure.accepted = false;
+        return failure;
+      }
       const page: PageRequest = { limit: PAGE_SIZE };
       if (mode === "entry") page.entry = true;
       if (mode === "latest") page.metadata = true;
       if (mode === "before") {
-        if (!snapshot?.hasBefore || !snapshot.messages.length) return;
+        if (!snapshot?.hasBefore || !snapshot.messages.length) {
+          const failure = Promise.resolve(false) as RequestHandle;
+          failure.accepted = false;
+          return failure;
+        }
         page.before = snapshot.messages[0].id;
       }
       if (mode === "after") {
@@ -142,8 +175,11 @@ export function useThreadData(id: number, memberId: number) {
           !snapshot ||
           (snapshot.messages[snapshot.messages.length - 1]?.id ?? 0) >=
             latest.current
-        )
-          return;
+        ) {
+          const failure = Promise.resolve(false) as RequestHandle;
+          failure.accepted = false;
+          return failure;
+        }
         page.after = snapshot.messages[snapshot.messages.length - 1]?.id ?? 0;
       }
       if (mode === "refresh") {
@@ -155,62 +191,86 @@ export function useThreadData(id: number, memberId: number) {
         page.metadata = true;
       }
       const epoch = generation.current;
+      sequenceCounter.current += 1;
+      const sequence = sequenceCounter.current;
+      const source = options?.source ?? "auto";
+      if (mode === "latest" && source === "user")
+        positioningIntent.current = { sequence, cancelled: false };
       inFlight.current = true;
       let succeeded = false;
       setLoading(true);
-      try {
-        const result = await backend.discussionPage(id, page);
-        if (!live.current || epoch !== generation.current) return;
-        latest.current = Math.max(latest.current, result.latest_id);
-        const next = mergePage(current.current, result, mode);
-        next.latest = latest.current;
-        next.hasAfter =
-          (next.messages[next.messages.length - 1]?.id ?? 0) < latest.current;
-        commit(next);
-        if (!dirty.current)
-          for (const message of result.messages) fresh.current.add(message.id);
-        if (mode === "entry" || mode === "latest") setPosition(mode);
-        setMissing(false);
-        setFailed(false);
-        blocked.current = false;
-        succeeded = true;
-        dismissToast(`thread-${id}-page`);
-      } catch (error) {
-        if (!live.current || epoch !== generation.current) return;
-        if (
-          error instanceof BackendError &&
-          ["not_found", "not_a_member"].includes(error.code)
-        ) {
-          setMissing(true);
-          current.current = null;
-          setData(null);
-        } else {
-          setFailed(true);
-          blocked.current = true;
-          if (!(error instanceof BackendError && error.transport))
-            toast({
-              id: `thread-${id}-page`,
-              tone: "danger",
-              title: "Could not load messages",
-              description:
-                error instanceof Error ? error.message : String(error),
-              duration: null,
-              action: {
-                label: "Retry",
-                onClick: () => void requestRef.current(mode),
-              },
-            });
+
+      const runner = async (): Promise<boolean> => {
+        try {
+          const result = await backend.discussionPage(id, page);
+          if (!live.current || epoch !== generation.current) return false;
+          latest.current = Math.max(latest.current, result.latest_id);
+          const next = mergePage(current.current, result, mode);
+          next.latest = latest.current;
+          next.hasAfter =
+            (next.messages[next.messages.length - 1]?.id ?? 0) < latest.current;
+          commit(next);
+          if (!dirty.current)
+            for (const message of result.messages)
+              fresh.current.add(message.id);
+          if (mode === "entry") setPosition({ mode: "entry" });
+          else if (mode === "latest")
+            setPosition({ mode: "latest", source, sequence });
+          setMissing(false);
+          setFailed(false);
+          blocked.current = false;
+          succeeded = true;
+          dismissToast(`thread-${id}-page`);
+          return true;
+        } catch (error) {
+          if (!live.current || epoch !== generation.current) return false;
+          if (
+            error instanceof BackendError &&
+            ["not_found", "not_a_member"].includes(error.code)
+          ) {
+            setMissing(true);
+            current.current = null;
+            setData(null);
+          } else {
+            setFailed(true);
+            blocked.current = true;
+            if (!(error instanceof BackendError && error.transport))
+              toast({
+                id: `thread-${id}-page`,
+                tone: "danger",
+                title: "Could not load messages",
+                description:
+                  error instanceof Error ? error.message : String(error),
+                duration: null,
+                action: {
+                  label: "Retry",
+                  onClick: () => void requestRef.current(mode, { source }),
+                },
+              });
+          }
+          return false;
+        } finally {
+          if (!succeeded) {
+            const intent = positioningIntent.current;
+            if (intent && intent.sequence === sequence)
+              positioningIntent.current = null;
+          }
+          if (live.current && epoch === generation.current) {
+            inFlight.current = false;
+            setLoading(false);
+            if (!succeeded) setPosition(null);
+            const refresh = dirty.current && succeeded;
+            dirty.current = false;
+            if (refresh)
+              void requestRef.current(current.current ? "refresh" : "entry");
+          }
         }
-      } finally {
-        if (live.current && epoch === generation.current) {
-          inFlight.current = false;
-          setLoading(false);
-          const refresh = dirty.current && succeeded;
-          dirty.current = false;
-          if (refresh)
-            void requestRef.current(current.current ? "refresh" : "entry");
-        }
-      }
+      };
+
+      const handle = runner() as RequestHandle;
+      handle.accepted = true;
+      handle.sequence = sequence;
+      return handle;
     },
     [id, commit],
   );
@@ -388,6 +448,18 @@ export function useThreadData(id: number, memberId: number) {
     else await requestRef.current("refresh");
   }, []);
   const positioned = useCallback(() => setPosition(null), []);
+  const cancelPositioningIntent = useCallback(() => {
+    const intent = positioningIntent.current;
+    if (!intent) return;
+    intent.cancelled = true;
+    positioningIntent.current = null;
+  }, []);
+  const consumePositioningIntent = useCallback((sequence: number) => {
+    const intent = positioningIntent.current;
+    if (!intent || intent.sequence !== sequence) return false;
+    positioningIntent.current = null;
+    return !intent.cancelled;
+  }, []);
   return {
     data,
     missing,
@@ -395,6 +467,9 @@ export function useThreadData(id: number, memberId: number) {
     loading,
     position,
     positioned,
+    positioningIntent,
+    cancelPositioningIntent,
+    consumePositioningIntent,
     request,
     markRead,
     invalidate,

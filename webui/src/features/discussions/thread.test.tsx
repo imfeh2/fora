@@ -1,14 +1,38 @@
 import { Virtualizer } from "@tanstack/react-virtual";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { type Organization, OrganizationProvider } from "@/app/organization";
 import { RouterProvider } from "@/app/router";
 import { Avatar, AvatarStack } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
+import { clearToasts, readToasts } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { MessageRow, ThreadPage } from "@/features/discussions/thread";
-import type { DiscussionDetail, MessageMention } from "@/lib/backend";
+import {
+  MessageRow,
+  ScrollToBottomButton,
+  ThreadPage,
+} from "@/features/discussions/thread";
+import {
+  type RequestHandle,
+  useThreadData,
+} from "@/features/discussions/thread-data";
+import { shouldStopPositioningForKey } from "@/features/discussions/thread-position";
+import {
+  backend,
+  type DiscussionDetail,
+  type DiscussionPage,
+  type MessageMention,
+} from "@/lib/backend";
 
 vi.mock("react", async (importOriginal) => {
   const react = await importOriginal<typeof import("react")>();
@@ -16,7 +40,46 @@ vi.mock("react", async (importOriginal) => {
 });
 vi.mock("@/components/ui/menu", () => ({ OverflowMenu: vi.fn(() => null) }));
 
-afterEach(() => vi.clearAllMocks());
+let closeDom: (() => void) | undefined;
+
+beforeAll(async () => {
+  const packageName = "jsdom";
+  const { JSDOM } = await import(packageName);
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost",
+    pretendToBeVisual: true,
+  });
+  closeDom = () => dom.window.close();
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("navigator", dom.window.navigator);
+  vi.stubGlobal("HTMLElement", dom.window.HTMLElement);
+  vi.stubGlobal("HTMLButtonElement", dom.window.HTMLButtonElement);
+  vi.stubGlobal("HTMLInputElement", dom.window.HTMLInputElement);
+  vi.stubGlobal("HTMLTextAreaElement", dom.window.HTMLTextAreaElement);
+  vi.stubGlobal("Element", dom.window.Element);
+  vi.stubGlobal("Node", dom.window.Node);
+  vi.stubGlobal("Event", dom.window.Event);
+  vi.stubGlobal("KeyboardEvent", dom.window.KeyboardEvent);
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    dom.window.requestAnimationFrame.bind(dom.window),
+  );
+  vi.stubGlobal(
+    "cancelAnimationFrame",
+    dom.window.cancelAnimationFrame.bind(dom.window),
+  );
+});
+
+afterAll(() => {
+  if (closeDom) closeDom();
+  vi.unstubAllGlobals();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 const organization: Organization = {
   members: [
@@ -267,5 +330,384 @@ describe("virtualized composer scroll anchoring", () => {
     expect(measured(915, 623, 291.5).virtual.isAtEnd()).toBe(true);
     expect(measured(915, 623, 250).virtual.isAtEnd()).toBe(false);
     expect(measured(500, 623, 0).virtual.isAtEnd()).toBe(true);
+  });
+});
+
+describe("scroll to bottom button", () => {
+  it("renders circular 40px fab with 44px touch target on mobile and touch", () => {
+    const html = renderToStaticMarkup(
+      <ScrollToBottomButton
+        unreadCount={0}
+        loading={false}
+        onClick={() => {}}
+      />,
+    );
+    expect(html).toContain("size-10");
+    expect(html).toContain("rounded-full");
+    expect(html).toContain("shadow-md");
+    expect(html).toContain("bg-surface");
+    expect(html).toContain("text-fg");
+    expect(html).toContain("narrow:before:-inset-0.5");
+    expect(html).toContain("touch:before:-inset-0.5");
+    expect(html).toContain('aria-label="Scroll to latest messages"');
+    expect(html).not.toContain("animate-spin");
+  });
+
+  it("renders loader and disables clicking when loading latest messages", () => {
+    const html = renderToStaticMarkup(
+      <ScrollToBottomButton
+        unreadCount={0}
+        loading={true}
+        onClick={() => {}}
+      />,
+    );
+    expect(html).toContain("disabled");
+    expect(html).toContain("animate-spin");
+  });
+
+  it.each([
+    [0, null, "Scroll to latest messages"],
+    [1, "1", "Scroll to latest messages (1 unread)"],
+    [42, "42", "Scroll to latest messages (42 unread)"],
+    [99, "99", "Scroll to latest messages (99 unread)"],
+    [100, "99+", "Scroll to latest messages (99+ unread)"],
+    [150, "99+", "Scroll to latest messages (99+ unread)"],
+  ])(
+    "formats unread badge for count %i",
+    (count, expectedText, expectedLabel) => {
+      const html = renderToStaticMarkup(
+        <ScrollToBottomButton
+          unreadCount={count}
+          loading={false}
+          onClick={() => {}}
+        />,
+      );
+      expect(html).toContain(`aria-label="${expectedLabel}"`);
+      if (expectedText === null) {
+        expect(html).not.toContain("data-unread-badge");
+      } else {
+        expect(html).toContain("data-unread-badge");
+        expect(html).toContain(`>${expectedText}</span>`);
+      }
+    },
+  );
+});
+
+describe("keyboard scroll key interruption and editing preservation", () => {
+  it("recognizes scroll keys on non-editing targets, preserves editing in text inputs, and preserves interactive control semantics", () => {
+    const button = document.createElement("button");
+    const div = document.createElement("div");
+    const textarea = document.createElement("textarea");
+    const input = document.createElement("input");
+    const contenteditable = document.createElement("div");
+    contenteditable.setAttribute("contenteditable", "true");
+
+    const select = document.createElement("select");
+    const menuItem = document.createElement("div");
+    menuItem.setAttribute("role", "menuitem");
+    const combobox = document.createElement("div");
+    combobox.setAttribute("role", "combobox");
+    const slider = document.createElement("div");
+    slider.setAttribute("role", "slider");
+    const option = document.createElement("div");
+    option.setAttribute("role", "option");
+
+    expect(shouldStopPositioningForKey("ArrowDown", button)).toBe(true);
+    expect(shouldStopPositioningForKey("PageDown", button)).toBe(true);
+    expect(shouldStopPositioningForKey(" ", div)).toBe(true);
+    expect(shouldStopPositioningForKey("Home", div)).toBe(true);
+    expect(shouldStopPositioningForKey("End", div)).toBe(true);
+
+    expect(shouldStopPositioningForKey("ArrowDown", textarea)).toBe(false);
+    expect(shouldStopPositioningForKey("PageDown", textarea)).toBe(false);
+    expect(shouldStopPositioningForKey(" ", textarea)).toBe(false);
+    expect(shouldStopPositioningForKey("ArrowUp", input)).toBe(false);
+    expect(shouldStopPositioningForKey(" ", contenteditable)).toBe(false);
+
+    expect(shouldStopPositioningForKey("ArrowDown", select)).toBe(false);
+    expect(shouldStopPositioningForKey("ArrowUp", menuItem)).toBe(false);
+    expect(shouldStopPositioningForKey(" ", combobox)).toBe(false);
+    expect(shouldStopPositioningForKey("ArrowDown", slider)).toBe(false);
+    expect(shouldStopPositioningForKey(" ", option)).toBe(false);
+
+    expect(shouldStopPositioningForKey("KeyA", button)).toBe(false);
+    expect(shouldStopPositioningForKey("Escape", button)).toBe(false);
+  });
+});
+
+const testEntryPage: DiscussionPage = {
+  id: 1,
+  messages: [
+    {
+      id: 1,
+      sender_id: 1,
+      sender_name: "Member",
+      body: "Initial",
+      created_at: "2026-10-10T00:00:00Z",
+      mentions: [],
+      attachments: [],
+    },
+  ],
+  latest_id: 1,
+  read_through: 1,
+  first_unread_id: 1,
+  previous_sender_id: null,
+  has_before: false,
+  has_after: false,
+  awaiting_ack: [],
+  acknowledged: [],
+  pending_count: 0,
+  metadata: {
+    topic: "Topic",
+    archived: false,
+    members: [{ id: 1, name: "Member" }],
+  },
+};
+
+describe("production useThreadData request and position lifecycle", () => {
+  it("synchronously issues sequence and accepts request, while rejecting concurrent in-flight requests", async () => {
+    vi.spyOn(backend, "discussionPage").mockResolvedValueOnce(testEntryPage);
+    const { result } = renderHook(() => useThreadData(1, 1));
+    await act(async () => {});
+
+    vi.spyOn(backend, "discussionPage").mockImplementation(
+      () => new Promise(() => {}),
+    );
+    let first!: RequestHandle;
+    act(() => {
+      first = result.current.request("latest", { source: "user" });
+    });
+    expect(first.accepted).toBe(true);
+    expect(first.sequence).toBe(2);
+
+    const concurrent = result.current.request("before");
+    expect(concurrent.accepted).toBe(false);
+    expect(concurrent.sequence).toBeUndefined();
+  });
+
+  it("updates position with user sequence upon successful response and clears it on positioned", async () => {
+    vi.spyOn(backend, "discussionPage").mockResolvedValueOnce(testEntryPage);
+    const { result } = renderHook(() => useThreadData(1, 1));
+    await act(async () => {});
+
+    let resolvePage!: (value: DiscussionPage) => void;
+    vi.spyOn(backend, "discussionPage").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+
+    let handle!: RequestHandle;
+    act(() => {
+      handle = result.current.request("latest", { source: "user" });
+    });
+    expect(handle.accepted).toBe(true);
+    expect(handle.sequence).toBe(2);
+
+    await act(async () => {
+      resolvePage({
+        ...testEntryPage,
+        messages: [
+          ...testEntryPage.messages,
+          {
+            id: 10,
+            sender_id: 1,
+            sender_name: "Member",
+            body: "Msg",
+            created_at: "2026-10-10T00:00:00Z",
+            mentions: [],
+            attachments: [],
+          },
+        ],
+        latest_id: 10,
+      });
+      await handle;
+    });
+
+    expect(result.current.position).toEqual({
+      mode: "latest",
+      source: "user",
+      sequence: 2,
+    });
+
+    act(() => {
+      result.current.positioned();
+    });
+    expect(result.current.position).toBeNull();
+  });
+
+  it("keeps the positioning ownership of a retried latest request", async () => {
+    vi.spyOn(backend, "discussionPage").mockResolvedValueOnce(testEntryPage);
+    clearToasts();
+    const { result } = renderHook(() => useThreadData(1, 1));
+    await act(async () => {});
+
+    let rejectPage!: (error: Error) => void;
+    vi.spyOn(backend, "discussionPage").mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectPage = reject;
+        }),
+    );
+
+    let handle!: RequestHandle;
+    act(() => {
+      handle = result.current.request("latest", { source: "user" });
+    });
+    expect(handle.accepted).toBe(true);
+    expect(handle.sequence).toBe(2);
+    expect(result.current.positioningIntent.current).toEqual({
+      sequence: 2,
+      cancelled: false,
+    });
+
+    await act(async () => {
+      rejectPage(new Error("Network failed"));
+      await handle;
+    });
+
+    expect(result.current.failed).toBe(true);
+    expect(result.current.position).toBeNull();
+    expect(result.current.positioningIntent.current).toBeNull();
+
+    const failureToast = readToasts()
+      .filter((item) => item.open)
+      .find((item) => item.id === "thread-1-page");
+    expect(failureToast?.action?.label).toBe("Retry");
+
+    let retryCalledWithMetadata: boolean | undefined;
+    vi.spyOn(backend, "discussionPage").mockImplementation(
+      async (_id, page) => {
+        retryCalledWithMetadata = Boolean(page.metadata);
+        return testEntryPage;
+      },
+    );
+
+    await act(async () => {
+      failureToast?.action?.onClick();
+    });
+
+    expect(retryCalledWithMetadata).toBe(true);
+    expect(result.current.position).toEqual({
+      mode: "latest",
+      source: "user",
+      sequence: 3,
+    });
+    expect(result.current.consumePositioningIntent(3)).toBe(true);
+  });
+
+  it("retries an automatic latest request without creating a user positioning intent", async () => {
+    let eventListener!: (event: { type: string; id?: number }) => void;
+    vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
+      eventListener = listener as (event: {
+        type: string;
+        id?: number;
+      }) => void;
+      return () => {};
+    });
+    vi.spyOn(backend, "discussionPage").mockResolvedValueOnce(testEntryPage);
+    clearToasts();
+    const { result } = renderHook(() => useThreadData(1, 1));
+    await act(async () => {});
+
+    act(() => {
+      result.current.view([1], true);
+    });
+    act(() => {
+      result.current.positioned();
+    });
+
+    let rejectPage!: (error: Error) => void;
+    vi.spyOn(backend, "discussionPage").mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectPage = reject;
+        }),
+    );
+
+    await act(async () => {
+      eventListener({ type: "connection.restored" });
+    });
+    await act(async () => {
+      rejectPage(new Error("Network failed"));
+      await Promise.resolve();
+    });
+
+    const failureToast = readToasts()
+      .filter((item) => item.open)
+      .find((item) => item.id === "thread-1-page");
+    expect(failureToast?.action?.label).toBe("Retry");
+
+    vi.spyOn(backend, "discussionPage").mockResolvedValue(testEntryPage);
+    await act(async () => {
+      failureToast?.action?.onClick();
+    });
+
+    expect(result.current.position).toEqual({
+      mode: "latest",
+      source: "auto",
+      sequence: 3,
+    });
+    expect(result.current.positioningIntent.current).toBeNull();
+  });
+
+  it("cancels a user positioning intent that is still in flight", async () => {
+    vi.spyOn(backend, "discussionPage").mockResolvedValue(testEntryPage);
+    const { result } = renderHook(() => useThreadData(1, 1));
+    await act(async () => {});
+
+    let handle!: RequestHandle;
+    act(() => {
+      handle = result.current.request("latest", { source: "user" });
+    });
+    expect(result.current.positioningIntent.current).not.toBeNull();
+
+    act(() => {
+      result.current.cancelPositioningIntent();
+    });
+    await act(async () => {
+      await handle;
+    });
+
+    expect(
+      result.current.consumePositioningIntent(handle.sequence as number),
+    ).toBe(false);
+    expect(result.current.positioningIntent.current).toBeNull();
+  });
+
+  it("initiates auto latest request upon connection restoration", async () => {
+    let eventListener!: (event: { type: string; id?: number }) => void;
+    vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
+      eventListener = listener as (event: {
+        type: string;
+        id?: number;
+      }) => void;
+      return () => {};
+    });
+    vi.spyOn(backend, "discussionPage").mockResolvedValue(testEntryPage);
+
+    const { result } = renderHook(() => useThreadData(1, 1));
+    await act(async () => {});
+
+    act(() => {
+      result.current.view([1], true);
+    });
+    act(() => {
+      result.current.positioned();
+    });
+    expect(result.current.position).toBeNull();
+
+    await act(async () => {
+      eventListener({ type: "connection.restored" });
+    });
+
+    await waitFor(() => {
+      expect(result.current.position).toEqual({
+        mode: "latest",
+        source: "auto",
+        sequence: 2,
+      });
+    });
   });
 });

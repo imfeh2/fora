@@ -8,8 +8,8 @@ const scrollKeys = new Set([
   " ",
 ]);
 
-const interactiveSelector =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), button, a[href], [role='button'], [role='textbox'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='checkbox'], [role='radio'], [role='switch'], [role='slider'], [role='combobox'], [role='option'], [tabindex]:not([tabindex='-1'])";
+const nonScrollInteractiveSelector =
+  "textarea, input, select, [contenteditable]:not([contenteditable='false']), [role='textbox'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='combobox'], [role='listbox'], [role='option'], [role='slider'], [role='switch'], [role='checkbox'], [role='radio']";
 
 export function centeredScrollTop(
   scrollTop: number,
@@ -26,5 +26,6 @@ export function shouldStopPositioningForKey(
   key: string,
   target: Pick<Element, "closest">,
 ): boolean {
-  return scrollKeys.has(key) && !target.closest(interactiveSelector);
+  if (!scrollKeys.has(key)) return false;
+  return target.closest(nonScrollInteractiveSelector) === null;
 }
