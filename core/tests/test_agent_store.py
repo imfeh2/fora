@@ -920,7 +920,10 @@ def _record_preparation_call(
     )
     if request_status in ("responded", "failed"):
         store.finish_model_request(
-            agent_id, run.sequence, handle, ('[{"response":"中文🙂"}]',)
+            agent_id,
+            run.sequence,
+            handle,
+            ('[{"kind":"response","response":"中文🙂"}]',),
         )
     if request_status == "failed":
         store.fail_model_request(agent_id, run.sequence, handle, error)
@@ -1030,7 +1033,7 @@ def test_legacy_response_failure_binds_only_last_request_and_preserves_records(
         False,
     )
     agent_store.finish_model_request(
-        AGENT, run.sequence, successful, ('[{"text":"ok"}]',)
+        AGENT, run.sequence, successful, ('[{"kind":"response","text":"ok"}]',)
     )
     assert agent_store.preparation_failure_streak(AGENT, run.sequence) == 1
     final, _ = _record_preparation_call(agent_store, error=error)
@@ -1142,7 +1145,7 @@ def test_sdk_completion_requires_successful_response_and_actual_identity(
             AGENT,
             run.sequence,
             handle,
-            ('[{"text":"done"}]',) if state == "wrong_id" else (),
+            ('[{"kind":"response","text":"done"}]',) if state == "wrong_id" else (),
         )
     original = agent_store.model_request_summary(AGENT, run.sequence, handle.ordinal)
     invalid = replace(handle, request_id="wrong-id") if state == "wrong_id" else handle

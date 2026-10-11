@@ -1132,4 +1132,3 @@ class Api:
             settings_test_model,
             scope=lambda params: RequestScope(reads=(model_settings,)),
         )
-

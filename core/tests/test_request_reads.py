@@ -202,7 +202,7 @@ def test_history_prepares_immutable_unicode_content_before_write_transaction(
             return super().encode(encoding, errors)
 
     try:
-        content = Content('[{"content":"中文🙂"}]')
+        content = Content('[{"kind":"response","content":"中文🙂"}]')
         handle = history.start_model_request(
             2,
             run.sequence,

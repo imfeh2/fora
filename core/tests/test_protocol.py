@@ -2944,6 +2944,7 @@ def test_all_registered_operations_declare_their_business_resources(server):
             "agent.history.text",
             "agent.history.image",
         },
+        "usage": {"usage.query", "usage.read"},
         "workspace": {"agent.detail", "workspace.list", "workspace.read"},
         "library": {
             "library.list",
@@ -3006,6 +3007,9 @@ def test_all_registered_operations_declare_their_business_resources(server):
             assert Resource("workspace", 2) in scope.writes
         if method in groups["history"]:
             assert Resource("history", 2) in scope.reads
+        if method in groups["usage"]:
+            assert Resource("history") in scope.reads
+            assert Resource("member") in scope.reads
         if method in groups["uploads"]:
             assert Resource("attachments", HUMAN_ID) in scope.writes
     with pytest.raises(TypeError):

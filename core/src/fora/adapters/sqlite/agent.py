@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
 
@@ -772,6 +772,7 @@ class SqliteAgentStore:
                 raise DomainError(
                     "invalid_state", "Model request has no successful response"
                 )
+            self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
     def link_model_request(
         self,

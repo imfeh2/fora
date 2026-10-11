@@ -422,3 +422,54 @@ def test_same_timestamp_pagination_and_actual_query_indexes(stores):
             (value,),
         )
         assert any(index in row["detail"] for row in plan)
+
+
+def test_completed_request_keeps_index_and_duplicate_response_identity(stores):
+    _, history, agent_id = stores
+    usage = {"input_tokens": 12, "output_tokens": 3}
+    sequence, handle = request(history, agent_id, usage)
+    record_id = f"request:{agent_id}:{sequence}:{handle.ordinal}"
+    before = history.usage_query({})
+    assert history.usage_read(record_id)["status"] == "responded"
+    history.complete_model_request(agent_id, sequence, handle)
+    completed = history.usage_query({})
+    assert completed["dataset_revision"] > before["dataset_revision"]
+    assert completed["summary"] == before["summary"]
+    assert history.usage_read(record_id)["status"] == "completed"
+    history.complete_model_request(agent_id, sequence, handle)
+    assert history.usage_query({})["dataset_revision"] == completed["dataset_revision"]
+    history.finish_model_request(
+        agent_id,
+        sequence,
+        handle,
+        (json.dumps([{"kind": "response", "usage": usage, "metadata": None}]),),
+    )
+    assert history.usage_query({})["dataset_revision"] == completed["dataset_revision"]
+    assert history.usage_read(record_id)["status"] == "completed"
+    with pytest.raises(DomainError) as error:
+        history.finish_model_request(
+            agent_id,
+            sequence,
+            handle,
+            (json.dumps([{"kind": "response", "usage": {"input_tokens": 99}}]),),
+        )
+    assert error.value.code == "usage_conflict"
+    assert history.usage_query({})["dataset_revision"] == completed["dataset_revision"]
+    assert history.usage_read(record_id)["usage"] == usage
+
+
+def test_completed_request_index_update_rolls_back_with_history(stores):
+    _, history, agent_id = stores
+    sequence, handle = request(
+        history, agent_id, {"input_tokens": 2, "output_tokens": 1}
+    )
+    record_id = f"request:{agent_id}:{sequence}:{handle.ordinal}"
+    before = history.usage_query({})
+    with pytest.raises(RuntimeError), history.transaction():
+        history.complete_model_request(agent_id, sequence, handle)
+        assert history.usage_read(record_id)["status"] == "completed"
+        raise RuntimeError("rollback")
+    summary = history.model_request_summary(agent_id, sequence, handle.ordinal)
+    assert summary is not None and summary.status == "responded"
+    assert history.usage_read(record_id)["status"] == "responded"
+    assert history.usage_query({})["dataset_revision"] == before["dataset_revision"]
