@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearToasts, readToasts } from "@/components/ui/toast";
-import {
-  AgentCreateDialog,
-  AgentModelPanel,
-  ModelPanel,
-} from "@/features/settings/model";
+import { AgentCreateDialog, AgentModelPanel } from "@/features/settings/model";
 import { useReportSettingsSave, useSaver } from "@/features/settings/saver";
 import { type BackendEvent, backend, type ModelCatalog } from "@/lib/backend";
 
@@ -107,53 +103,16 @@ const updated: ModelCatalog = {
   agent_configs: { "2": { model_id: null, thinking: "low" } },
 };
 
-function findNewModelForm(node: unknown): { key: string | null } | null {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const result = findNewModelForm(child);
-      if (result) return result;
-    }
-    return null;
-  }
-  if (!node || typeof node !== "object") return null;
-  const element = node as {
-    type?: { name?: string };
-    key?: string | null;
-    props?: { children?: unknown; model?: unknown };
-  };
-  if (element.type?.name === "ModelForm" && !element.props?.model) {
-    return { key: element.key ?? null };
-  }
-  return findNewModelForm(element.props?.children);
-}
-
-function newModelFormKey(providerId: string, expanded: boolean): string | null {
-  lifecycle.setters = [];
-  lifecycle.initial.clear();
+function mountPanel(_agent: boolean) {
   lifecycle.initial.set(0, catalog);
-  lifecycle.initial.set(3, providerId);
-  lifecycle.initial.set(4, expanded ? ["new"] : []);
-  return findNewModelForm(ModelPanel())?.key ?? null;
-}
-
-function mountPanel(agent: boolean) {
-  lifecycle.initial.set(0, catalog);
-  if (agent) {
-    const panel = AgentModelPanel({ agentId: 2 });
-    return {
-      save: () => panel.props.onSubmit({ preventDefault: vi.fn() }),
-      edit: () => panel.props.onChangeCapture(),
-    };
-  }
-  const panel = ModelPanel();
-  const defaults = panel.props.children[1].props.children.props.children[0];
+  const panel = AgentModelPanel({ agentId: 2 });
   return {
-    save: () => defaults.props.save("set_defaults", null, {}),
-    edit: () => {},
+    save: () => panel.props.onSubmit({ preventDefault: vi.fn() }),
+    edit: () => panel.props.onChangeCapture(),
   };
 }
 
-describe.each([false, true])("model read ordering: Agent %s", (agent) => {
+describe.each([true])("model read ordering: Agent %s", (agent) => {
   it("keeps a successful save when an earlier read returns late", async () => {
     const earlier = deferred<ModelCatalog>();
     vi.mocked(backend.modelCatalog).mockReturnValueOnce(earlier.promise);
@@ -247,25 +206,6 @@ describe.each([false, true])("model read ordering: Agent %s", (agent) => {
   });
 });
 
-describe("new Model form identity", () => {
-  it("resets the draft when switching providers and returning", () => {
-    const providerA = newModelFormKey("provider-a", true);
-    const providerB = newModelFormKey("provider-b", true);
-    const returnedA = newModelFormKey("provider-a", true);
-
-    expect(providerA).toBe("provider-a");
-    expect(providerB).toBe("provider-b");
-    expect(returnedA).toBe(providerA);
-  });
-
-  it("keeps the same Provider form identity while collapsing and expanding", () => {
-    const expanded = newModelFormKey("provider-a", true);
-    const collapsed = newModelFormKey("provider-a", false);
-
-    expect(collapsed).toBe(expanded);
-  });
-});
-
 describe("settings save lifecycle", () => {
   it("passes Panel saving state to the shared navigation tracker", async () => {
     const report = vi.fn();
@@ -333,20 +273,6 @@ describe("model configuration connection recovery", () => {
     expect(lifecycle.setters[0]).toHaveBeenLastCalledWith(catalog);
     expect(lifecycle.setters[1]).not.toHaveBeenCalled();
     expect(readToasts().some((item) => item.tone === "danger")).toBe(true);
-  });
-
-  it("reloads settings after a failed initial load and releases the listener", async () => {
-    vi.mocked(backend.modelCatalog).mockRejectedValueOnce(new Error("offline"));
-    ModelPanel();
-    await mountEffects();
-    expect(lifecycle.setters[2]).toHaveBeenLastCalledWith(true);
-    event({ type: "connection.restored" });
-    await Promise.resolve();
-    expect(backend.modelCatalog).toHaveBeenCalledTimes(2);
-    expect(lifecycle.setters[0]).toHaveBeenLastCalledWith(catalog);
-    expect(lifecycle.setters[2]).toHaveBeenLastCalledWith(false);
-    cleanups.pop()?.();
-    expect(off).toHaveBeenCalledOnce();
   });
 
   it("refreshes saved Agent choices after reconnect", async () => {

@@ -1,22 +1,40 @@
-import { CircleHelp, Save } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  CircleHelp,
+  Eye,
+  EyeOff,
+  Pencil,
+  Save,
+  Search,
+  Settings,
+} from "lucide-react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "@/app/router";
-import { Table } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
+import { Choices } from "@/components/ui/choices";
 import { Combobox } from "@/components/ui/combobox";
 import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
+  EmptyState,
   Field,
   FieldSkeleton,
+  IconButton,
   Input,
   LoadingSkeleton,
+  SearchField,
   Spinner,
   Textarea,
   toast,
 } from "@/components/ui/index";
-import { Segmented } from "@/components/ui/segmented";
+import { OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { parseRequestBody } from "@/features/settings/request-body";
 import {
@@ -489,249 +507,22 @@ type SaveModel = (
   onBodyError?: (message: string) => void,
 ) => Promise<boolean>;
 
-export type ProviderLayout = "cards" | "split" | "accordion";
-
 export function ModelPanel() {
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [providerId, setProviderId] = useState<string | null>(null);
-  const [expandedModels, setExpandedModels] = useState<string[]>([]);
-  const selectionId = useId();
-  useReportSettingsSave("model", busy);
-  const [loadError, setLoadError] = useState<BackendError | null>(null);
-  const loadGeneration = useRef(0);
-  const load = useCallback(async () => {
-    const generation = ++loadGeneration.current;
-    setFailed(false);
-    setLoadError(null);
-    try {
-      const loaded = await backend.modelCatalog();
-      if (generation !== loadGeneration.current) return;
-      setCatalog(loaded);
-      setFailed(false);
-    } catch (error) {
-      if (generation === loadGeneration.current) {
-        setFailed(true);
-        setLoadError(reportLoadFailure(error));
-      }
-    }
-  }, []);
-  useEffect(() => {
-    void load();
-    const off = backend.onEvent((event) => {
-      if (event.type === "connection.restored") void load();
-    });
-    return () => {
-      loadGeneration.current += 1;
-      off();
-    };
-  }, [load]);
-  const save: SaveModel = async (action, id, values = {}, onBodyError) => {
-    loadGeneration.current += 1;
-    setBusy(true);
-    try {
-      const updated = await backend.configureModel(action, id, values);
-      loadGeneration.current += 1;
-      setCatalog(updated);
-      setFailed(false);
-      setLoadError(null);
-      if (action === "save_provider" && id === null) {
-        const created = updated.providers[updated.providers.length - 1];
-        if (!created) throw new Error("Saved provider is missing");
-        setProviderId(created.id);
-      }
-      return true;
-    } catch (error) {
-      if (error instanceof BackendError && error.transport)
-        backend.reportFailure(error);
-      else if (
-        onBodyError &&
-        error instanceof BackendError &&
-        ["invalid_request_body", "unsupported_request_body"].includes(
-          error.code,
-        )
-      )
-        onBodyError(error.message);
-      else
-        toast({
-          tone: "danger",
-          title: "Could not save model settings",
-          description: error instanceof Error ? error.message : String(error),
-        });
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-  const provider = catalog?.providers.find((item) => item.id === providerId);
-  const models =
-    catalog?.models.filter((item) => item.provider_id === provider?.id) ?? [];
-  const chooseProvider = (id: string | null) => {
-    if (busy) return;
-    setProviderId(id);
-    setExpandedModels([]);
-  };
-  const toggleModel = (id: string) => {
-    if (busy) return;
-    setExpandedModels((current) =>
-      current.includes(id)
-        ? current.filter((item) => item !== id)
-        : [...current, id],
-    );
-  };
-  const fields = (
-    <fieldset
-      className="model-settings m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
-      aria-label="Model settings"
-      disabled={!catalog || busy || failed}
-    >
-      {!catalog ? (
-        failed ? null : (
-          <LoadingSkeleton label="Loading model settings">
-            <div className="flex max-w-[560px] flex-col gap-4">
-              <FieldSkeleton />
-              <FieldSkeleton />
-            </div>
-            <section className="provider-card">
-              <FieldSkeleton />
-              <FieldSkeleton />
-              <FieldSkeleton />
-              <FieldSkeleton />
-            </section>
-          </LoadingSkeleton>
-        )
-      ) : (
-        <>
-          <DefaultModelForm catalog={catalog} save={save} busy={busy} />
-          <section className="provider-card">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-medium">Provider connection</h2>
-              <Field label="Provider" htmlFor={`${selectionId}-provider`}>
-                <select
-                  id={`${selectionId}-provider`}
-                  className={selectClass}
-                  value={provider?.id ?? ""}
-                  onChange={(event) =>
-                    chooseProvider(event.target.value || null)
-                  }
-                >
-                  <option value="">Add provider</option>
-                  {catalog.providers.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                      {item.enabled ? "" : " · disabled"}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-            <ProviderForm
-              key={provider?.id ?? "new"}
-              provider={provider}
-              save={save}
-              busy={busy}
-              onDeleted={() => chooseProvider(null)}
-            />
-          </section>
-          {provider ? (
-            <section className="models-section">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h2 className="text-base font-medium">Models</h2>
-                <p className="text-sm text-fg-muted">{provider.name}</p>
-              </div>
-              {models.length === 0 ? (
-                <p className="text-sm text-fg-muted">No models configured.</p>
-              ) : null}
-              {models.map((model) => {
-                const expanded = expandedModels.includes(model.id);
-                return (
-                  <section className="model-item" key={model.id}>
-                    <button
-                      className="model-summary"
-                      type="button"
-                      aria-expanded={expanded}
-                      aria-controls={`${selectionId}-model-${model.id}`}
-                      onClick={() => toggleModel(model.id)}
-                    >
-                      <span className="min-w-0 flex flex-col gap-1">
-                        <span className="font-medium wrap-anywhere">
-                          {model.name}
-                        </span>
-                        <span className="text-xs text-fg-muted wrap-anywhere">
-                          {model.model}
-                        </span>
-                      </span>
-                      <span className="flex items-center gap-2 flex-none">
-                        <Chip>{model.enabled ? "Enabled" : "Disabled"}</Chip>
-                        <span>{expanded ? "Close" : "Edit"}</span>
-                      </span>
-                    </button>
-                    <div
-                      id={`${selectionId}-model-${model.id}`}
-                      className="model-editor"
-                      hidden={!expanded}
-                      inert={!expanded}
-                    >
-                      <ModelForm
-                        provider={provider}
-                        model={model}
-                        save={save}
-                        busy={busy}
-                      />
-                    </div>
-                  </section>
-                );
-              })}
-              <section className="model-item">
-                <button
-                  className="model-add"
-                  type="button"
-                  aria-expanded={expandedModels.includes("new")}
-                  aria-controls={`${selectionId}-model-new`}
-                  onClick={() => toggleModel("new")}
-                >
-                  Add model
-                </button>
-                <div
-                  id={`${selectionId}-model-new`}
-                  className="model-editor"
-                  hidden={!expandedModels.includes("new")}
-                  inert={!expandedModels.includes("new")}
-                >
-                  <ModelForm
-                    key={provider.id}
-                    provider={provider}
-                    save={save}
-                    busy={busy}
-                  />
-                </div>
-              </section>
-            </section>
-          ) : null}
-        </>
-      )}
-    </fieldset>
-  );
-  return (
-    <>
-      {loadError && !(loadError.transport && backend.disconnected) ? (
-        <LoadError error={loadError} retry={() => void load()} />
-      ) : null}
-      {fields}
-    </>
-  );
-}
-
-export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
   const { registerNavigationBlocker } = useRouter();
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [editProvider, setEditProvider] = useState(false);
+  const [deleteProvider, setDeleteProvider] = useState<ProviderConfig | null>(
+    null,
+  );
   const [session, setSession] = useState<{
     provider: ProviderConfig;
     models: RegisteredModel[];
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [connected, setConnected] = useState(true);
+  const online = useRef(true);
   const [error, setError] = useState<string | null>(null);
   const [uncertain, setUncertain] = useState(false);
   const [reviewed, setReviewed] = useState(false);
@@ -742,6 +533,8 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
   const generation = useRef(0);
   const reading = useRef<number | null>(null);
   const saving = useRef(false);
+  const mounted = useRef(true);
+  const connectionGeneration = useRef(0);
   const refreshPending = useRef(false);
   const drafts = useRef(new Map<string, boolean>());
   const [hasDrafts, setHasDrafts] = useState(false);
@@ -754,7 +547,7 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
   const [connectionDirty, setConnectionDirty] = useState(false);
   useReportSettingsSave("model", busy);
   const load = useCallback(async (): Promise<void> => {
-    if (saving.current || reading.current !== null) {
+    if (!online.current || saving.current || reading.current !== null) {
       refreshPending.current = true;
       return;
     }
@@ -781,18 +574,30 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
     }
   }, []);
   useEffect(() => {
+    mounted.current = true;
     void load();
     const off = backend.onEvent((event) => {
-      if (event.type === "connection.restored") {
+      if (
+        event.type === "connection.closed" ||
+        event.type === "connection.reconnecting" ||
+        event.type === "connection.restored"
+      ) {
+        online.current = event.type === "connection.restored";
+        setConnected(online.current);
+        connectionGeneration.current += 1;
+        setReviewed(false);
+        if (saving.current) setUncertain(true);
         generation.current += 1;
         reading.current = null;
         refreshPending.current = false;
-        void load();
+        if (online.current) void load();
       }
       if (event.type === "settings.updated" && event.section === "model")
         void load();
     });
     return () => {
+      mounted.current = false;
+      connectionGeneration.current += 1;
       generation.current += 1;
       reading.current = null;
       refreshPending.current = false;
@@ -851,9 +656,9 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
     return () => window.removeEventListener("beforeunload", guard);
   }, [busy, hasDrafts]);
   useEffect(() => {
-    if (selected && layout !== "cards")
+    if (selected)
       editor.current?.querySelector<HTMLInputElement>("input")?.focus();
-  }, [selected, layout]);
+  }, [selected]);
   const providerDraft = useCallback((dirty: boolean, connection: boolean) => {
     drafts.current.set("provider", dirty);
     setHasDrafts(
@@ -873,8 +678,12 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
     setConnectionDirty(false);
     setRevision((value) => value + 1);
   };
-  const choose = (id: string | null) => {
+  const choose = (id: string | null, edit = false) => {
     if (saving.current) return;
+    if (id === selected) {
+      setEditProvider(edit);
+      return;
+    }
     const proceed = () => {
       resetEditor();
       const provider = catalog?.providers.find((item) => item.id === id);
@@ -890,6 +699,7 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
           : null,
       );
       setSelected(id);
+      setEditProvider(edit || id === "new");
       setError(null);
       if (id === null) requestAnimationFrame(() => opener.current?.focus());
     };
@@ -897,8 +707,8 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
       setDiscard(() => proceed);
     else proceed();
   };
-  const save: SaveModel = async (action, id, values = {}) => {
-    if (saving.current || uncertain) return false;
+  const save: SaveModel = async (action, id, values = {}, onBodyError) => {
+    if (!online.current || saving.current || uncertain) return false;
     if (
       (action === "save_provider" && id === null && selected !== "new") ||
       ((action === "save_provider" || action === "delete_provider") &&
@@ -908,11 +718,13 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
         id !== null &&
         !catalog?.models.some((item) => item.id === id)) ||
       (action === "save_model" &&
+        id === null &&
         !catalog?.providers.some((item) => item.id === values.provider_id))
     ) {
       return false;
     }
     saving.current = true;
+    const connection = connectionGeneration.current;
     generation.current += 1;
     reading.current = null;
     setBusy(true);
@@ -923,6 +735,8 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
         : null;
     try {
       const updated = await backend.configureModel(action, id, values);
+      if (!mounted.current || connection !== connectionGeneration.current)
+        return false;
       generation.current += 1;
       setCatalog(updated);
       if (action === "save_provider" && id === null) {
@@ -943,22 +757,21 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
             : null,
         );
       }
-      if (
-        layout === "cards" &&
-        action === "save_provider" &&
-        typeof values.name === "string" &&
-        !Array.from(drafts.current.entries()).some(
-          ([key, dirty]) => key !== "provider" && dirty,
-        )
-      ) {
-        drafts.current.delete("provider");
-        setHasDrafts(defaultDirty.current);
-        setSelected(null);
-        requestAnimationFrame(() => opener.current?.focus());
-      }
       return true;
     } catch (failure) {
+      if (!mounted.current || connection !== connectionGeneration.current)
+        return false;
       setError(failure instanceof Error ? failure.message : String(failure));
+      if (
+        onBodyError &&
+        failure instanceof BackendError &&
+        ["invalid_request_body", "unsupported_request_body"].includes(
+          failure.code,
+        )
+      ) {
+        onBodyError(failure.message);
+        setError(null);
+      }
       if (failure instanceof BackendError && failure.transport) {
         setUncertain(true);
         setReviewed(false);
@@ -968,14 +781,16 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
       return false;
     } finally {
       saving.current = false;
-      setBusy(false);
-      if (refreshPending.current) {
-        refreshPending.current = false;
-        void load();
+      if (mounted.current) {
+        setBusy(false);
+        if (refreshPending.current) {
+          refreshPending.current = false;
+          void load();
+        }
+        requestAnimationFrame(() => {
+          if (document.activeElement === document.body) focus?.focus();
+        });
       }
-      requestAnimationFrame(() => {
-        if (document.activeElement === document.body) focus?.focus();
-      });
     }
   };
   const savedProvider = catalog?.providers.find((item) => item.id === selected);
@@ -1020,7 +835,7 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
         continuing.
       </p>
       <Button onClick={() => void load()}>Read saved configuration</Button>
-      {reviewed && catalog ? (
+      {reviewed && catalog && !busy && connected ? (
         <>
           <p>
             Saved providers:{" "}
@@ -1037,6 +852,8 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
               resetEditor();
               setCatalogEpoch((value) => value + 1);
               defaultDirty.current = false;
+              setHasDrafts(false);
+              setEditProvider(false);
               setSelected(null);
               setUncertain(false);
               setError(null);
@@ -1054,16 +871,6 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
       aria-label="Provider configuration"
       className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
       key={`${selected}-${revision}`}
-      onKeyDown={(event) => {
-        if (
-          layout !== "cards" &&
-          event.key === "Escape" &&
-          !event.defaultPrevented
-        ) {
-          event.preventDefault();
-          choose(null);
-        }
-      }}
     >
       {error ? (
         <p
@@ -1073,7 +880,6 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
           {error}
         </p>
       ) : null}
-      {layout === "cards" ? recovery : null}
       {providerMissing ? (
         <p role="alert" className="text-sm text-danger">
           This provider no longer exists. Your draft is retained. Close this
@@ -1081,13 +887,16 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
         </p>
       ) : null}
       <fieldset
-        disabled={busy || uncertain}
+        disabled={busy || uncertain || !connected}
         className="m-0 min-w-0 border-0 p-0"
       >
         <ProviderForm
           provider={provider}
           save={save}
-          busy={busy}
+          busy={busy || uncertain || !connected}
+          saving={busy}
+          recovery={recovery}
+          saveError={error}
           unavailable={providerMissing}
           onDeleted={() => {
             resetEditor();
@@ -1096,113 +905,84 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
           onDraft={providerDraft}
           onCancel={() => choose(null)}
           modelCount={models.length}
+          models={currentModels}
+          editOpen={editProvider}
+          onEdit={setEditProvider}
+          onDiscard={(proceed) => {
+            if (drafts.current.get("provider")) setDiscard(() => proceed);
+            else proceed();
+          }}
         />
       </fieldset>
       {provider ? (
         <section aria-label="Models" className="flex min-w-0 flex-col gap-3">
-          <h3 className="text-base font-medium">
-            Models <span className="text-fg-muted">{models.length}</span>
-          </h3>
-          {models.length === 0 ? (
-            <p className="text-sm text-fg-muted">No models configured.</p>
-          ) : null}
-          {layout === "split" ? (
-            <Table
-              label="Provider models"
-              columns={[
-                { key: "model", label: "Model" },
-                { key: "thinking", label: "Thinking", hideBelow: "sm" },
-              ]}
-            >
-              {models.map((model) => (
-                <ProviderModelEditor
-                  key={model.id}
-                  table
-                  provider={provider}
-                  model={model}
-                  save={save}
-                  busy={busy || uncertain}
-                  connectionDirty={connectionDirty}
-                  onDraft={modelDraft}
-                  unavailable={
-                    providerMissing ||
-                    !catalog?.models.some((item) => item.id === model.id)
-                  }
-                  onClose={
-                    !catalog?.models.some((item) => item.id === model.id)
-                      ? () => closeMissingModel(model.id)
-                      : undefined
-                  }
-                />
-              ))}
-            </Table>
-          ) : (
-            models.map((model) => (
-              <ProviderModelEditor
-                key={model.id}
-                provider={provider}
-                model={model}
-                save={save}
-                busy={busy || uncertain}
-                connectionDirty={connectionDirty}
-                onDraft={modelDraft}
-                unavailable={
-                  providerMissing ||
-                  !catalog?.models.some((item) => item.id === model.id)
-                }
-                onClose={
-                  !catalog?.models.some((item) => item.id === model.id)
-                    ? () => closeMissingModel(model.id)
-                    : undefined
-                }
-              />
-            ))
-          )}
           <ProviderModelEditor
             provider={provider}
             save={save}
-            busy={busy || uncertain}
+            busy={busy || uncertain || !connected}
+            saving={busy}
             connectionDirty={connectionDirty}
             onDraft={modelDraft}
+            recovery={recovery}
+            saveError={error}
             unavailable={providerMissing}
+            directory={(addAction) => (
+              <ModelDirectory
+                addAction={addAction}
+                modelCount={models.length}
+                provider={provider}
+                models={currentModels}
+                save={save}
+                disabled={
+                  busy ||
+                  uncertain ||
+                  !connected ||
+                  providerMissing ||
+                  connectionDirty
+                }
+                recovery={recovery}
+                saveError={error}
+              />
+            )}
+            onDiscard={(proceed) => {
+              if (drafts.current.get("new-model")) setDiscard(() => proceed);
+              else proceed();
+            }}
           />
+          {models.map((model) => (
+            <ProviderModelEditor
+              key={model.id}
+              provider={provider}
+              model={model}
+              save={save}
+              busy={busy || uncertain || !connected}
+              saving={busy}
+              connectionDirty={connectionDirty}
+              onDraft={modelDraft}
+              recovery={recovery}
+              saveError={error}
+              onDiscard={(proceed) => {
+                if (drafts.current.get(model.id)) setDiscard(() => proceed);
+                else proceed();
+              }}
+              unavailable={
+                providerMissing ||
+                !catalog?.models.some((item) => item.id === model.id)
+              }
+              onClose={
+                !catalog?.models.some((item) => item.id === model.id)
+                  ? () => closeMissingModel(model.id)
+                  : undefined
+              }
+            />
+          ))}
         </section>
       ) : null}
     </fieldset>
   );
-  const summary = (item: ProviderConfig) => (
-    <>
-      <span className="min-w-0 flex-1 wrap-anywhere font-medium">
-        {item.name}
-      </span>
-      <Chip>
-        {PROVIDERS.find((option) => option.value === item.api_type)?.label ??
-          item.api_type}
-      </Chip>
-      {item.api_key_set ? <Chip>Key stored</Chip> : null}
-    </>
-  );
-  const enabled = (item: ProviderConfig) => (
-    <label className="flex items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        aria-label={`Enable ${item.name}`}
-        checked={item.enabled}
-        disabled={
-          busy ||
-          uncertain ||
-          !catalog?.providers.some((provider) => provider.id === item.id)
-        }
-        onChange={(event) =>
-          void save("save_provider", item.id, { enabled: event.target.checked })
-        }
-      />
-      Enabled
-    </label>
-  );
   const activate = (id: string, target: HTMLElement) => {
     opener.current = target;
-    choose(selected === id && layout === "accordion" ? null : id);
+    choose(id);
   };
   const navigateList = (event: React.KeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -1219,9 +999,9 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
     ]?.focus();
   };
   return (
-    <div
-      className="model-settings flex min-w-0 flex-col gap-6"
-      data-provider-layout={layout}
+    <fieldset
+      aria-label="Model settings"
+      className="model-settings m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
     >
       {!catalog ? (
         <div
@@ -1232,7 +1012,7 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
       ) : (
         <>
           <fieldset
-            disabled={busy || uncertain}
+            disabled={busy || uncertain || !connected}
             className="m-0 min-w-0 border-0 p-0"
           >
             <DefaultModelForm
@@ -1243,24 +1023,8 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
               onDraft={reportDefaults}
             />
           </fieldset>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base font-medium">
-              Providers{" "}
-              <span className="text-fg-muted">{catalog.providers.length}</span>
-            </h2>
-            <Button
-              disabled={busy || uncertain}
-              variant="primary"
-              onClick={(event) => {
-                opener.current = event.currentTarget;
-                choose("new");
-              }}
-            >
-              Add
-            </Button>
-          </div>
-          {layout !== "cards" || !open ? recovery : null}
-          {error && (!open || layout === "cards") ? (
+          {recovery}
+          {error && !open ? (
             <p role="alert" className="text-sm text-danger">
               {error}
             </p>
@@ -1270,133 +1034,160 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
               Add a provider to configure its connection and models.
             </p>
           ) : null}
-          {layout === "cards" ? (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
-              {catalog.providers.map((item) => (
-                <section
-                  key={item.id}
-                  className="flex min-w-0 flex-col gap-4 rounded-md border border-line bg-surface p-5"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    {summary(item)}
-                  </div>
-                  <p className="text-sm text-fg-muted">
-                    {
-                      catalog.models.filter(
-                        (model) => model.provider_id === item.id,
-                      ).length
-                    }{" "}
-                    models
-                  </p>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    {enabled(item)}
-                    <Button
-                      disabled={busy}
-                      onClick={(event) =>
-                        activate(item.id, event.currentTarget)
-                      }
-                    >
-                      Edit
+          <div className="flex min-h-[580px] min-w-0 overflow-hidden rounded-md border border-line bg-surface">
+            <div
+              data-provider-list
+              className={`min-w-0 flex-col gap-3 border-line p-3 md:w-[280px] md:shrink-0 md:border-r ${open ? "hidden md:flex" : "flex w-full"}`}
+            >
+              <SearchField
+                icon={<Search size={16} />}
+                aria-label="Search providers"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <div className="flex-1">
+                {[true, false].map((group) => (
+                  <section
+                    key={String(group)}
+                    aria-label={
+                      group ? "Enabled providers" : "Disabled providers"
+                    }
+                  >
+                    <h3 className="py-2 text-xs text-fg-muted">
+                      {group ? "Enabled" : "Disabled"}
+                    </h3>
+                    {visibleProviders
+                      .filter(
+                        (item) =>
+                          item.enabled === group &&
+                          `${item.name} ${item.api_type}`
+                            .toLowerCase()
+                            .includes(search.toLowerCase()),
+                      )
+                      .map((item) => (
+                        <div
+                          key={item.id}
+                          className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 hover:bg-surface-hover ${selected === item.id ? "bg-surface-hover" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            data-provider-target
+                            className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
+                            aria-current={
+                              selected === item.id ? "true" : undefined
+                            }
+                            disabled={busy || uncertain || !connected}
+                            onKeyDown={navigateList}
+                            onClick={(event) =>
+                              activate(item.id, event.currentTarget)
+                            }
+                          >
+                            <span className="block font-medium">
+                              {item.name}
+                            </span>
+                            <span className="text-xs text-fg-muted">
+                              {item.api_type} ·{" "}
+                              {
+                                catalog.models.filter(
+                                  (model) => model.provider_id === item.id,
+                                ).length
+                              }{" "}
+                              models
+                            </span>
+                          </button>
+                          <OverflowMenu
+                            label={`Actions for ${item.name}`}
+                            actions={[
+                              {
+                                id: "edit",
+                                label: "Edit",
+                                disabled: busy || uncertain || !connected,
+                                onSelect: () => choose(item.id, true),
+                              },
+                              {
+                                id: "delete",
+                                label: "Delete",
+                                tone: "danger",
+                                disabled:
+                                  busy ||
+                                  uncertain ||
+                                  !connected ||
+                                  catalog.models.some(
+                                    (model) => model.provider_id === item.id,
+                                  ) ||
+                                  !catalog.providers.some(
+                                    (provider) => provider.id === item.id,
+                                  ),
+                                onSelect: () => setDeleteProvider(item),
+                              },
+                            ]}
+                          />
+                        </div>
+                      ))}
+                  </section>
+                ))}
+                {!visibleProviders.some((item) =>
+                  `${item.name} ${item.api_type}`
+                    .toLowerCase()
+                    .includes(search.toLowerCase()),
+                ) ? (
+                  <p className="text-sm text-fg-muted">No providers found</p>
+                ) : null}
+              </div>
+              <Button
+                disabled={busy || uncertain || !connected}
+                variant="primary"
+                onClick={(event) => {
+                  opener.current = event.currentTarget;
+                  choose("new");
+                }}
+              >
+                Add
+              </Button>
+            </div>
+            <div
+              className={`min-w-0 flex-1 p-6 ${open ? "block" : "hidden md:block"}`}
+            >
+              {open ? (
+                <>
+                  <div className="mb-4 md:hidden">
+                    <Button onClick={() => choose(null)}>
+                      Back to Providers
                     </Button>
                   </div>
-                </section>
-              ))}
-            </div>
-          ) : layout === "split" ? (
-            <div className="flex min-h-[580px] min-w-0 rounded-md border border-line bg-surface">
-              <div
-                data-provider-list
-                className={`min-w-0 flex-col border-line p-3 md:w-[280px] md:shrink-0 md:border-r ${open ? "hidden md:flex" : "flex w-full"}`}
-              >
-                {catalog.providers.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 ${selected === item.id ? "bg-surface-hover" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      data-provider-target
-                      className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
-                      aria-current={selected === item.id ? "true" : undefined}
-                      disabled={busy}
-                      onKeyDown={navigateList}
-                      onClick={(event) =>
-                        activate(item.id, event.currentTarget)
-                      }
-                    >
-                      {item.name}
-                    </button>
-                    {enabled(item)}
-                  </div>
-                ))}
-              </div>
-              <div
-                className={`min-w-0 flex-1 p-5 ${open ? "block" : "hidden md:block"}`}
-              >
-                {open ? (
-                  <>
-                    <div className="mb-4 md:hidden">
-                      <Button onClick={() => choose(null)}>
-                        ‹ Back to Providers
-                      </Button>
-                    </div>
-                    {content}
-                  </>
-                ) : (
-                  <p className="text-sm text-fg-muted">
-                    Select a provider to edit its connection and models.
-                  </p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div data-provider-list className="flex min-w-0 flex-col gap-3">
-              {selected === "new" ? (
-                <section className="rounded-md border border-line bg-surface p-5">
                   {content}
-                </section>
-              ) : null}
-              {visibleProviders.map((item) => (
-                <section
-                  key={item.id}
-                  className="min-w-0 rounded-md border border-line bg-surface"
-                >
-                  <div className="flex min-h-[52px] flex-wrap items-center gap-3 px-5 py-3">
-                    <button
-                      type="button"
-                      data-provider-target
-                      className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left"
-                      disabled={busy}
-                      aria-expanded={selected === item.id}
-                      onKeyDown={navigateList}
-                      onClick={(event) =>
-                        activate(item.id, event.currentTarget)
-                      }
-                    >
-                      {summary(item)}
-                    </button>
-                    {enabled(item)}
-                  </div>
-                  {selected === item.id ? (
-                    <div className="border-t border-line p-5">{content}</div>
-                  ) : null}
-                </section>
-              ))}
+                </>
+              ) : (
+                <EmptyState
+                  title="Select a provider"
+                  action={
+                    <p>Select a provider to edit its connection and models.</p>
+                  }
+                />
+              )}
             </div>
-          )}
-          {layout === "cards" ? (
-            <Modal
-              width="medium"
-              open={open}
-              onOpenChange={(next) => {
-                if (!next) choose(null);
-              }}
-              title={provider?.name ?? "Add provider"}
-              footer={null}
-            >
-              {content}
-            </Modal>
-          ) : null}
+          </div>
+          <ConfirmDialog
+            open={deleteProvider !== null}
+            onOpenChange={(next) => {
+              if (!next) setDeleteProvider(null);
+            }}
+            title={`Delete ${deleteProvider?.name}?`}
+            description="This provider will be removed. Remove its models first."
+            confirmLabel="Delete"
+            onConfirm={async () => {
+              if (
+                deleteProvider &&
+                (await save("delete_provider", deleteProvider.id))
+              ) {
+                if (selected === deleteProvider.id) {
+                  resetEditor();
+                  setSelected(null);
+                }
+                setDeleteProvider(null);
+              }
+            }}
+          />
         </>
       )}
       {!catalog && error ? (
@@ -1413,6 +1204,7 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
           if (!next) setDiscard(null);
         }}
         title="Discard unsaved changes?"
+        variant="confirm"
         description="Your changes have not been saved."
         footer={
           <>
@@ -1430,7 +1222,7 @@ export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
           </>
         }
       />
-    </div>
+    </fieldset>
   );
 }
 
@@ -1439,112 +1231,137 @@ function ProviderModelEditor({
   model,
   save,
   busy,
+  saving,
   connectionDirty,
   onDraft,
   unavailable = false,
   onClose,
-  table = false,
+  onDiscard,
+  recovery,
+  saveError,
+  directory,
 }: {
-  table?: boolean;
+  directory?: (addAction: ReactNode) => ReactNode;
+  recovery: ReactNode;
+  saveError: string | null;
   unavailable?: boolean;
   onClose?: () => void;
+  onDiscard: (proceed: () => void) => void;
   provider: ProviderConfig;
   model?: RegisteredModel;
   save: SaveModel;
   busy: boolean;
+  saving: boolean;
   connectionDirty: boolean;
   onDraft: (id: string, dirty: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const id = model?.id ?? "new-model";
   const report = useCallback(
     (dirty: boolean) => onDraft(id, dirty),
     [id, onDraft],
   );
   useEffect(() => () => onDraft(id, false), [id, onDraft]);
-  const recovery = onClose ? (
-    <div className="flex flex-col gap-2 p-3">
-      <p role="alert" className="text-sm text-danger">
-        This model no longer exists. Your draft is retained.
-      </p>
-      <Button disabled={busy} onClick={onClose}>
-        Close editor
-      </Button>
-    </div>
-  ) : null;
-  if (table && model)
-    return (
-      <>
-        <tr>
-          <td className="min-w-0">
-            <button
-              type="button"
-              className="flex min-h-11 flex-col text-left text-sm wrap-anywhere"
-              aria-expanded={expanded}
-              onClick={() => setExpanded((value) => !value)}
-            >
-              <span className="font-medium">{model.name}</span>
-              <span className="text-xs text-fg-muted">{model.model}</span>
-            </button>
-          </td>
-          <td data-hide-below="sm" className="text-xs text-fg-muted">
-            {model.thinking_budget_tokens
-              ? `${model.thinking_budget_tokens} tokens`
-              : model.thinking_options.join(", ")}
-          </td>
-        </tr>
-        <tr hidden={!expanded} inert={!expanded}>
-          <td colSpan={2}>
+  const close = () => {
+    if (busy) return;
+    onDiscard(() => {
+      setExpanded(false);
+      report(false);
+      onClose?.();
+    });
+  };
+  const addAction = (
+    <Button disabled={busy || unavailable} onClick={() => setExpanded(true)}>
+      Add model
+    </Button>
+  );
+  return (
+    <section
+      className={
+        model
+          ? "flex min-h-11 min-w-0 flex-wrap items-center justify-between gap-2 border-t border-line py-2"
+          : "flex min-w-0 flex-col gap-3"
+      }
+    >
+      {model ? (
+        <>
+          <div className="min-w-0 flex-1 wrap-anywhere text-sm">
+            <p className="font-medium">{model.name}</p>
+            <p className="text-xs text-fg-muted">{model.model}</p>
+          </div>
+          <Chip>{provider.api_type}</Chip>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label={`Enable model ${model.name}`}
+              checked={model.enabled}
+              disabled={busy || unavailable}
+              onChange={(event) =>
+                void save("save_model", model.id, {
+                  enabled: event.target.checked,
+                })
+              }
+            />
+            Enabled
+          </label>
+          <Button size="sm" disabled={busy} onClick={() => setExpanded(true)}>
+            Edit
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy || unavailable}
+            onClick={() => setDeleting(true)}
+          >
+            Delete
+          </Button>
+        </>
+      ) : (
+        directory?.(addAction)
+      )}
+      <Modal
+        open={expanded}
+        variant="form"
+        title={model ? "Edit model" : "Add model"}
+        onOpenChange={(open) => {
+          if (!open) close();
+        }}
+      >
+        {expanded ? (
+          <>
             {recovery}
+            {saveError ? <p role="alert">{saveError}</p> : null}
+            {unavailable ? (
+              <p role="alert" className="text-sm text-danger">
+                This model or provider no longer exists. Your draft is retained.
+              </p>
+            ) : null}
             <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
               <ModelForm
                 provider={provider}
                 model={model}
                 save={save}
                 busy={busy}
+                saving={saving}
                 onDraft={report}
                 connectionDirty={connectionDirty}
                 unavailable={unavailable}
+                onClose={close}
               />
             </fieldset>
-          </td>
-        </tr>
-      </>
-    );
-  return (
-    <section className="min-w-0 rounded border border-line">
-      <button
-        type="button"
-        className="flex min-h-11 w-full min-w-0 flex-wrap items-center justify-between gap-2 p-3 text-left text-sm"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <span className="min-w-0 wrap-anywhere font-medium">
-          {model?.name ?? "Add model"}
-        </span>
-        {model ? (
-          <span className="min-w-0 wrap-anywhere text-xs text-fg-muted">
-            {model.model}
-          </span>
+          </>
         ) : null}
-      </button>
-      {recovery}
-      <fieldset
-        hidden={!expanded}
-        inert={!expanded}
-        disabled={busy}
-        className="m-0 min-w-0 border-0 p-4"
-      >
-        <ModelForm
-          provider={provider}
-          model={model}
-          save={save}
-          busy={busy}
-          onDraft={report}
-          connectionDirty={connectionDirty}
-          unavailable={unavailable}
-        />
-      </fieldset>
+      </Modal>
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title={`Delete ${model?.name}?`}
+        description="This model will be removed. Referenced models cannot be deleted."
+        confirmLabel="Delete"
+        onConfirm={async () => {
+          if (model && !unavailable) await save("delete_model", model.id);
+        }}
+      />
     </section>
   );
 }
@@ -1609,16 +1426,30 @@ function ProviderForm({
   provider,
   save,
   busy,
+  saving,
   onDeleted,
   onDraft,
   onCancel,
   unavailable = false,
   modelCount = 0,
+  recovery,
+  saveError,
+  models,
+  editOpen,
+  onEdit,
+  onDiscard,
 }: {
+  models: RegisteredModel[];
+  recovery: ReactNode;
+  saveError: string | null;
+  editOpen: boolean;
+  onEdit: (open: boolean) => void;
+  onDiscard: (proceed: () => void) => void;
   provider?: ProviderConfig;
   unavailable?: boolean;
   save: SaveModel;
   busy: boolean;
+  saving: boolean;
   onDeleted: () => void;
   onDraft?: (dirty: boolean, connectionDirty: boolean) => void;
   onCancel?: () => void;
@@ -1639,6 +1470,8 @@ function ProviderForm({
   const restoreBodyFocus = useRef(false);
   const [nameError, setNameError] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
   const dirty = useRef(false);
   const body = parseRequestBody(extraBody, apiType);
   const error = body.error ?? bodyError;
@@ -1675,7 +1508,23 @@ function ProviderForm({
       setBodyError(null);
     }
   }, [provider]);
-  return (
+  const cancel = () => {
+    if (busy) return;
+    onDiscard(() => {
+      dirty.current = false;
+      setName(provider?.name ?? "");
+      setApiType(provider?.api_type ?? "openai-chat");
+      setBaseUrl(provider?.base_url ?? "");
+      setApiKey("");
+      setClearKey(false);
+      setExtraBody(JSON.stringify(provider?.extra_body ?? {}));
+      setBodyError(null);
+      onDraft?.(false, false);
+      onEdit(false);
+      if (!provider) onCancel?.();
+    });
+  };
+  const fields = (
     <form
       className="provider-form flex flex-col gap-4"
       onChangeCapture={() => {
@@ -1685,7 +1534,8 @@ function ProviderForm({
         event.preventDefault();
         if (unavailable) return;
         if (body.error !== null) {
-          bodyInput.current?.focus();
+          setAdvanced(true);
+          requestAnimationFrame(() => bodyInput.current?.focus());
           return;
         }
         setBodyError(null);
@@ -1710,6 +1560,7 @@ function ProviderForm({
             },
             (message) => {
               setBodyError(message);
+              setAdvanced(true);
               restoreBodyFocus.current = true;
             },
           )
@@ -1719,109 +1570,161 @@ function ProviderForm({
           setBaseUrl(baseUrl.trim());
           setApiKey("");
           setClearKey(false);
+          onEdit(false);
         }
       }}
     >
-      <Field
-        label="Provider name"
-        htmlFor={`${id}-name`}
-        hint={nameError ? "Enter a provider name." : undefined}
-      >
-        <Input
-          id={`${id}-name`}
-          value={name}
-          required
-          aria-invalid={nameError}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
-      <Field label="API type">
-        <div className="min-w-0 overflow-x-auto">
-          <Segmented
-            label="API type"
-            value={apiType}
-            options={PROVIDERS}
-            onChange={(value) => {
-              dirty.current = true;
-              setApiType(value);
-              setBodyError(null);
-            }}
-          />
-        </div>
-
-      </Field>
-      <Field
-        label={
-          <span className="inline-flex items-center gap-1">
-            <label htmlFor={`${id}-body`}>Custom request body</label>
-            <Tooltip label="Add a JSON object to every model request for this provider. Supports OpenAI Chat, OpenAI Responses and Anthropic. Maximum 16 KiB of UTF-8 JSON and 16 container levels. Explicit fields take priority over thinking settings; nested objects are replaced as a whole. Changes apply to the next Turn. Clear the field to remove all custom content. Omit a key to remove it; null is sent as a real JSON null.">
-              <button
-                type="button"
-                aria-label="About custom request body"
-                className="inline-flex cursor-help"
-              >
-                <CircleHelp size={14} />
-              </button>
-            </Tooltip>
-          </span>
-        }
-      >
-        <Textarea
-          id={`${id}-body`}
-          ref={bodyInput}
-          rows={6}
-          spellCheck={false}
-          value={extraBody}
-          aria-invalid={error !== null}
-          aria-describedby={`${id}-body-hint${error ? ` ${id}-body-error` : ""}`}
-          onChange={(event) => {
-            setExtraBody(event.target.value);
-            setBodyError(null);
-          }}
-        />
-        <p id={`${id}-body-hint`} className="text-xs text-fg-muted">
-          {apiType === "google"
-            ? "This API does not support a custom request body. Clear it before saving."
-            : "Optional JSON object · 16 KiB maximum · applies to the next Turn."}
+      {editOpen ? recovery : null}
+      {editOpen && saveError ? <p role="alert">{saveError}</p> : null}
+      {unavailable && editOpen ? (
+        <p role="alert">
+          This provider no longer exists. Your draft is retained.
         </p>
-        {error ? (
-          <p
-            id={`${id}-body-error`}
-            role="alert"
-            className="text-xs text-danger"
+      ) : null}
+      <fieldset
+        disabled={busy}
+        className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
+      >
+        {editOpen || !provider ? (
+          <>
+            <Field
+              label="Provider name"
+              htmlFor={`${id}-name`}
+              hint={nameError ? "Enter a provider name." : undefined}
+            >
+              <Input
+                id={`${id}-name`}
+                value={name}
+                required
+                aria-invalid={nameError}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </Field>
+            <Field label="Protocol">
+              <div className="min-w-0 overflow-x-auto">
+                <Choices
+                  label="Protocol"
+                  value={apiType}
+                  options={PROVIDERS}
+                  onChange={(value) => {
+                    dirty.current = true;
+                    setApiType(value);
+                    setBodyError(null);
+                  }}
+                />
+              </div>
+            </Field>
+          </>
+        ) : null}
+        <Field
+          label="API key"
+          htmlFor={`${id}-key`}
+          hint={
+            provider?.api_key_set
+              ? "Leave blank to keep the stored key."
+              : undefined
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-1 basis-40">
+              <Input
+                id={`${id}-key`}
+                type={showKey ? "text" : "password"}
+                autoComplete="off"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+              />
+            </div>
+            <IconButton
+              label={showKey ? "Hide API key" : "Show API key"}
+              size="sm"
+              onClick={() => setShowKey((value) => !value)}
+            >
+              {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+            </IconButton>
+            {provider?.api_key_set ? (
+              <Chip tone="success">Key stored</Chip>
+            ) : null}
+            {provider ? (
+              <ProviderTest
+                provider={provider}
+                models={models}
+                disabled={busy || unavailable || connectionDirty}
+              />
+            ) : null}
+          </div>
+        </Field>
+        <Field label="API address" htmlFor={`${id}-url`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-1 basis-40">
+              <Input
+                id={`${id}-url`}
+                value={baseUrl}
+                placeholder="https://api.example.com/v1"
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </div>
+            <IconButton
+              label="Advanced settings"
+              size="sm"
+              onClick={() => setAdvanced((value) => !value)}
+            >
+              <Settings size={16} />
+            </IconButton>
+          </div>
+        </Field>
+        {advanced || editOpen ? (
+          <Field
+            label={
+              <span className="inline-flex items-center gap-1">
+                <label htmlFor={`${id}-body`}>Custom request body</label>
+                <Tooltip label="Add a JSON object to every model request for this provider. Supports OpenAI Chat, OpenAI Responses and Anthropic. Maximum 16 KiB of UTF-8 JSON and 16 container levels. Explicit fields take priority over thinking settings; nested objects are replaced as a whole. Changes apply to the next Turn. Clear the field to remove all custom content. Omit a key to remove it; null is sent as a real JSON null.">
+                  <button
+                    type="button"
+                    aria-label="About custom request body"
+                    className="inline-flex cursor-help"
+                  >
+                    <CircleHelp size={14} />
+                  </button>
+                </Tooltip>
+              </span>
+            }
           >
-            {error}
+            <Textarea
+              id={`${id}-body`}
+              ref={bodyInput}
+              rows={6}
+              spellCheck={false}
+              value={extraBody}
+              aria-invalid={error !== null}
+              aria-describedby={`${id}-body-hint${error ? ` ${id}-body-error` : ""}`}
+              onChange={(event) => {
+                setExtraBody(event.target.value);
+                setBodyError(null);
+              }}
+            />
+            <p id={`${id}-body-hint`} className="text-xs text-fg-muted">
+              {apiType === "google"
+                ? "This API does not support a custom request body. Clear it before saving."
+                : "Optional JSON object · 16 KiB maximum · applies to the next Turn."}
+            </p>
+            {error ? (
+              <p
+                id={`${id}-body-error`}
+                role="alert"
+                className="text-xs text-danger"
+              >
+                {error}
+              </p>
+            ) : null}
+          </Field>
+        ) : null}
+        {connectionDirty && provider ? (
+          <p className="text-sm text-fg-muted">
+            Save provider connection before reading its model list or testing.
           </p>
         ) : null}
-      </Field>
-      <Field label="Base URL" htmlFor={`${id}-url`}>
-        <Input
-          id={`${id}-url`}
-          value={baseUrl}
-          placeholder="https://api.example.com/v1"
-          onChange={(event) => setBaseUrl(event.target.value)}
-        />
-      </Field>
-      <Field
-        label="API key"
-        htmlFor={`${id}-key`}
-        hint={
-          provider?.api_key_set
-            ? "Leave blank to keep the stored key."
-            : undefined
-        }
-      >
-        <Input
-          id={`${id}-key`}
-          type="password"
-          autoComplete="off"
-          value={apiKey}
-          onChange={(event) => setApiKey(event.target.value)}
-        />
-      </Field>
-      {provider?.api_key_set ? (
-        <>
-          <Chip tone="success">Key stored</Chip>
+        {provider?.api_key_set ? (
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -1830,36 +1733,28 @@ function ProviderForm({
             />
             Clear stored key
           </label>
-        </>
-      ) : null}
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => setEnabled(event.target.checked)}
-        />
-        Enabled
-      </label>
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" variant="primary" disabled={unavailable}>
-          {busy ? <Spinner label="Saving provider" /> : null}
-          {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
-        </Button>
-        {onCancel ? <Button onClick={onCancel}>Cancel</Button> : null}
-        {provider ? (
-          <Button
-            disabled={unavailable || modelCount > 0}
-            onClick={() => setConfirmDelete(true)}
-          >
-            {onDraft ? "Delete" : "Delete provider"}
-          </Button>
         ) : null}
-      </div>
-      {modelCount > 0 ? (
-        <p className="text-sm text-fg-muted">
-          Remove this provider's models first.
-        </p>
-      ) : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" variant="primary" disabled={unavailable}>
+            {saving ? <Spinner label="Saving provider" /> : null}
+            {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
+          </Button>
+          <Button onClick={editOpen ? cancel : onCancel}>Cancel</Button>
+          {provider ? (
+            <Button
+              disabled={unavailable || modelCount > 0}
+              onClick={() => setConfirmDelete(true)}
+            >
+              {onDraft ? "Delete" : "Delete provider"}
+            </Button>
+          ) : null}
+        </div>
+        {modelCount > 0 ? (
+          <p className="text-sm text-fg-muted">
+            Remove this provider's models first.
+          </p>
+        ) : null}
+      </fieldset>
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
@@ -1877,6 +1772,367 @@ function ProviderForm({
       />
     </form>
   );
+  return (
+    <>
+      {provider ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="wrap-anywhere text-base font-medium">
+              {provider.name}
+            </h2>
+            <Chip>{provider.api_type}</Chip>
+            <IconButton
+              label="Edit provider"
+              size="sm"
+              disabled={busy}
+              onClick={() => onEdit(true)}
+            >
+              <Pencil size={16} />
+            </IconButton>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label={`Enable ${provider.name}`}
+              checked={provider.enabled}
+              disabled={busy || unavailable}
+              onChange={(event) =>
+                void save("save_provider", provider.id, {
+                  enabled: event.target.checked,
+                })
+              }
+            />
+            Enabled
+          </label>
+        </div>
+      ) : null}
+      {editOpen ? (
+        <Modal
+          open
+          variant="form"
+          title={provider ? "Edit provider" : "Add provider"}
+          onOpenChange={(open) => {
+            if (!open) cancel();
+          }}
+        >
+          {fields}
+        </Modal>
+      ) : (
+        fields
+      )}
+    </>
+  );
+}
+
+function useModelProbe(identity: string, disabled: boolean) {
+  const [testing, setTesting] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const generation = useRef(0);
+  const inFlight = useRef<number | null>(null);
+  useEffect(() => {
+    generation.current += 1;
+    inFlight.current = null;
+    setTesting(false);
+    setFeedback(null);
+    const off = backend.onEvent((event) => {
+      if (
+        event.type === "connection.restored" ||
+        event.type === "connection.closed" ||
+        event.type === "connection.reconnecting"
+      ) {
+        generation.current += 1;
+        inFlight.current = null;
+        setTesting(false);
+        setFeedback(null);
+      }
+    });
+    return () => {
+      generation.current += 1;
+      off();
+    };
+  }, [identity, disabled]);
+  const run = async (values: Record<string, unknown>) => {
+    if (disabled || inFlight.current !== null) return;
+    const request = ++generation.current;
+    inFlight.current = request;
+    setTesting(true);
+    setFeedback(null);
+    try {
+      const result = await backend.call<{ latency_ms: number; reply: string }>(
+        "settings.test_model",
+        values,
+      );
+      if (request !== generation.current) return;
+      setFeedback(modelTestDescription(result.latency_ms, result.reply));
+    } catch (failure) {
+      if (request !== generation.current) return;
+      setFeedback(failure instanceof Error ? failure.message : String(failure));
+      if (failure instanceof BackendError && failure.transport)
+        backend.reportFailure(failure);
+    } finally {
+      if (request === generation.current) {
+        inFlight.current = null;
+        setTesting(false);
+      }
+    }
+  };
+  return { testing, feedback, run };
+}
+
+function ProviderTest({
+  provider,
+  models,
+  disabled,
+}: {
+  provider: ProviderConfig;
+  models: RegisteredModel[];
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState("");
+  const [thinking, setThinking] = useState<Thinking>("default");
+  const model = models.find((item) => item.id === selected);
+  const unavailable = disabled || !open || !model;
+  const test = useModelProbe(
+    JSON.stringify([provider, model, thinking]),
+    unavailable,
+  );
+  return (
+    <>
+      <Button disabled={disabled} onClick={() => setOpen(true)}>
+        Test
+      </Button>
+      <Modal
+        open={open}
+        variant="form"
+        title="Test provider model"
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setSelected("");
+        }}
+      >
+        {models.length === 0 ? (
+          <p>Add a model before testing this provider.</p>
+        ) : (
+          <>
+            <Field label="Saved model">
+              <select
+                className={selectClass}
+                aria-label="Saved model"
+                value={selected}
+                onChange={(event) => {
+                  setSelected(event.target.value);
+                  setThinking("default");
+                }}
+              >
+                <option value="">Select a model</option>
+                {models.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Test thinking effort">
+              <select
+                className={selectClass}
+                aria-label="Test thinking effort"
+                value={thinking}
+                onChange={(event) =>
+                  setThinking(event.target.value as Thinking)
+                }
+              >
+                {(model?.thinking_options ?? THINKING_OPTIONS).map((option) => (
+                  <option key={option} value={option}>
+                    {thinkingLabel(option, model?.thinking_budget_tokens)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <p className="text-sm text-fg-muted">
+              Uses the saved provider and model configuration for one request.
+            </p>
+            <Button
+              disabled={unavailable || test.testing}
+              onClick={() => {
+                if (model) void test.run({ model_id: model.id, thinking });
+              }}
+            >
+              {test.testing ? <Spinner label="Testing" /> : null}Test
+            </Button>
+          </>
+        )}
+        {test.feedback ? <p role="status">{test.feedback}</p> : null}
+      </Modal>
+    </>
+  );
+}
+
+function ModelDirectory({
+  provider,
+  models,
+  save,
+  disabled,
+  recovery,
+  addAction,
+  modelCount,
+  saveError,
+}: {
+  provider: ProviderConfig;
+  models: RegisteredModel[];
+  save: SaveModel;
+  disabled: boolean;
+  recovery: ReactNode;
+  saveError: string | null;
+  addAction: ReactNode;
+  modelCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<string[]>([]);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const reading = useRef<number | null>(null);
+  const inFlight = useRef(false);
+  const signature = JSON.stringify(provider);
+  useEffect(() => {
+    generation.current += 1;
+    reading.current = null;
+    setLoading(false);
+    const off = backend.onEvent((event) => {
+      if (
+        event.type === "connection.restored" ||
+        event.type === "connection.closed" ||
+        event.type === "connection.reconnecting"
+      ) {
+        generation.current += 1;
+        reading.current = null;
+        setLoadedFor(null);
+        setLoading(false);
+      }
+    });
+    return () => {
+      generation.current += 1;
+      reading.current = null;
+      off();
+    };
+  }, [signature, disabled, open]);
+  const load = useCallback(async () => {
+    if (disabled || reading.current !== null) return;
+    const request = ++generation.current;
+    reading.current = request;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await backend.call<{ models: string[] }>(
+        "settings.list_models",
+        { provider_id: provider.id },
+      );
+      if (request === generation.current) {
+        setOptions(result.models);
+        setLoadedFor(signature);
+      }
+    } catch (failure) {
+      if (request !== generation.current) return;
+      setError(failure instanceof Error ? failure.message : String(failure));
+      if (failure instanceof BackendError && failure.transport)
+        backend.reportFailure(failure);
+    } finally {
+      if (request === generation.current) {
+        reading.current = null;
+        setLoading(false);
+      }
+    }
+  }, [disabled, provider.id, signature]);
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+  const actions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button disabled={disabled} onClick={() => setOpen(true)}>
+        Get model list
+      </Button>
+      {addAction}
+    </div>
+  );
+  const filtered = options.filter((item) =>
+    item.toLowerCase().includes(search.toLowerCase()),
+  );
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-base font-medium">
+          Models <span className="text-fg-muted">{modelCount}</span>
+        </h3>
+        {modelCount > 0 ? actions : null}
+      </div>
+      {modelCount === 0 ? (
+        <EmptyState title="No models configured" action={actions} />
+      ) : null}
+      <Modal
+        open={open}
+        variant="form"
+        title="Model list"
+        onOpenChange={setOpen}
+      >
+        {recovery}
+        <SearchField
+          icon={<Search size={16} />}
+          aria-label="Search models"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        {loading ? <Spinner label="Loading model list" /> : null}
+        {error ? <p role="alert">{error}</p> : null}
+        {saveError ? <p role="alert">{saveError}</p> : null}
+        <Button disabled={disabled || loading} onClick={() => void load()}>
+          Retry
+        </Button>
+        {!loading &&
+        !error &&
+        loadedFor === signature &&
+        options.length === 0 ? (
+          <EmptyState title="No models returned" />
+        ) : null}
+        {options.length > 0 && filtered.length === 0 ? (
+          <p className="text-sm text-fg-muted">No matching models</p>
+        ) : null}
+        {filtered.map((remote) => {
+          const added = models.some((model) => model.model === remote);
+          return (
+            <div
+              key={remote}
+              className="flex min-w-0 items-center justify-between gap-3"
+            >
+              <span className="wrap-anywhere text-sm">{remote}</span>
+              <Button
+                disabled={disabled || added || loadedFor !== signature}
+                onClick={async () => {
+                  if (inFlight.current) return;
+                  inFlight.current = true;
+                  try {
+                    await save("save_model", null, {
+                      provider_id: provider.id,
+                      model: remote,
+                      name: remote,
+                      enabled: true,
+                      thinking_budget_tokens: null,
+                    });
+                  } finally {
+                    inFlight.current = false;
+                  }
+                }}
+              >
+                {added ? "Added" : "Add"}
+              </Button>
+            </div>
+          );
+        })}
+      </Modal>
+    </>
+  );
 }
 
 function ModelForm({
@@ -1884,15 +2140,19 @@ function ModelForm({
   model,
   save,
   busy,
+  saving,
   onDraft,
   connectionDirty = false,
   unavailable = false,
+  onClose,
 }: {
+  onClose?: () => void;
   provider: ProviderConfig;
   unavailable?: boolean;
   model?: RegisteredModel;
   save: SaveModel;
   busy: boolean;
+  saving: boolean;
   onDraft?: (dirty: boolean) => void;
   connectionDirty?: boolean;
 }) {
@@ -1905,19 +2165,10 @@ function ModelForm({
   );
   const [options, setOptions] = useState<string[]>([]);
   const [listing, setListing] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [thinking, setThinking] = useState<Thinking>("default");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const testRequest = useRef(0);
-  useEffect(() => {
-    testRequest.current += 1;
-    setTesting(false);
-    setFeedback(null);
-    return () => {
-      testRequest.current += 1;
-    };
-  }, [provider, remote, budgetTokens, thinking, unavailable]);
+
   const draftDirty =
     name !== (model?.name ?? "") ||
     remote !== (model?.model ?? "") ||
@@ -1951,15 +2202,30 @@ function ModelForm({
     }
   }, [model]);
   useEffect(() => {
+    setEnabled(model?.enabled ?? true);
+  }, [model?.enabled]);
+  useEffect(() => {
     listRequest.current += 1;
     setOptions([]);
     setListing(false);
+    const off = backend.onEvent((event) => {
+      if (
+        event.type === "connection.restored" ||
+        event.type === "connection.closed" ||
+        event.type === "connection.reconnecting"
+      ) {
+        listRequest.current += 1;
+        setOptions([]);
+        setListing(false);
+      }
+    });
     return () => {
       listRequest.current += 1;
+      off();
     };
-  }, [provider, unavailable]);
+  }, [provider, unavailable, connectionDirty, busy]);
   const listModels = async () => {
-    if (unavailable) return;
+    if (unavailable || connectionDirty || busy || listing) return;
     const request = ++listRequest.current;
     setListing(true);
     try {
@@ -1984,46 +2250,27 @@ function ModelForm({
       if (request === listRequest.current) setListing(false);
     }
   };
-  const testModel = async () => {
-    if (unavailable || !validTestSelection || !remote.trim() || connectionDirty)
-      return;
-    const request = ++testRequest.current;
-    setTesting(true);
-    setFeedback(null);
-    try {
-      const result = await backend.call<{ latency_ms: number; reply: string }>(
-        "settings.test_model",
-        model
-          ? { model_id: model.id, thinking }
-          : {
-              provider_id: provider.id,
-              model: remote.trim(),
-              thinking,
-              thinking_budget_tokens: budgetSupported ? parsedBudget : null,
-            },
-      );
-      if (request !== testRequest.current) return;
-      setFeedback(modelTestDescription(result.latency_ms, result.reply));
-      toast({
-        tone: "success",
-        title: "Model responded",
-        description: modelTestDescription(result.latency_ms, result.reply),
-      });
-    } catch (error) {
-      if (request !== testRequest.current) return;
-      setFeedback(error instanceof Error ? error.message : String(error));
-      if (error instanceof BackendError && error.transport)
-        backend.reportFailure(error);
-      else
-        toast({
-          tone: "danger",
-          title: "Model test failed",
-          description: error instanceof Error ? error.message : String(error),
-        });
-    } finally {
-      if (request === testRequest.current) setTesting(false);
-    }
-  };
+  const test = useModelProbe(
+    JSON.stringify([provider, model, remote, budgetTokens, thinking]),
+    busy ||
+      unavailable ||
+      connectionDirty ||
+      !validTestSelection ||
+      !remote.trim() ||
+      budgetChanged ||
+      Boolean(model && remote !== model.model),
+  );
+  const testModel = () =>
+    test.run(
+      model
+        ? { model_id: model.id, thinking }
+        : {
+            provider_id: provider.id,
+            model: remote.trim(),
+            thinking,
+            thinking_budget_tokens: budgetSupported ? parsedBudget : null,
+          },
+    );
   return (
     <form
       className="model-form flex flex-col gap-4"
@@ -2064,6 +2311,9 @@ function ModelForm({
           if (model) {
             setName(name.trim() || remote.trim());
             setRemote(remote.trim());
+            setBudgetTokens(
+              budgetSupported ? (parsedBudget?.toString() ?? "") : "",
+            );
           }
           if (!model) {
             setName("");
@@ -2075,17 +2325,17 @@ function ModelForm({
         }
       }}
     >
-      <Field label="Model name" htmlFor={`${id}-name`}>
+      <Field label="Display name" htmlFor={`${id}-name`}>
         <Input
           id={`${id}-name`}
           value={name}
           onChange={(event) => setName(event.target.value)}
         />
       </Field>
-      <Field label="Remote model ID" htmlFor={`${id}-remote`}>
+      <Field label="Model ID" htmlFor={`${id}-remote`}>
         <Combobox
           id={`${id}-remote`}
-          label="Remote model ID"
+          label="Model ID"
           value={remote}
           onChange={(value) => {
             dirty.current = true;
@@ -2146,20 +2396,21 @@ function ModelForm({
       ) : model && (budgetChanged || remote !== model.model) ? (
         <p className="text-sm text-fg-muted">Save model changes first.</p>
       ) : null}
-      {feedback ? (
+      {feedback || test.feedback ? (
         <p role="status" className="text-sm">
-          {feedback}
+          {test.feedback ?? feedback}
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
         <Button type="submit" variant="primary" disabled={unavailable}>
-          {busy ? <Spinner label="Saving model" /> : null}
-          {model ? "Save model" : "Add model"}
+          {saving ? <Spinner label="Saving model" /> : null}
+          Save
         </Button>
+        {onClose ? <Button onClick={onClose}>Cancel</Button> : null}
         <Button
           disabled={
             unavailable ||
-            testing ||
+            test.testing ||
             connectionDirty ||
             !provider.api_key_set ||
             !remote.trim() ||
@@ -2169,10 +2420,13 @@ function ModelForm({
           }
           onClick={() => void testModel()}
         >
-          {testing ? <Spinner label="Testing" /> : null}Test
+          {test.testing ? <Spinner label="Testing" /> : null}Test
         </Button>
         {model ? (
-          <Button disabled={unavailable} onClick={() => setConfirmDelete(true)}>
+          <Button
+            disabled={unavailable || busy}
+            onClick={() => setConfirmDelete(true)}
+          >
             Delete model
           </Button>
         ) : null}

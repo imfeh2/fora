@@ -58,6 +58,12 @@ beforeAll(async () => {
   vi.stubGlobal("AbortController", dom.window.AbortController);
   vi.stubGlobal("AbortSignal", dom.window.AbortSignal);
   vi.stubGlobal("getComputedStyle", dom.window.getComputedStyle);
+  for (const key of ["NodeFilter", "HTMLInputElement", "HTMLFormElement"])
+    vi.stubGlobal(key, Reflect.get(dom.window, key));
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    setTimeout(() => callback(0), 0),
+  );
+  vi.stubGlobal("cancelAnimationFrame", clearTimeout);
   dom.window.requestAnimationFrame = vi.fn();
   dom.window.cancelAnimationFrame = vi.fn();
   await import("react");
@@ -129,26 +135,6 @@ class ResizeObserverStub {
   unobserve() {}
 
   disconnect() {}
-}
-
-function getModelForm(element: HTMLElement): HTMLFormElement {
-  const form = element.closest("form");
-  if (!form) throw new Error("Model form is missing");
-  return form;
-}
-
-async function getModelsSection(settings: ReturnType<typeof within>) {
-  const heading = await settings.findByRole("heading", { name: "Models" });
-  const section = heading.closest("section");
-  if (!section) throw new Error("Models section is missing");
-  return within(section);
-}
-
-function getAddModelToggle(
-  models: ReturnType<typeof within>,
-  expanded: boolean,
-): HTMLElement {
-  return models.getByRole("button", { name: "Add model", expanded });
 }
 
 async function prepareApplication() {
@@ -232,85 +218,44 @@ describe("Settings save navigation", () => {
 describe("mounted Settings interactions", () => {
   beforeEach(prepareApplication);
 
-  it("resets new Model fields between Providers and retains them on collapse", async () => {
+  it("protects new Model drafts and resets them after explicit discard and provider change", async () => {
     await openSettings("model");
-    const settings = within(
-      await screen.findByRole("group", { name: "Model settings" }),
+    await screen.findByRole("group", { name: "Model settings" });
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Provider A.*openai-chat/ }),
     );
-    const provider = await settings.findByLabelText("Provider");
-    fireEvent.change(provider, { target: { value: "provider-a" } });
-
-    let models = await getModelsSection(settings);
-    fireEvent.click(getAddModelToggle(models, false));
-    const name = await models.findByLabelText("Model name");
-    const form = getModelForm(name);
-    const remote = within(form).getByRole("combobox", {
-      name: "Remote model ID",
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    const name = await screen.findByLabelText("Display name");
+    fireEvent.change(name, { target: { value: "A draft" } });
+    fireEvent.change(screen.getByLabelText("Model ID"), {
+      target: { value: "remote-a" },
     });
-    const enabled = within(form).getByRole("checkbox", { name: "Enabled" });
-
-    act(() => {
-      fireEvent.change(name, { target: { value: "A draft" } });
-      fireEvent.change(remote, { target: { value: "remote-a" } });
-      fireEvent.click(enabled);
-    });
-
-    fireEvent.change(provider, { target: { value: "provider-b" } });
-    models = await getModelsSection(settings);
-    fireEvent.click(getAddModelToggle(models, false));
-    const nameB = await models.findByLabelText("Model name");
-    const formB = getModelForm(nameB);
-    expect((nameB as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep Editing" }));
     expect(
-      (
-        within(formB).getByRole("combobox", {
-          name: "Remote model ID",
-        }) as HTMLInputElement
-      ).value,
+      (screen.getByLabelText("Display name") as HTMLInputElement).value,
+    ).toBe("A draft");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Display name")).toBeNull(),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Provider B.*openai-chat/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    expect(
+      ((await screen.findByLabelText("Display name")) as HTMLInputElement)
+        .value,
     ).toBe("");
+    expect((screen.getByLabelText("Model ID") as HTMLInputElement).value).toBe(
+      "",
+    );
     expect(
-      (
-        within(formB).getByRole("checkbox", {
-          name: "Enabled",
-        }) as HTMLInputElement
-      ).checked,
+      (screen.getByRole("checkbox", { name: "Enabled" }) as HTMLInputElement)
+        .checked,
     ).toBe(true);
-
-    fireEvent.change(provider, { target: { value: "provider-a" } });
-    models = await getModelsSection(settings);
-    fireEvent.click(getAddModelToggle(models, false));
-    const nameA = await models.findByLabelText("Model name");
-    const formA = getModelForm(nameA);
-    expect((nameA as HTMLInputElement).value).toBe("");
-    const remoteA = within(formA).getByRole("combobox", {
-      name: "Remote model ID",
-    }) as HTMLInputElement;
-    expect(remoteA.value).toBe("");
-    const enabledA = within(formA).getByRole("checkbox", {
-      name: "Enabled",
-    }) as HTMLInputElement;
-    expect(enabledA.checked).toBe(true);
-
-    act(() => {
-      fireEvent.change(nameA, { target: { value: "Retained draft" } });
-      fireEvent.change(remoteA, { target: { value: "retained-remote" } });
-      fireEvent.click(enabledA);
-    });
-    const toggleA = getAddModelToggle(models, true);
-    fireEvent.click(toggleA);
-    expect(toggleA.getAttribute("aria-expanded")).toBe("false");
-    expect(toggleA.isConnected).toBe(true);
-    fireEvent.click(toggleA);
-    expect(toggleA.getAttribute("aria-expanded")).toBe("true");
-
-    const retainedName = await models.findByLabelText("Model name");
-    expect((retainedName as HTMLInputElement).value).toBe("Retained draft");
-    expect(getModelForm(retainedName)).toBe(formA);
-    expect(remoteA.isConnected).toBe(true);
-    expect(enabledA.isConnected).toBe(true);
-    expect(remoteA.value).toBe("retained-remote");
-    expect(enabledA.checked).toBe(false);
-  }, 15000);
+  });
 
   it("blocks Tabs and Sidebar through delayed write and readback", async () => {
     const readback = deferred<Record<string, unknown>>();

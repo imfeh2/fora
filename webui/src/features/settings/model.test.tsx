@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { RouterProvider } from "@/app/router";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ModelPanel,
@@ -120,13 +121,14 @@ describe("Model settings", () => {
 
   it("disables configuration before loading", () => {
     const html = renderToStaticMarkup(
-      <TooltipProvider>
-        <ModelPanel />
-      </TooltipProvider>,
+      <RouterProvider>
+        <TooltipProvider>
+          <ModelPanel />
+        </TooltipProvider>
+      </RouterProvider>,
     );
-    expect(html).toMatch(
-      /<fieldset[^>]*aria-label="Model settings"[^>]*disabled=""/,
-    );
+    expect(html).toContain('aria-label="Model settings"');
+    expect(html).not.toContain('aria-label="API address"');
     expect(html).toContain("Loading model settings");
   });
 });

@@ -8,8 +8,6 @@ import {
   it,
   vi,
 } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { ModelPanel } from "@/features/settings/model";
 import { parseRequestBody } from "@/features/settings/request-body";
 import {
   BackendError,
@@ -18,9 +16,12 @@ import {
   type ModelCatalog,
 } from "@/lib/backend";
 
+let RouterProvider: typeof import("@/app/router").RouterProvider;
+let TooltipProvider: typeof import("@/components/ui/tooltip").TooltipProvider;
+let ModelPanel: typeof import("@/features/settings/model").ModelPanel;
 let dom: { window: Window & { close: () => void } };
 let testing: typeof import("@testing-library/react");
-let events: (event: BackendEvent) => void;
+let events: Set<(event: BackendEvent) => void>;
 
 beforeAll(async () => {
   const packageName = "jsdom";
@@ -33,7 +34,10 @@ beforeAll(async () => {
     "document",
     "navigator",
     "HTMLElement",
+    "HTMLInputElement",
+    "HTMLFormElement",
     "Node",
+    "NodeFilter",
     "MutationObserver",
     "Event",
     "EventTarget",
@@ -48,7 +52,22 @@ beforeAll(async () => {
     );
   dom.window.requestAnimationFrame = vi.fn();
   dom.window.cancelAnimationFrame = vi.fn();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    setTimeout(() => callback(0), 0),
+  );
+  vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   testing = await import("@testing-library/react");
+  ({ RouterProvider } = await import("@/app/router"));
+  ({ TooltipProvider } = await import("@/components/ui/tooltip"));
+  ({ ModelPanel } = await import("@/features/settings/model"));
 });
 afterEach(async () => {
   testing.cleanup();
@@ -95,21 +114,32 @@ const catalog: ModelCatalog = {
 };
 
 beforeEach(() => {
+  events = new Set();
   vi.spyOn(backend, "modelCatalog").mockResolvedValue(catalog);
   vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
-    events = listener;
-    return () => {};
+    events.add(listener);
+    return () => {
+      events.delete(listener);
+    };
   });
 });
 
 async function mount() {
   testing.render(
-    <TooltipProvider>
-      <ModelPanel />
-    </TooltipProvider>,
+    <RouterProvider>
+      <TooltipProvider>
+        <ModelPanel />
+      </TooltipProvider>
+    </RouterProvider>,
   );
-  const select = await testing.screen.findByLabelText("Provider");
-  testing.fireEvent.change(select, { target: { value: "p" } });
+  testing.fireEvent.click(
+    await testing.screen.findByRole("button", {
+      name: /^Provider.*openai-chat/,
+    }),
+  );
+  testing.fireEvent.click(
+    testing.screen.getByRole("button", { name: "Advanced settings" }),
+  );
   return testing.screen.getByLabelText(
     "Custom request body",
   ) as HTMLTextAreaElement;
@@ -118,7 +148,7 @@ async function mount() {
 function save() {
   testing.fireEvent.submit(
     testing.screen
-      .getByRole("button", { name: "Save provider" })
+      .getByRole("button", { name: "Save" })
       .closest("form") as HTMLFormElement,
   );
 }
@@ -280,17 +310,26 @@ describe("Provider request body form", () => {
     });
     const input = await mount();
     testing.fireEvent.change(input, { target: { value: '{"extension":2}' } });
-    await testing.act(async () => events({ type: "connection.restored" }));
+    await testing.act(async () => {
+      for (const listener of Array.from(events))
+        listener({ type: "connection.restored" });
+    });
     expect(input.value).toBe('{"extension":2}');
     testing.fireEvent.click(
-      testing.screen.getByRole("button", { name: "Google" }),
+      testing.screen.getByRole("button", { name: "Edit provider" }),
+    );
+    testing.fireEvent.click(
+      testing.screen.getByRole("radio", { name: "Google" }),
     );
     save();
     expect(configure).not.toHaveBeenCalled();
     expect(testing.screen.getByRole("alert").textContent).toContain(
       "Clear it before saving",
     );
-    testing.fireEvent.change(input, { target: { value: "" } });
+    testing.fireEvent.change(
+      testing.screen.getByLabelText("Custom request body"),
+      { target: { value: "" } },
+    );
     save();
     await testing.waitFor(() => expect(configure).toHaveBeenCalled());
     expect(configure.mock.calls[0][2]).toMatchObject({
@@ -304,7 +343,7 @@ describe("Provider request body form", () => {
       .mockResolvedValue({ latency_ms: 5, reply: "OK" });
     await mount();
     testing.fireEvent.click(
-      testing.screen.getByRole("button", { name: /Model\s*custom-model/ }),
+      testing.screen.getByRole("button", { name: "Edit" }),
     );
     testing.fireEvent.click(
       testing.screen.getByRole("button", { name: "Test" }),
