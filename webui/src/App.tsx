@@ -1,4 +1,11 @@
-import { BookText, MessagesSquare, Plus, Settings, Users } from "lucide-react";
+import {
+  BookText,
+  ChartNoAxesCombined,
+  MessagesSquare,
+  Plus,
+  Settings,
+  Users,
+} from "lucide-react";
 import {
   type ReactNode,
   useCallback,
@@ -91,7 +98,7 @@ function View({
     case "members":
       return <MembersPage tokenLimit={tokenLimit} />;
     case "usage":
-      return <UsagePage agentId={route.agentId} />;
+      return <UsagePage />;
     case "member":
       return <MemberPage id={route.id} />;
     case "library":
@@ -302,13 +309,13 @@ function Chrome({ loaded }: { loaded: Loaded }) {
               label="Members"
               active={active === "members"}
               onSelect={() => selectRoute({ name: "members" })}
-            >
-              <NavSubItem
-                label="Token Usage"
-                active={route.name === "usage"}
-                onSelect={() => selectRoute({ name: "usage" })}
-              />
-            </NavItem>
+            />
+            <NavItem
+              icon={<ChartNoAxesCombined size={16} />}
+              label="Usage"
+              active={active === "usage"}
+              onSelect={() => selectRoute({ name: "usage" })}
+            />
             <NavItem
               icon={<BookText size={16} />}
               label="Library"

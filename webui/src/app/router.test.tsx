@@ -8,7 +8,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { pageKeyOf, RouterProvider, useRouter } from "@/app/router";
+import { navIdOf, pageKeyOf, RouterProvider, useRouter } from "@/app/router";
 
 let testing: typeof import("@testing-library/react");
 let closeDom: () => void;
@@ -104,16 +104,10 @@ function RouterProbe() {
       <button type="button" onClick={() => navigate({ name: "usage" })}>
         All usage
       </button>
-      <button
-        type="button"
-        onClick={() => navigate({ name: "usage", agentId: 2 })}
-      >
+      <button type="button" onClick={() => navigate({ name: "member", id: 2 })}>
         Agent 2
       </button>
-      <button
-        type="button"
-        onClick={() => navigate({ name: "usage", agentId: 3 })}
-      >
+      <button type="button" onClick={() => navigate({ name: "member", id: 3 })}>
         Agent 3
       </button>
       {guard ? (
@@ -164,22 +158,26 @@ function currentRoute() {
   return testing.screen.getByTestId("route").textContent;
 }
 
-describe("Usage navigation", () => {
-  it("retains every Agent parameter and skips repeated identical navigation", () => {
+describe("Navigation", () => {
+  it("gives Usage an independent navigation and page identity", () => {
+    expect(navIdOf({ name: "usage" })).toBe("usage");
+    expect(pageKeyOf({ name: "usage" })).toBe("usage");
+  });
+  it("retains member identity and skips repeated identical navigation", () => {
     mount();
     click("All usage");
-    expect(currentRoute()).toBe("usage:all");
+    expect(currentRoute()).toBe("usage");
     click("Agent 2");
-    expect(currentRoute()).toBe("usage:2");
+    expect(currentRoute()).toBe("member:2");
     edit("unsaved");
     click("Agent 2");
     expect(testing.screen.queryByRole("dialog")).toBeNull();
-    expect(currentRoute()).toBe("usage:2");
+    expect(currentRoute()).toBe("member:2");
     click("Agent 3");
     click("Discard");
-    expect(currentRoute()).toBe("usage:3");
+    expect(currentRoute()).toBe("member:3");
     click("All usage");
-    expect(currentRoute()).toBe("usage:all");
+    expect(currentRoute()).toBe("usage");
   });
 
   it("retains drafts on Keep editing and failed saves, then permits completed saves", () => {
@@ -201,7 +199,7 @@ describe("Usage navigation", () => {
     click("Keep editing");
     click("Save completed");
     click("All usage");
-    expect(currentRoute()).toBe("usage:all");
+    expect(currentRoute()).toBe("usage");
   });
 
   it("clears unmounted blockers and registers once after StrictMode remount", () => {
@@ -209,12 +207,12 @@ describe("Usage navigation", () => {
     edit("draft");
     click("Toggle guard");
     click("Agent 2");
-    expect(currentRoute()).toBe("usage:2");
+    expect(currentRoute()).toBe("member:2");
     click("Toggle guard");
     click("Agent 3");
-    expect(currentRoute()).toBe("usage:2");
+    expect(currentRoute()).toBe("member:2");
     expect(testing.screen.getByRole("dialog")).toBeTruthy();
     click("Discard");
-    expect(currentRoute()).toBe("usage:3");
+    expect(currentRoute()).toBe("member:3");
   });
 });

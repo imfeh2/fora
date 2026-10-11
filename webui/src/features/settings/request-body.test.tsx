@@ -207,26 +207,69 @@ describe("Provider request body form", () => {
       extra_body: { nullable: null },
     });
   });
-  it("preserves the input and API key draft after a server field error", async () => {
-    vi.spyOn(backend, "configureModel").mockRejectedValue(
-      new BackendError(
+  it.each(["immediate", "delayed"])(
+    "preserves both drafts and restores focus after an %s server field error",
+    async (timing) => {
+      const error = new BackendError(
         "invalid_request_body",
         "Remove this field for the selected API.",
-      ),
-    );
+      );
+      let rejectResponse!: (error: BackendError) => void;
+      const pending = new Promise<ModelCatalog>((_resolve, reject) => {
+        rejectResponse = reject;
+      });
+      vi.spyOn(backend, "configureModel").mockImplementation(() =>
+        timing === "immediate" ? Promise.reject(error) : pending,
+      );
+      const input = await mount();
+      const key = testing.screen.getByLabelText("API key") as HTMLInputElement;
+      testing.fireEvent.change(key, { target: { value: "test-only-key" } });
+      testing.fireEvent.change(input, { target: { value: '{"extension":2}' } });
+      await testing.act(async () => save());
+      if (timing === "delayed") {
+        expect(input.matches(":disabled")).toBe(true);
+        await testing.act(async () => rejectResponse(error));
+      }
+      await testing.waitFor(() => {
+        expect(testing.screen.getByRole("alert").textContent).toContain(
+          "Remove this field",
+        );
+        expect(input.matches(":disabled")).toBe(false);
+        expect(document.activeElement).toBe(input);
+      });
+      expect(input.value).toBe('{"extension":2}');
+      expect(key.value).toBe("test-only-key");
+    },
+  );
+  it("restores focus once for each identical server field error", async () => {
+    const configure = vi
+      .spyOn(backend, "configureModel")
+      .mockRejectedValue(
+        new BackendError(
+          "invalid_request_body",
+          "Remove this field for the selected API.",
+        ),
+      );
     const input = await mount();
     const key = testing.screen.getByLabelText("API key") as HTMLInputElement;
     testing.fireEvent.change(key, { target: { value: "test-only-key" } });
     testing.fireEvent.change(input, { target: { value: '{"extension":2}' } });
-    save();
-    await testing.waitFor(() =>
-      expect(testing.screen.getByRole("alert").textContent).toContain(
-        "Remove this field",
-      ),
-    );
-    expect(input.value).toBe('{"extension":2}');
-    expect(key.value).toBe("test-only-key");
-    expect(document.activeElement).toBe(input);
+    for (const attempt of [1, 2]) {
+      key.focus();
+      await testing.act(async () => save());
+      await testing.waitFor(() => {
+        expect(input.matches(":disabled")).toBe(false);
+        expect(document.activeElement).toBe(input);
+      });
+      expect(configure).toHaveBeenCalledTimes(attempt);
+      expect(input.value).toBe('{"extension":2}');
+      expect(key.value).toBe("test-only-key");
+      key.focus();
+      await testing.act(async () => events({ type: "connection.restored" }));
+      expect(document.activeElement).toBe(key);
+      expect(input.value).toBe('{"extension":2}');
+      expect(key.value).toBe("test-only-key");
+    }
   });
   it("preserves dirty content on reconnect and requires clearing for Google", async () => {
     const configure = vi.spyOn(backend, "configureModel").mockResolvedValue({

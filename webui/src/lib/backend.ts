@@ -1,4 +1,5 @@
 export type UsageFilters = {
+  contributions_only?: boolean;
   agent_id?: number | null;
   model_key?: string | null;
   coverage?: string | null;
@@ -66,6 +67,18 @@ export type UsageResult = {
   dataset_revision: number;
   index: { ready: number; revision: number };
   summary: UsageMetrics;
+  daily: (Pick<
+    UsageMetrics,
+    | "records"
+    | "input_tokens"
+    | "output_tokens"
+    | "total_tokens"
+    | "requests"
+    | "input_known"
+    | "output_known"
+    | "total_known"
+    | "requests_known"
+  > & { date: string })[];
   coverage: Record<string, number>;
   groups: {
     agent_id: (UsageMetrics & { agent_id: number })[];

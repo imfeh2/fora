@@ -19,19 +19,24 @@ export type Route =
   | { name: "discussions" }
   | { name: "discussion"; id: number }
   | { name: "members" }
-  | { name: "usage"; agentId?: number }
+  | { name: "usage" }
   | { name: "member"; id: number }
   | { name: "library"; path?: string }
   | { name: "document"; path: string }
   | { name: "settings"; section: SettingsSection };
 
-export type NavId = "discussions" | "members" | "library" | "settings";
+export type NavId =
+  | "discussions"
+  | "members"
+  | "usage"
+  | "library"
+  | "settings";
 
 const NAV_OF: Record<Route["name"], NavId> = {
   discussions: "discussions",
   discussion: "discussions",
   members: "members",
-  usage: "members",
+  usage: "usage",
   member: "members",
   library: "library",
   document: "library",
@@ -43,7 +48,6 @@ export function navIdOf(route: Route): NavId {
 }
 
 export function pageKeyOf(route: Route): string {
-  if (route.name === "usage") return `usage:${route.agentId ?? "all"}`;
   if ("id" in route) return `${route.name}:${route.id}`;
   if ("path" in route && route.path) return `${route.name}:${route.path}`;
   return route.name;
@@ -102,7 +106,6 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 }
 
 function paramOf(route: Route): string | number | null {
-  if (route.name === "usage") return route.agentId ?? null;
   if ("id" in route) return route.id;
   if ("path" in route) return route.path ?? null;
   if ("section" in route) return route.section;

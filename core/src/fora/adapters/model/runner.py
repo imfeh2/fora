@@ -1260,7 +1260,6 @@ class PydanticModelRunner:
                         "registered_model_id": config.registered_model_id,
                         "display_name": config.display_name,
                         "api_type": config.api_type,
-                        "provider_id": config.provider_id,
                         "model": config.model,
                         "thinking": config.thinking,
                         "thinking_budget_tokens": config.thinking_budget_tokens,

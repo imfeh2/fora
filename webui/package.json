@@ -27,6 +27,8 @@
     "lucide-react": "^1.31.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-is": "19.2.8",
+    "recharts": "3.10.1",
     "react-markdown": "^10.1.0",
     "remark-breaks": "4.0.0",
     "remark-gfm": "^4.0.1",

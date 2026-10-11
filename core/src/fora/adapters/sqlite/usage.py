@@ -464,8 +464,13 @@ class UsageIndex:
         filters = {
             key: params.get(key) for key in ("agent_id", "model_key", "coverage")
         }
+        contributions_only = params.get("contributions_only", False)
+        if type(contributions_only) is not bool:
+            raise DomainError("invalid_params", "contributions_only must be a boolean")
         filters.update(
-            start_at=utc(params.get("start_at")), end_at=utc(params.get("end_at"))
+            start_at=utc(params.get("start_at")),
+            end_at=utc(params.get("end_at")),
+            contributions_only=contributions_only,
         )
         if filters["agent_id"] is not None and (
             type(filters["agent_id"]) is not int or filters["agent_id"] <= 0
@@ -514,6 +519,10 @@ class UsageIndex:
                 column = "started_at" if key in ("start_at", "end_at") else key
                 clauses.append(f"u.{column} {operation} ?")
                 values.append(filters[key])
+        if contributions_only:
+            clauses.append(
+                "u.coverage IN ('recorded', 'field_missing', 'missing_usage', 'legacy')"
+            )
         where = " WHERE " + " AND ".join(clauses) if clauses else " WHERE 1"
         signature = hashlib.sha256(encode(filters).encode()).hexdigest()
         self.advance()
@@ -641,6 +650,24 @@ class UsageIndex:
                         group[key] = str(group[key]) if group[key] is not None else None
                     result.append(group)
                 groups[dimension] = result
+            daily = []
+            for row in self.db.execute(
+                "SELECT substr(started_at, 1, 10) AS date, "
+                + metrics
+                + " FROM usage_records u"
+                + where
+                + " GROUP BY date ORDER BY date",
+                values,
+            ):
+                day = dict(row)
+                for key in (
+                    "input_tokens",
+                    "output_tokens",
+                    "total_tokens",
+                    "requests",
+                ):
+                    day[key] = str(day[key]) if day[key] is not None else None
+                daily.append(day)
             order = "ASC" if direction == "newer" else "DESC"
             rows = self.db.execute(
                 self._select()
@@ -698,6 +725,7 @@ class UsageIndex:
                 "dataset_revision": revision,
                 "index": state,
                 "summary": summary,
+                "daily": daily,
                 "coverage": coverage,
                 "groups": groups,
                 "records": records,
