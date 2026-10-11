@@ -3441,13 +3441,42 @@ def test_control_related_side_effects_finish_before_following_reads(
     assert not web._requests and deps.store._db._readers.borrowed == 0
 
 
+@pytest.mark.parametrize("referenced", [False, True])
 def test_model_update_and_member_status_complete_with_real_lock_interleaving(
-    server, monkeypatch
+    server, monkeypatch, referenced
 ):
     from concurrent.futures import ThreadPoolExecutor
 
     dispatcher, _, deps = server
     agent = deps.store.create_member("agent", "Interleaving")
+    if referenced:
+        deps.settings.set_settings(
+            "model",
+            {
+                "version": 2,
+                "providers": [
+                    {
+                        "id": "provider",
+                        "name": "Provider",
+                        "api_type": "openai-chat",
+                        "base_url": "https://provider.invalid",
+                        "enabled": True,
+                    }
+                ],
+                "models": [
+                    {
+                        "id": "model",
+                        "provider_id": "provider",
+                        "name": "Model",
+                        "model": "remote-model",
+                        "enabled": True,
+                    }
+                ],
+                "agent_configs": {
+                    str(agent.id): {"model_id": "model", "thinking": "default"}
+                },
+            },
+        )
     scheduler = deps.__dict__["scheduler"]
     held = threading.Event()
     updating = threading.Event()
@@ -3480,10 +3509,14 @@ def test_model_update_and_member_status_complete_with_real_lock_interleaving(
             output,
             "settings.update",
             section="model",
-            values={
-                "action": "set_defaults",
-                "values": {"model_id": None, "thinking": "default"},
-            },
+            values=(
+                {"action": "delete_model", "id": "model"}
+                if referenced
+                else {
+                    "action": "set_defaults",
+                    "values": {"model_id": None, "thinking": "default"},
+                }
+            ),
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -3492,14 +3525,24 @@ def test_model_update_and_member_status_complete_with_real_lock_interleaving(
             assert held.wait(3)
             writer = executor.submit(update)
             result = writer.result(timeout=4)
-            assert "error" not in result
-            assert deps.settings.get_settings("model")["default_thinking"] == "default"
+            if referenced:
+                assert result["error"]["code"] == "model_in_use"
+            else:
+                assert "error" not in result
+                assert (
+                    deps.settings.get_settings("model")["default_thinking"] == "default"
+                )
         finally:
             release.set()
         state = reader.result(timeout=4)
     assert state["id"] == agent.id
     assert set(state) >= {"state", "pause_requested", "reasons", "error"}
     assert deps.store._db._readers.borrowed == 0
+    catalog = call(dispatcher, Capture(), "settings.get", section="model")
+    assert "error" not in catalog
+    if referenced:
+        assert catalog["result"]["models"][0]["id"] == "model"
+        assert catalog["result"]["agent_configs"][str(agent.id)]["model_id"] == "model"
 
     original_status = scheduler.agent_status
 

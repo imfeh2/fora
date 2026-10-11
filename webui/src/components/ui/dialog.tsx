@@ -50,6 +50,7 @@ export function Modal({
   initialFocus,
   restoreFocus,
   onClosed,
+  width,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -63,7 +64,9 @@ export function Modal({
   initialFocus?: () => HTMLElement | null;
   restoreFocus?: () => HTMLElement | null;
   onClosed?: () => void;
+  width?: "default" | "medium" | "wide";
 }) {
+  const selectedWidth = width ?? (wide ? "wide" : "default");
   const opener = useRef<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const footerElement = useRef<HTMLDivElement>(null);
@@ -83,9 +86,12 @@ export function Modal({
       : modalKind === "history"
         ? "narrow:max-h-[90dvh]"
         : "narrow:max-h-[85dvh]";
-  const wideWidth = wide
-    ? "w-[min(960px,calc(100vw-32px))]"
-    : "w-[min(440px,calc(100vw-48px))]";
+  const wideWidth =
+    selectedWidth === "wide"
+      ? "w-[min(960px,calc(100vw-32px))]"
+      : selectedWidth === "medium"
+        ? "w-[min(576px,calc(100vw-32px))]"
+        : "w-[min(440px,calc(100vw-48px))]";
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>

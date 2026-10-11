@@ -72,6 +72,26 @@ describe("Modal", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses an explicit medium width with viewport bounds", async () => {
+    render(
+      <TooltipProvider>
+        <Modal
+          open
+          onOpenChange={() => {}}
+          title="Provider"
+          wide
+          width="medium"
+          footer={<Button>Close</Button>}
+        >
+          Provider configuration
+        </Modal>
+      </TooltipProvider>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.className).toContain("w-[min(576px,calc(100vw-32px))]");
+    expect(dialog.className).not.toContain("w-[min(960px,calc(100vw-32px))]");
+  });
+
   it("bounds long content to a viewport scroll region", async () => {
     render(
       <TooltipProvider>

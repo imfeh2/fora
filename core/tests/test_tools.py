@@ -1012,6 +1012,52 @@ def test_runtime_organization_creates_and_reads_model_selection(world) -> None:
     }
 
 
+def test_member_records_keep_filtering_and_runtime_status_separate(world) -> None:
+    seen = []
+
+    def status(identity):
+        seen.append(identity)
+        return {"state": "running", "pause_requested": False}
+
+    world.store.delete_member(OTHER)
+    tools = tools_for(world, HUMAN, agent_status=status)
+    records = tools.list_member_records()
+    assert {item["id"] for item in records} == {HUMAN, MAIN}
+    assert seen == []
+    assert all("pause_requested" not in item for item in records)
+    assert {item["id"] for item in tools.list_member_records(True)} == {
+        HUMAN,
+        MAIN,
+        OTHER,
+    }
+    assert seen == []
+    members = tools.list_members()
+    assert seen == [MAIN]
+    assert next(item for item in members if item["id"] == MAIN)["state"] == "running"
+
+
+@pytest.mark.parametrize("method", ["list_members", "list_member_records"])
+def test_member_identity_reads_check_permission_before_access(
+    world, monkeypatch, method
+) -> None:
+    seen = []
+
+    def deny(actor, capability, target):
+        seen.append((actor.member_id, capability, target))
+        return "deny"
+
+    tools = tools_for(world, MAIN, authorizer=Authorizer(deny))
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("Unauthorized member identity read")
+
+    monkeypatch.setattr(world.store, "list_members", unexpected_read)
+    with pytest.raises(DomainError) as error:
+        getattr(tools, method)()
+    assert error.value.code == "not_permitted"
+    assert seen == [(MAIN, "organization.list_members", None)]
+
+
 def test_running_agents_cannot_be_deleted(world) -> None:
     world.store.set_agent_state(MAIN, "running")
     with pytest.raises(DomainError) as error:

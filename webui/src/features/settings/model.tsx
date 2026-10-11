@@ -1,9 +1,10 @@
 import { CircleHelp, Save } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "@/app/router";
+import { Table } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
 import { Combobox } from "@/components/ui/combobox";
-import { Modal } from "@/components/ui/dialog";
+import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -488,6 +489,8 @@ type SaveModel = (
   onBodyError?: (message: string) => void,
 ) => Promise<boolean>;
 
+export type ProviderLayout = "cards" | "split" | "accordion";
+
 export function ModelPanel() {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [busy, setBusy] = useState(false);
@@ -720,20 +723,854 @@ export function ModelPanel() {
   );
 }
 
+export function ProviderLayoutPanel({ layout }: { layout: ProviderLayout }) {
+  const { registerNavigationBlocker } = useRouter();
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [session, setSession] = useState<{
+    provider: ProviderConfig;
+    models: RegisteredModel[];
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [uncertain, setUncertain] = useState(false);
+  const [reviewed, setReviewed] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [catalogEpoch, setCatalogEpoch] = useState(0);
+  const defaultDirty = useRef(false);
+  const [discard, setDiscard] = useState<(() => void) | null>(null);
+  const generation = useRef(0);
+  const reading = useRef<number | null>(null);
+  const saving = useRef(false);
+  const refreshPending = useRef(false);
+  const drafts = useRef(new Map<string, boolean>());
+  const [hasDrafts, setHasDrafts] = useState(false);
+  const reportDefaults = useCallback((dirty: boolean) => {
+    defaultDirty.current = dirty;
+    setHasDrafts(dirty || Array.from(drafts.current.values()).some(Boolean));
+  }, []);
+  const editor = useRef<HTMLFieldSetElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const [connectionDirty, setConnectionDirty] = useState(false);
+  useReportSettingsSave("model", busy);
+  const load = useCallback(async (): Promise<void> => {
+    if (saving.current || reading.current !== null) {
+      refreshPending.current = true;
+      return;
+    }
+    const request = ++generation.current;
+    reading.current = request;
+    try {
+      const loaded = await backend.modelCatalog();
+      if (request !== generation.current) return;
+      setCatalog(loaded);
+      setError(null);
+      setReviewed(true);
+    } catch (failure) {
+      if (request === generation.current) {
+        setError(failure instanceof Error ? failure.message : String(failure));
+      }
+    } finally {
+      if (request === generation.current && reading.current === request) {
+        reading.current = null;
+        if (refreshPending.current && !saving.current) {
+          refreshPending.current = false;
+          void load();
+        }
+      }
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.restored") {
+        generation.current += 1;
+        reading.current = null;
+        refreshPending.current = false;
+        void load();
+      }
+      if (event.type === "settings.updated" && event.section === "model")
+        void load();
+    });
+    return () => {
+      generation.current += 1;
+      reading.current = null;
+      refreshPending.current = false;
+      off();
+    };
+  }, [load]);
+  useEffect(() => {
+    if (!catalog || !selected || selected === "new") return;
+    setSession((previous) => {
+      const provider = catalog.providers.find((item) => item.id === selected);
+      const retained = previous?.provider.id === selected ? previous : null;
+      const target = provider ?? retained?.provider;
+      if (!target) return null;
+      const current = catalog.models.filter(
+        (item) => item.provider_id === selected,
+      );
+      return {
+        provider: target,
+        models: [
+          ...current,
+          ...(retained?.models.filter(
+            (item) => !current.some((model) => model.id === item.id),
+          ) ?? []),
+        ],
+      };
+    });
+  }, [catalog, selected]);
+  useEffect(
+    () =>
+      registerNavigationBlocker((_next, proceed) => {
+        if (saving.current) return true;
+        if (
+          defaultDirty.current ||
+          Array.from(drafts.current.values()).some(Boolean)
+        ) {
+          setDiscard(() => proceed);
+          return true;
+        }
+        return false;
+      }),
+    [registerNavigationBlocker],
+  );
+  useEffect(() => {
+    if (!busy && !hasDrafts) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      if (
+        saving.current ||
+        defaultDirty.current ||
+        Array.from(drafts.current.values()).some(Boolean)
+      ) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [busy, hasDrafts]);
+  useEffect(() => {
+    if (selected && layout !== "cards")
+      editor.current?.querySelector<HTMLInputElement>("input")?.focus();
+  }, [selected, layout]);
+  const providerDraft = useCallback((dirty: boolean, connection: boolean) => {
+    drafts.current.set("provider", dirty);
+    setHasDrafts(
+      defaultDirty.current || Array.from(drafts.current.values()).some(Boolean),
+    );
+    setConnectionDirty(connection);
+  }, []);
+  const modelDraft = useCallback((id: string, dirty: boolean) => {
+    drafts.current.set(id, dirty);
+    setHasDrafts(
+      defaultDirty.current || Array.from(drafts.current.values()).some(Boolean),
+    );
+  }, []);
+  const resetEditor = () => {
+    drafts.current.clear();
+    setHasDrafts(defaultDirty.current);
+    setConnectionDirty(false);
+    setRevision((value) => value + 1);
+  };
+  const choose = (id: string | null) => {
+    if (saving.current) return;
+    const proceed = () => {
+      resetEditor();
+      const provider = catalog?.providers.find((item) => item.id === id);
+      setSession(
+        provider
+          ? {
+              provider,
+              models:
+                catalog?.models.filter(
+                  (item) => item.provider_id === provider.id,
+                ) ?? [],
+            }
+          : null,
+      );
+      setSelected(id);
+      setError(null);
+      if (id === null) requestAnimationFrame(() => opener.current?.focus());
+    };
+    if (Array.from(drafts.current.values()).some(Boolean))
+      setDiscard(() => proceed);
+    else proceed();
+  };
+  const save: SaveModel = async (action, id, values = {}) => {
+    if (saving.current || uncertain) return false;
+    if (
+      (action === "save_provider" && id === null && selected !== "new") ||
+      ((action === "save_provider" || action === "delete_provider") &&
+        id !== null &&
+        !catalog?.providers.some((item) => item.id === id)) ||
+      ((action === "save_model" || action === "delete_model") &&
+        id !== null &&
+        !catalog?.models.some((item) => item.id === id)) ||
+      (action === "save_model" &&
+        !catalog?.providers.some((item) => item.id === values.provider_id))
+    ) {
+      return false;
+    }
+    saving.current = true;
+    generation.current += 1;
+    reading.current = null;
+    setBusy(true);
+    setError(null);
+    const focus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    try {
+      const updated = await backend.configureModel(action, id, values);
+      generation.current += 1;
+      setCatalog(updated);
+      if (action === "save_provider" && id === null) {
+        const created = updated.providers.filter(
+          (item) => !catalog?.providers.some((old) => old.id === item.id),
+        );
+        drafts.current.delete("provider");
+        setSelected(created.length === 1 ? created[0].id : null);
+      }
+      if (action === "delete_model" && typeof id === "string") {
+        drafts.current.delete(id);
+        setSession((previous) =>
+          previous
+            ? {
+                ...previous,
+                models: previous.models.filter((item) => item.id !== id),
+              }
+            : null,
+        );
+      }
+      if (
+        layout === "cards" &&
+        action === "save_provider" &&
+        typeof values.name === "string" &&
+        !Array.from(drafts.current.entries()).some(
+          ([key, dirty]) => key !== "provider" && dirty,
+        )
+      ) {
+        drafts.current.delete("provider");
+        setHasDrafts(defaultDirty.current);
+        setSelected(null);
+        requestAnimationFrame(() => opener.current?.focus());
+      }
+      return true;
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+      if (failure instanceof BackendError && failure.transport) {
+        setUncertain(true);
+        setReviewed(false);
+        backend.reportFailure(failure);
+        void load();
+      }
+      return false;
+    } finally {
+      saving.current = false;
+      setBusy(false);
+      if (refreshPending.current) {
+        refreshPending.current = false;
+        void load();
+      }
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) focus?.focus();
+      });
+    }
+  };
+  const savedProvider = catalog?.providers.find((item) => item.id === selected);
+  const retained = session?.provider.id === selected ? session : null;
+  const provider = savedProvider ?? retained?.provider;
+  const providerMissing = Boolean(provider && !savedProvider);
+  const currentModels =
+    catalog?.models.filter((item) => item.provider_id === selected) ?? [];
+  const models = [
+    ...currentModels,
+    ...(retained?.models.filter(
+      (item) => !currentModels.some((model) => model.id === item.id),
+    ) ?? []),
+  ];
+  const visibleProviders = [
+    ...(catalog?.providers ?? []),
+    ...(providerMissing && provider ? [provider] : []),
+  ];
+  const closeMissingModel = (id: string) => {
+    const proceed = () => {
+      modelDraft(id, false);
+      setSession((previous) =>
+        previous
+          ? {
+              ...previous,
+              models: previous.models.filter((item) => item.id !== id),
+            }
+          : null,
+      );
+    };
+    if (drafts.current.get(id)) setDiscard(() => proceed);
+    else proceed();
+  };
+  const open = selected !== null;
+  const recovery = uncertain ? (
+    <section
+      role="alert"
+      className="flex flex-col gap-3 rounded border border-danger p-4"
+    >
+      <p>
+        The save result is unknown. Read the saved configuration before
+        continuing.
+      </p>
+      <Button onClick={() => void load()}>Read saved configuration</Button>
+      {reviewed && catalog ? (
+        <>
+          <p>
+            Saved providers:{" "}
+            {catalog.providers.map((item) => item.name).join(", ") || "None"}.
+            Saved models:{" "}
+            {catalog.models.map((item) => item.name).join(", ") || "None"}.
+          </p>
+          <p>
+            Use the saved configuration to close the current drafts and continue
+            editing.
+          </p>
+          <Button
+            onClick={() => {
+              resetEditor();
+              setCatalogEpoch((value) => value + 1);
+              defaultDirty.current = false;
+              setSelected(null);
+              setUncertain(false);
+              setError(null);
+            }}
+          >
+            Use saved configuration
+          </Button>
+        </>
+      ) : null}
+    </section>
+  ) : null;
+  const content = (
+    <fieldset
+      ref={editor}
+      aria-label="Provider configuration"
+      className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
+      key={`${selected}-${revision}`}
+      onKeyDown={(event) => {
+        if (
+          layout !== "cards" &&
+          event.key === "Escape" &&
+          !event.defaultPrevented
+        ) {
+          event.preventDefault();
+          choose(null);
+        }
+      }}
+    >
+      {error ? (
+        <p
+          role="alert"
+          className="rounded border border-danger p-3 text-sm text-danger"
+        >
+          {error}
+        </p>
+      ) : null}
+      {layout === "cards" ? recovery : null}
+      {providerMissing ? (
+        <p role="alert" className="text-sm text-danger">
+          This provider no longer exists. Your draft is retained. Close this
+          editor to continue.
+        </p>
+      ) : null}
+      <fieldset
+        disabled={busy || uncertain}
+        className="m-0 min-w-0 border-0 p-0"
+      >
+        <ProviderForm
+          provider={provider}
+          save={save}
+          busy={busy}
+          unavailable={providerMissing}
+          onDeleted={() => {
+            resetEditor();
+            setSelected(null);
+          }}
+          onDraft={providerDraft}
+          onCancel={() => choose(null)}
+          modelCount={models.length}
+        />
+      </fieldset>
+      {provider ? (
+        <section aria-label="Models" className="flex min-w-0 flex-col gap-3">
+          <h3 className="text-base font-medium">
+            Models <span className="text-fg-muted">{models.length}</span>
+          </h3>
+          {models.length === 0 ? (
+            <p className="text-sm text-fg-muted">No models configured.</p>
+          ) : null}
+          {layout === "split" ? (
+            <Table
+              label="Provider models"
+              columns={[
+                { key: "model", label: "Model" },
+                { key: "thinking", label: "Thinking", hideBelow: "sm" },
+              ]}
+            >
+              {models.map((model) => (
+                <ProviderModelEditor
+                  key={model.id}
+                  table
+                  provider={provider}
+                  model={model}
+                  save={save}
+                  busy={busy || uncertain}
+                  connectionDirty={connectionDirty}
+                  onDraft={modelDraft}
+                  unavailable={
+                    providerMissing ||
+                    !catalog?.models.some((item) => item.id === model.id)
+                  }
+                  onClose={
+                    !catalog?.models.some((item) => item.id === model.id)
+                      ? () => closeMissingModel(model.id)
+                      : undefined
+                  }
+                />
+              ))}
+            </Table>
+          ) : (
+            models.map((model) => (
+              <ProviderModelEditor
+                key={model.id}
+                provider={provider}
+                model={model}
+                save={save}
+                busy={busy || uncertain}
+                connectionDirty={connectionDirty}
+                onDraft={modelDraft}
+                unavailable={
+                  providerMissing ||
+                  !catalog?.models.some((item) => item.id === model.id)
+                }
+                onClose={
+                  !catalog?.models.some((item) => item.id === model.id)
+                    ? () => closeMissingModel(model.id)
+                    : undefined
+                }
+              />
+            ))
+          )}
+          <ProviderModelEditor
+            provider={provider}
+            save={save}
+            busy={busy || uncertain}
+            connectionDirty={connectionDirty}
+            onDraft={modelDraft}
+            unavailable={providerMissing}
+          />
+        </section>
+      ) : null}
+    </fieldset>
+  );
+  const summary = (item: ProviderConfig) => (
+    <>
+      <span className="min-w-0 flex-1 wrap-anywhere font-medium">
+        {item.name}
+      </span>
+      <Chip>
+        {PROVIDERS.find((option) => option.value === item.api_type)?.label ??
+          item.api_type}
+      </Chip>
+      {item.api_key_set ? <Chip>Key stored</Chip> : null}
+    </>
+  );
+  const enabled = (item: ProviderConfig) => (
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        aria-label={`Enable ${item.name}`}
+        checked={item.enabled}
+        disabled={
+          busy ||
+          uncertain ||
+          !catalog?.providers.some((provider) => provider.id === item.id)
+        }
+        onChange={(event) =>
+          void save("save_provider", item.id, { enabled: event.target.checked })
+        }
+      />
+      Enabled
+    </label>
+  );
+  const activate = (id: string, target: HTMLElement) => {
+    opener.current = target;
+    choose(selected === id && layout === "accordion" ? null : id);
+  };
+  const navigateList = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const buttons = Array.from(
+      event.currentTarget
+        .closest("[data-provider-list]")
+        ?.querySelectorAll<HTMLButtonElement>("[data-provider-target]") ?? [],
+    );
+    const index = buttons.indexOf(event.currentTarget);
+    buttons[
+      (index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) %
+        buttons.length
+    ]?.focus();
+  };
+  return (
+    <div
+      className="model-settings flex min-w-0 flex-col gap-6"
+      data-provider-layout={layout}
+    >
+      {!catalog ? (
+        <div
+          role="status"
+          aria-label="Loading model settings"
+          className="h-64 animate-pulse rounded bg-surface-hover"
+        />
+      ) : (
+        <>
+          <fieldset
+            disabled={busy || uncertain}
+            className="m-0 min-w-0 border-0 p-0"
+          >
+            <DefaultModelForm
+              key={catalogEpoch}
+              catalog={catalog}
+              save={save}
+              busy={busy}
+              onDraft={reportDefaults}
+            />
+          </fieldset>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-medium">
+              Providers{" "}
+              <span className="text-fg-muted">{catalog.providers.length}</span>
+            </h2>
+            <Button
+              disabled={busy || uncertain}
+              variant="primary"
+              onClick={(event) => {
+                opener.current = event.currentTarget;
+                choose("new");
+              }}
+            >
+              Add
+            </Button>
+          </div>
+          {layout !== "cards" || !open ? recovery : null}
+          {error && (!open || layout === "cards") ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
+          {catalog.providers.length === 0 && !open ? (
+            <p className="text-sm text-fg-muted">
+              Add a provider to configure its connection and models.
+            </p>
+          ) : null}
+          {layout === "cards" ? (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+              {catalog.providers.map((item) => (
+                <section
+                  key={item.id}
+                  className="flex min-w-0 flex-col gap-4 rounded-md border border-line bg-surface p-5"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    {summary(item)}
+                  </div>
+                  <p className="text-sm text-fg-muted">
+                    {
+                      catalog.models.filter(
+                        (model) => model.provider_id === item.id,
+                      ).length
+                    }{" "}
+                    models
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    {enabled(item)}
+                    <Button
+                      disabled={busy}
+                      onClick={(event) =>
+                        activate(item.id, event.currentTarget)
+                      }
+                    >
+                      Edit
+                    </Button>
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : layout === "split" ? (
+            <div className="flex min-h-[580px] min-w-0 rounded-md border border-line bg-surface">
+              <div
+                data-provider-list
+                className={`min-w-0 flex-col border-line p-3 md:w-[280px] md:shrink-0 md:border-r ${open ? "hidden md:flex" : "flex w-full"}`}
+              >
+                {catalog.providers.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 ${selected === item.id ? "bg-surface-hover" : ""}`}
+                  >
+                    <button
+                      type="button"
+                      data-provider-target
+                      className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
+                      aria-current={selected === item.id ? "true" : undefined}
+                      disabled={busy}
+                      onKeyDown={navigateList}
+                      onClick={(event) =>
+                        activate(item.id, event.currentTarget)
+                      }
+                    >
+                      {item.name}
+                    </button>
+                    {enabled(item)}
+                  </div>
+                ))}
+              </div>
+              <div
+                className={`min-w-0 flex-1 p-5 ${open ? "block" : "hidden md:block"}`}
+              >
+                {open ? (
+                  <>
+                    <div className="mb-4 md:hidden">
+                      <Button onClick={() => choose(null)}>
+                        ‹ Back to Providers
+                      </Button>
+                    </div>
+                    {content}
+                  </>
+                ) : (
+                  <p className="text-sm text-fg-muted">
+                    Select a provider to edit its connection and models.
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div data-provider-list className="flex min-w-0 flex-col gap-3">
+              {selected === "new" ? (
+                <section className="rounded-md border border-line bg-surface p-5">
+                  {content}
+                </section>
+              ) : null}
+              {visibleProviders.map((item) => (
+                <section
+                  key={item.id}
+                  className="min-w-0 rounded-md border border-line bg-surface"
+                >
+                  <div className="flex min-h-[52px] flex-wrap items-center gap-3 px-5 py-3">
+                    <button
+                      type="button"
+                      data-provider-target
+                      className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left"
+                      disabled={busy}
+                      aria-expanded={selected === item.id}
+                      onKeyDown={navigateList}
+                      onClick={(event) =>
+                        activate(item.id, event.currentTarget)
+                      }
+                    >
+                      {summary(item)}
+                    </button>
+                    {enabled(item)}
+                  </div>
+                  {selected === item.id ? (
+                    <div className="border-t border-line p-5">{content}</div>
+                  ) : null}
+                </section>
+              ))}
+            </div>
+          )}
+          {layout === "cards" ? (
+            <Modal
+              width="medium"
+              open={open}
+              onOpenChange={(next) => {
+                if (!next) choose(null);
+              }}
+              title={provider?.name ?? "Add provider"}
+              footer={null}
+            >
+              {content}
+            </Modal>
+          ) : null}
+        </>
+      )}
+      {!catalog && error ? (
+        <>
+          <p role="alert" className="text-sm text-danger">
+            {error}
+          </p>
+          <Button onClick={() => void load()}>Retry</Button>
+        </>
+      ) : null}
+      <Modal
+        open={discard !== null}
+        onOpenChange={(next) => {
+          if (!next) setDiscard(null);
+        }}
+        title="Discard unsaved changes?"
+        description="Your changes have not been saved."
+        footer={
+          <>
+            <Button onClick={() => setDiscard(null)}>Keep Editing</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                const proceed = discard;
+                setDiscard(null);
+                proceed?.();
+              }}
+            >
+              Discard
+            </Button>
+          </>
+        }
+      />
+    </div>
+  );
+}
+
+function ProviderModelEditor({
+  provider,
+  model,
+  save,
+  busy,
+  connectionDirty,
+  onDraft,
+  unavailable = false,
+  onClose,
+  table = false,
+}: {
+  table?: boolean;
+  unavailable?: boolean;
+  onClose?: () => void;
+  provider: ProviderConfig;
+  model?: RegisteredModel;
+  save: SaveModel;
+  busy: boolean;
+  connectionDirty: boolean;
+  onDraft: (id: string, dirty: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const id = model?.id ?? "new-model";
+  const report = useCallback(
+    (dirty: boolean) => onDraft(id, dirty),
+    [id, onDraft],
+  );
+  useEffect(() => () => onDraft(id, false), [id, onDraft]);
+  const recovery = onClose ? (
+    <div className="flex flex-col gap-2 p-3">
+      <p role="alert" className="text-sm text-danger">
+        This model no longer exists. Your draft is retained.
+      </p>
+      <Button disabled={busy} onClick={onClose}>
+        Close editor
+      </Button>
+    </div>
+  ) : null;
+  if (table && model)
+    return (
+      <>
+        <tr>
+          <td className="min-w-0">
+            <button
+              type="button"
+              className="flex min-h-11 flex-col text-left text-sm wrap-anywhere"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+            >
+              <span className="font-medium">{model.name}</span>
+              <span className="text-xs text-fg-muted">{model.model}</span>
+            </button>
+          </td>
+          <td data-hide-below="sm" className="text-xs text-fg-muted">
+            {model.thinking_budget_tokens
+              ? `${model.thinking_budget_tokens} tokens`
+              : model.thinking_options.join(", ")}
+          </td>
+        </tr>
+        <tr hidden={!expanded} inert={!expanded}>
+          <td colSpan={2}>
+            {recovery}
+            <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
+              <ModelForm
+                provider={provider}
+                model={model}
+                save={save}
+                busy={busy}
+                onDraft={report}
+                connectionDirty={connectionDirty}
+                unavailable={unavailable}
+              />
+            </fieldset>
+          </td>
+        </tr>
+      </>
+    );
+  return (
+    <section className="min-w-0 rounded border border-line">
+      <button
+        type="button"
+        className="flex min-h-11 w-full min-w-0 flex-wrap items-center justify-between gap-2 p-3 text-left text-sm"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="min-w-0 wrap-anywhere font-medium">
+          {model?.name ?? "Add model"}
+        </span>
+        {model ? (
+          <span className="min-w-0 wrap-anywhere text-xs text-fg-muted">
+            {model.model}
+          </span>
+        ) : null}
+      </button>
+      {recovery}
+      <fieldset
+        hidden={!expanded}
+        inert={!expanded}
+        disabled={busy}
+        className="m-0 min-w-0 border-0 p-4"
+      >
+        <ModelForm
+          provider={provider}
+          model={model}
+          save={save}
+          busy={busy}
+          onDraft={report}
+          connectionDirty={connectionDirty}
+          unavailable={unavailable}
+        />
+      </fieldset>
+    </section>
+  );
+}
+
 function DefaultModelForm({
   catalog,
   save,
   busy,
+  onDraft,
 }: {
   catalog: ModelCatalog;
   save: SaveModel;
   busy: boolean;
+  onDraft?: (dirty: boolean) => void;
 }) {
   const [value, setValue] = useState<AgentModelConfig>({
     model_id: catalog.default_model_id,
     thinking: catalog.default_thinking,
   });
   const dirty = useRef(false);
+  useEffect(() => {
+    onDraft?.(
+      value.model_id !== catalog.default_model_id ||
+        value.thinking !== catalog.default_thinking,
+    );
+  }, [onDraft, value, catalog.default_model_id, catalog.default_thinking]);
   useEffect(() => {
     if (!dirty.current) {
       setValue({
@@ -773,11 +1610,19 @@ function ProviderForm({
   save,
   busy,
   onDeleted,
+  onDraft,
+  onCancel,
+  unavailable = false,
+  modelCount = 0,
 }: {
   provider?: ProviderConfig;
+  unavailable?: boolean;
   save: SaveModel;
   busy: boolean;
   onDeleted: () => void;
+  onDraft?: (dirty: boolean, connectionDirty: boolean) => void;
+  onCancel?: () => void;
+  modelCount?: number;
 }) {
   const id = useId();
   const [name, setName] = useState(provider?.name ?? "");
@@ -792,15 +1637,34 @@ function ProviderForm({
   const [bodyError, setBodyError] = useState<string | null>(null);
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   const restoreBodyFocus = useRef(false);
+  const [nameError, setNameError] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const dirty = useRef(false);
   const body = parseRequestBody(extraBody, apiType);
   const error = body.error ?? bodyError;
+  const connectionDirty =
+    apiType !== (provider?.api_type ?? "openai-chat") ||
+    baseUrl !== (provider?.base_url ?? "") ||
+    apiKey !== "" ||
+    clearKey ||
+    body.error !== null ||
+    JSON.stringify(body.value) !== JSON.stringify(provider?.extra_body ?? {});
+  const draftDirty =
+    connectionDirty ||
+    name !== (provider?.name ?? "") ||
+    enabled !== (provider?.enabled ?? true);
   useEffect(() => {
     if (!busy && restoreBodyFocus.current) {
       restoreBodyFocus.current = false;
       bodyInput.current?.focus();
     }
   }, [busy]);
+  useEffect(() => {
+    onDraft?.(draftDirty, connectionDirty);
+  }, [onDraft, draftDirty, connectionDirty]);
+  useEffect(() => {
+    setEnabled(provider?.enabled ?? true);
+  }, [provider?.enabled]);
   useEffect(() => {
     if (!dirty.current) {
       setName(provider?.name ?? "");
@@ -819,11 +1683,18 @@ function ProviderForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
+        if (unavailable) return;
         if (body.error !== null) {
           bodyInput.current?.focus();
           return;
         }
         setBodyError(null);
+        if (!name.trim()) {
+          setNameError(true);
+          event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
+          return;
+        }
+        setNameError(false);
         if (
           await save(
             "save_provider",
@@ -844,30 +1715,40 @@ function ProviderForm({
           )
         ) {
           dirty.current = false;
+          setName(name.trim());
+          setBaseUrl(baseUrl.trim());
           setApiKey("");
           setClearKey(false);
         }
       }}
     >
-      <Field label="Provider name" htmlFor={`${id}-name`}>
+      <Field
+        label="Provider name"
+        htmlFor={`${id}-name`}
+        hint={nameError ? "Enter a provider name." : undefined}
+      >
         <Input
           id={`${id}-name`}
           value={name}
           required
+          aria-invalid={nameError}
           onChange={(event) => setName(event.target.value)}
         />
       </Field>
       <Field label="API type">
-        <Segmented
-          label="API type"
-          value={apiType}
-          options={PROVIDERS}
-          onChange={(value) => {
-            dirty.current = true;
-            setApiType(value);
-            setBodyError(null);
-          }}
-        />
+        <div className="min-w-0 overflow-x-auto">
+          <Segmented
+            label="API type"
+            value={apiType}
+            options={PROVIDERS}
+            onChange={(value) => {
+              dirty.current = true;
+              setApiType(value);
+              setBodyError(null);
+            }}
+          />
+        </div>
+
       </Field>
       <Field
         label={
@@ -959,21 +1840,41 @@ function ProviderForm({
         />
         Enabled
       </label>
-      <div className="flex gap-2">
-        <Button type="submit" variant="primary">
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" variant="primary" disabled={unavailable}>
           {busy ? <Spinner label="Saving provider" /> : null}
-          {provider ? "Save provider" : "Create provider"}
+          {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
         </Button>
+        {onCancel ? <Button onClick={onCancel}>Cancel</Button> : null}
         {provider ? (
           <Button
-            onClick={async () => {
-              if (await save("delete_provider", provider.id)) onDeleted();
-            }}
+            disabled={unavailable || modelCount > 0}
+            onClick={() => setConfirmDelete(true)}
           >
-            Delete provider
+            {onDraft ? "Delete" : "Delete provider"}
           </Button>
         ) : null}
       </div>
+      {modelCount > 0 ? (
+        <p className="text-sm text-fg-muted">
+          Remove this provider's models first.
+        </p>
+      ) : null}
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${provider?.name}?`}
+        description="This provider will be removed."
+        confirmLabel="Delete"
+        onConfirm={async () => {
+          if (
+            !unavailable &&
+            provider &&
+            (await save("delete_provider", provider.id))
+          )
+            onDeleted();
+        }}
+      />
     </form>
   );
 }
@@ -983,11 +1884,17 @@ function ModelForm({
   model,
   save,
   busy,
+  onDraft,
+  connectionDirty = false,
+  unavailable = false,
 }: {
   provider: ProviderConfig;
+  unavailable?: boolean;
   model?: RegisteredModel;
   save: SaveModel;
   busy: boolean;
+  onDraft?: (dirty: boolean) => void;
+  connectionDirty?: boolean;
 }) {
   const id = useId();
   const [name, setName] = useState(model?.name ?? "");
@@ -1000,6 +1907,25 @@ function ModelForm({
   const [listing, setListing] = useState(false);
   const [testing, setTesting] = useState(false);
   const [thinking, setThinking] = useState<Thinking>("default");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const testRequest = useRef(0);
+  useEffect(() => {
+    testRequest.current += 1;
+    setTesting(false);
+    setFeedback(null);
+    return () => {
+      testRequest.current += 1;
+    };
+  }, [provider, remote, budgetTokens, thinking, unavailable]);
+  const draftDirty =
+    name !== (model?.name ?? "") ||
+    remote !== (model?.model ?? "") ||
+    enabled !== (model?.enabled ?? true) ||
+    budgetTokens !== (model?.thinking_budget_tokens?.toString() ?? "");
+  useEffect(() => {
+    onDraft?.(draftDirty);
+  }, [onDraft, draftDirty]);
   const budgetSupported = supportsTokenBudget(provider.api_type);
   const parsedBudget = budgetTokens.trim() ? Number(budgetTokens) : null;
   const validBudget =
@@ -1031,8 +1957,9 @@ function ModelForm({
     return () => {
       listRequest.current += 1;
     };
-  }, [provider]);
+  }, [provider, unavailable]);
   const listModels = async () => {
+    if (unavailable) return;
     const request = ++listRequest.current;
     setListing(true);
     try {
@@ -1043,6 +1970,7 @@ function ModelForm({
       if (request === listRequest.current) setOptions(result.models);
     } catch (error) {
       if (request === listRequest.current) {
+        setFeedback(error instanceof Error ? error.message : String(error));
         if (error instanceof BackendError && error.transport)
           backend.reportFailure(error);
         else
@@ -1057,8 +1985,11 @@ function ModelForm({
     }
   };
   const testModel = async () => {
-    if (!validTestSelection || !remote.trim()) return;
+    if (unavailable || !validTestSelection || !remote.trim() || connectionDirty)
+      return;
+    const request = ++testRequest.current;
     setTesting(true);
+    setFeedback(null);
     try {
       const result = await backend.call<{ latency_ms: number; reply: string }>(
         "settings.test_model",
@@ -1071,12 +2002,16 @@ function ModelForm({
               thinking_budget_tokens: budgetSupported ? parsedBudget : null,
             },
       );
+      if (request !== testRequest.current) return;
+      setFeedback(modelTestDescription(result.latency_ms, result.reply));
       toast({
         tone: "success",
         title: "Model responded",
         description: modelTestDescription(result.latency_ms, result.reply),
       });
     } catch (error) {
+      if (request !== testRequest.current) return;
+      setFeedback(error instanceof Error ? error.message : String(error));
       if (error instanceof BackendError && error.transport)
         backend.reportFailure(error);
       else
@@ -1086,7 +2021,7 @@ function ModelForm({
           description: error instanceof Error ? error.message : String(error),
         });
     } finally {
-      setTesting(false);
+      if (request === testRequest.current) setTesting(false);
     }
   };
   return (
@@ -1097,7 +2032,18 @@ function ModelForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
-        if (!validBudget) {
+        if (unavailable) return;
+        if (!remote.trim()) {
+          event.currentTarget
+            .querySelector<HTMLInputElement>('[role="combobox"]')
+            ?.focus();
+          setFeedback("Enter a remote model ID.");
+          return;
+        }
+        if (budgetSupported && !validBudget) {
+          event.currentTarget
+            .querySelector<HTMLInputElement>('[type="number"]')
+            ?.focus();
           toast({
             tone: "danger",
             title: "Invalid thinking budget",
@@ -1115,8 +2061,13 @@ function ModelForm({
           })
         ) {
           dirty.current = false;
+          if (model) {
+            setName(name.trim() || remote.trim());
+            setRemote(remote.trim());
+          }
           if (!model) {
             setName("");
+            setEnabled(true);
             setRemote("");
             setBudgetTokens("");
             setThinking("default");
@@ -1190,14 +2141,26 @@ function ModelForm({
           ))}
         </select>
       </Field>
+      {connectionDirty ? (
+        <p className="text-sm text-fg-muted">Save provider connection first.</p>
+      ) : model && (budgetChanged || remote !== model.model) ? (
+        <p className="text-sm text-fg-muted">Save model changes first.</p>
+      ) : null}
+      {feedback ? (
+        <p role="status" className="text-sm">
+          {feedback}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" variant="primary">
+        <Button type="submit" variant="primary" disabled={unavailable}>
           {busy ? <Spinner label="Saving model" /> : null}
           {model ? "Save model" : "Add model"}
         </Button>
         <Button
           disabled={
+            unavailable ||
             testing ||
+            connectionDirty ||
             !provider.api_key_set ||
             !remote.trim() ||
             !validTestSelection ||
@@ -1209,11 +2172,21 @@ function ModelForm({
           {testing ? <Spinner label="Testing" /> : null}Test
         </Button>
         {model ? (
-          <Button onClick={() => void save("delete_model", model.id)}>
+          <Button disabled={unavailable} onClick={() => setConfirmDelete(true)}>
             Delete model
           </Button>
         ) : null}
       </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${model?.name}?`}
+        description="This model will be removed."
+        confirmLabel="Delete"
+        onConfirm={async () => {
+          if (!unavailable && model) await save("delete_model", model.id);
+        }}
+      />
     </form>
   );
 }
