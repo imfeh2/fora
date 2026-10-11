@@ -100,6 +100,14 @@ beforeAll(async () => {
 }, 30000);
 
 beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 375,
+  });
+  Object.defineProperty(window, "visualViewport", {
+    configurable: true,
+    value: undefined,
+  });
   harness.put.mockReset().mockResolvedValue(undefined);
   harness.controller = new DraftController(1, {
     key: "mentions:1:1:tab",
@@ -258,6 +266,107 @@ it("counts everyone toward the eight option limit", async () => {
   await view.type("@");
   expect(view.options()).toHaveLength(8);
   expect(view.options()[0].textContent).toBe("allEveryone");
+});
+
+it.each([
+  [0, "all"],
+  [1, "All Hands"],
+])(
+  "accepts touch candidate %s and retains the draft identity",
+  async (index, name) => {
+    const view = mount();
+    const controller = harness.controller;
+    await view.type("😀 @AL suffix", 6);
+    const option = view.options()[index];
+    await act(async () => {
+      fireEvent.touchStart(option, {
+        touches: [{ clientX: 20, clientY: 30 }],
+      });
+      fireEvent.touchEnd(option, {
+        changedTouches: [{ clientX: 24, clientY: 34 }],
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => expect(controller?.snapshot().saving).toBe(false));
+    });
+    const text = `😀 @${name}  suffix`;
+    expect(view.input.value).toBe(text);
+    expect(view.input.selectionStart).toBe(`😀 @${name} `.length);
+    expect(document.activeElement).toBe(view.input);
+    expect(view.options()).toEqual([]);
+    expect(harness.controller).toBe(controller);
+    expect(controller?.snapshot().draft.key).toBe("mentions:1:1:tab");
+    expect(controller?.snapshot().draft.body).toBe(text);
+    expect(view.onSend).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  [10, 0],
+  [0, 10],
+  [0, 45],
+])("keeps the draft during a touch movement of %s/%s", async (dx, dy) => {
+  const view = mount();
+  await view.type("@al");
+  const option = view.options()[0];
+  await act(async () => {
+    fireEvent.touchStart(option, {
+      touches: [{ clientX: 20, clientY: 30 }],
+    });
+    fireEvent.touchEnd(option, {
+      changedTouches: [{ clientX: 20 + dx, clientY: 30 + dy }],
+    });
+  });
+  expect(view.input.value).toBe("@al");
+  expect(harness.controller?.snapshot().draft.body).toBe("@al");
+  expect(view.options()).toHaveLength(3);
+  fireEvent.touchEnd(option, {
+    changedTouches: [{ clientX: 20, clientY: 30 }],
+  });
+  expect(view.input.value).toBe("@al");
+  expect(view.onSend).not.toHaveBeenCalled();
+});
+
+it("updates candidate height with the current visual viewport", async () => {
+  const viewport = Object.assign(new EventTarget(), { offsetTop: 20 });
+  Object.defineProperty(window, "visualViewport", {
+    configurable: true,
+    value: viewport,
+  });
+  const view = mount();
+  const card = view.getByRole("group", { name: "Message composer" });
+  let top = 200;
+  const rect = vi
+    .spyOn(card, "getBoundingClientRect")
+    .mockImplementation(() => ({
+      x: 0,
+      y: top,
+      top,
+      bottom: top + 52,
+      left: 0,
+      right: 375,
+      width: 375,
+      height: 52,
+      toJSON: () => ({}),
+    }));
+  await view.type("@al");
+  const menu = view.getByRole("listbox");
+  expect(menu.style.maxHeight).toBe("172px");
+  await act(async () => {
+    viewport.offsetTop = 100;
+    viewport.dispatchEvent(new Event("resize"));
+  });
+  expect(menu.style.maxHeight).toBe("92px");
+  await act(async () => {
+    top = 600;
+    window.dispatchEvent(new Event("scroll"));
+  });
+  expect(menu.style.maxHeight).toBe("264px");
+  await act(async () => {
+    top = 80;
+    viewport.dispatchEvent(new Event("scroll"));
+  });
+  expect(menu.style.maxHeight).toBe("0px");
+  rect.mockRestore();
 });
 
 it("offers no everyone option for an empty discussion", async () => {

@@ -6,12 +6,18 @@ from threading import Barrier, Event
 
 import pytest
 from pydantic_ai import ModelMessagesTypeAdapter
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import FunctionModel
 
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
-from fora.adapters.files.uploads import decode_image
+from fora.adapters.files.uploads import DirectoryUploads, decode_image
 from fora.adapters.jsonl.api import Api
 from fora.adapters.jsonl.protocol import Dispatcher, Request
 from fora.adapters.model.runner import PydanticModelRunner
@@ -21,6 +27,7 @@ from fora.core.discussion import MessageMention
 from fora.core.errors import DomainError
 from fora.runtime.reminder import TurnOutcome, TurnRequest
 from fora.runtime.scheduler import Scheduler
+from fora.services.uploads import Uploads
 from fora.tools import AgentTools, Dependencies, TurnBinding
 from fora.tools.authorize import Actor
 
@@ -52,6 +59,7 @@ def world(tmp_path: Path):
         workspace_tree_for=lambda member_id: DirectoryTree(
             directory(member_id) / "workspace"
         ),
+        uploads=Uploads(store, DirectoryUploads(tmp_path / "uploads")),
     )
     yield deps
     deps.execution.close()
@@ -469,4 +477,201 @@ def test_model_discussion_tool_sends_all_with_real_store(world):
         isinstance(part, ToolReturnPart) and part.tool_name == "discussion"
         for message in saved
         for part in message.parts
+    )
+
+
+def store_snapshot(store):
+    tables = (
+        "members",
+        "discussions",
+        "discussion_members",
+        "messages",
+        "mentions",
+        "message_receipts",
+        "message_attachments",
+        "uploads",
+        "watermarks",
+        "acks",
+    )
+    return {
+        table: tuple(
+            tuple(row)
+            for row in store._db.execute(f"SELECT * FROM {table} ORDER BY rowid")
+        )
+        for table in tables
+    }
+
+
+@pytest.mark.parametrize("entry", ["store", "tools"])
+@pytest.mark.parametrize("change", ["none", "removed", "deleted"])
+def test_required_all_without_receivers_preserves_state(world, entry, change):
+    store = world.store
+    room = store.create_discussion("No receivers", [2] if change == "none" else [2, 3])
+    if change == "removed":
+        store.set_discussion_members(room.id, [2])
+    elif change == "deleted":
+        store.delete_member(3)
+    run = world.history.start_run(2)
+    events = []
+    tools = AgentTools(
+        world,
+        Actor(2, True),
+        turn=TurnBinding(2, run.sequence),
+        on_change=lambda name, payload: events.append((name, payload)),
+    )
+    before = store_snapshot(store)
+    with pytest.raises(DomainError) as failure:
+        if entry == "store":
+            store.submit_message(
+                room.id,
+                2,
+                "@all @All Hands @all",
+                client_message_id=CLIENT_ID,
+                mark_read=True,
+            )
+        else:
+            tools.send_message(
+                room.id, "@all @All Hands @all", client_message_id=CLIENT_ID
+            )
+    assert failure.value.code == "mention_required"
+    assert store_snapshot(store) == before
+    assert store.send_outcome(room.id, 2, CLIENT_ID) == ("unknown", None)
+    assert events == []
+    assert world.history.effects(2, sequences=[run.sequence]) == ()
+
+
+@pytest.mark.parametrize("file_state", ["ready", "missing", "changed"])
+def test_required_all_attachment_preflight_preserves_rejected_state(world, file_state):
+    store = world.store
+    room = store.create_discussion("Attachment preflight", [2])
+    uploads = world.uploads
+    assert uploads is not None
+    data = b"same"
+    upload = uploads.create(room.id, 2, CLIENT_ID, "proof.txt", len(data), "text/plain")
+    active, target = uploads.begin(upload.id, 2)
+    with target:
+        target.write(data)
+    attachment = uploads.complete(active)
+    uploads.end(active)
+    path = Path(uploads.files.path(upload.id))
+    if file_state == "missing":
+        path.unlink()
+    elif file_state == "changed":
+        path.write_bytes(b"diff")
+    run = world.history.start_run(2)
+    events = []
+    tools = AgentTools(
+        world,
+        Actor(2, True),
+        turn=TurnBinding(2, run.sequence),
+        on_change=lambda name, payload: events.append((name, payload)),
+    )
+    before = store_snapshot(store)
+    with pytest.raises(DomainError) as failure:
+        tools.send_message(
+            room.id,
+            "@all",
+            attachment_ids=[upload.id],
+            client_message_id=CLIENT_ID,
+        )
+    assert (
+        failure.value.code
+        == {
+            "ready": "mention_required",
+            "missing": "attachment_missing",
+            "changed": "attachment_changed",
+        }[file_state]
+    )
+    assert store_snapshot(store) == before
+    assert store.send_outcome(room.id, 2, CLIENT_ID) == ("unknown", None)
+    assert world.history.effects(2, sequences=[run.sequence]) == ()
+    assert events == []
+    if file_state == "missing":
+        assert not path.exists()
+    else:
+        assert path.read_bytes() == (data if file_state == "ready" else b"diff")
+    if file_state == "ready":
+        store.set_discussion_members(room.id, [1, 2])
+        sent = tools.send_message(
+            room.id,
+            "@all",
+            attachment_ids=[upload.id],
+            client_message_id=CLIENT_ID,
+        )
+        assert sent["mentioned"] == [1]
+        assert store.messages(room.id)[0].attachments == (attachment,)
+        assert store.get_upload(upload.id, 2).state == "attached"
+        assert len(world.history.effects(2, sequences=[run.sequence])) == 1
+        assert len(events) == 1
+        assert len(store.pending(1)) == 1
+
+
+def test_model_retries_all_without_receivers_and_sends_to_real_members(world):
+    alone = world.store.create_discussion("Alone", [2])
+    room = world.store.create_discussion("Recipients", [1, 2, 3])
+    world.settings.set_settings(
+        "model",
+        {
+            "api_type": "openai-chat",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "unused",
+            "model": "local",
+        },
+    )
+    run = world.history.start_run(2)
+    retries = []
+    returned = []
+
+    def respond(messages, info):
+        for part in messages[-1].parts:
+            if isinstance(part, RetryPromptPart):
+                retries.append(part.content)
+                assert world.store.message_count(alone.id) == 0
+                assert world.store.watermark(alone.id, 2) == 0
+                assert world.history.effects(2, sequences=[run.sequence]) == ()
+            elif isinstance(part, ToolReturnPart):
+                returned.append(part.content)
+        if returned:
+            return ModelResponse(parts=[TextPart("Sent")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "discussion",
+                    {
+                        "action": "send",
+                        "discussion_id": room.id if retries else alone.id,
+                        "body": "@all",
+                    },
+                    "fixed-all" if retries else "empty-all",
+                )
+            ]
+        )
+
+    runner = PydanticModelRunner(
+        world.settings, build_model=lambda config: FunctionModel(respond)
+    )
+    request = TurnRequest(
+        agent_id=2,
+        sequence=run.sequence,
+        agent_name="All Hands",
+        prompt="Send the requested message",
+        reminder=None,
+        history_json="[]",
+        resident="",
+        environment=lambda: "environment",
+        ephemeral=lambda: "",
+        persist=lambda raw: world.history.save_progress(2, run.sequence, raw),
+    )
+    outcome = runner.run(
+        request, AgentTools(world, Actor(2, True), turn=TurnBinding(2, run.sequence))
+    )
+    assert outcome.error is None
+    assert len(retries) == 1 and "mention_required" in str(retries[0])
+    assert returned[0]["mentioned"] == [1, 3]
+    assert world.store.message_count(alone.id) == 0
+    assert world.store.message_count(room.id) == 1
+    assert len(world.history.effects(2, sequences=[run.sequence])) == 1
+    assert world.store.messages(room.id)[0].mentions == (
+        MessageMention(1, 0, 4),
+        MessageMention(3, 0, 4),
     )

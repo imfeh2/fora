@@ -942,7 +942,7 @@ export function Composer({
                       touchStart.current = null;
                       if (dx < 10 && dy < 10) {
                         event.preventDefault();
-                        accept(member);
+                        accept(candidate);
                       }
                     }}
                   >
