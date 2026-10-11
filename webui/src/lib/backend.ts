@@ -21,6 +21,7 @@ export type ProviderConfig = {
   base_url: string;
   api_key_set: boolean;
   enabled: boolean;
+  extra_body?: Record<string, HistoryValue>;
 };
 
 export type RegisteredModel = {

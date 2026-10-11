@@ -72,6 +72,11 @@ from pydantic_ai.models.openai import (
     OpenAIResponsesModel,
 )
 from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.profiles.anthropic import (
+    ANTHROPIC_SAMPLING_PARAMS,
+    anthropic_model_profile,
+)
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -83,7 +88,7 @@ from fora.adapters.model.config import (
     AgentModelConfig,
     ModelCatalog,
     ModelConfig,
-    thinking_settings,
+    model_settings,
 )
 from fora.adapters.model.observability import (
     Observability,
@@ -219,16 +224,18 @@ def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:
 
 
 def build_model(config: ModelConfig) -> Model:
-    settings = cast(
-        ModelSettings,
-        thinking_settings(
-            config.api_type,
-            config.model,
-            config.thinking,
-            config.thinking_budget_tokens,
-        ),
-    )
+    settings = cast(ModelSettings, model_settings(config))
     if config.api_type == "anthropic":
+        profile = anthropic_model_profile(config.model)
+        if (
+            profile
+            and profile.get("anthropic_disallows_sampling_settings", False)
+            and any(key in config.extra_body for key in ANTHROPIC_SAMPLING_PARAMS)
+        ):
+            raise DomainError(
+                "unsupported_request_body",
+                "This model does not support sampling fields. Remove temperature, top_p and top_k.",
+            )
         return AnthropicModel(
             cast(AnthropicModelName, config.model),
             settings=settings,
@@ -247,8 +254,20 @@ def build_model(config: ModelConfig) -> Model:
         return OpenAIResponsesModel(
             cast(OpenAIModelName, config.model), provider=provider, settings=settings
         )
+    chat_profile: OpenAIModelProfile | None = None
+    if "max_tokens" in config.extra_body:
+        chat_profile = OpenAIModelProfile(
+            openai_chat_supports_max_completion_tokens=False
+        )
+    elif "max_completion_tokens" in config.extra_body:
+        chat_profile = OpenAIModelProfile(
+            openai_chat_supports_max_completion_tokens=True
+        )
     return OpenAIChatModel(
-        cast(OpenAIModelName, config.model), provider=provider, settings=settings
+        cast(OpenAIModelName, config.model),
+        provider=provider,
+        settings=settings,
+        profile=chat_profile,
     )
 
 
@@ -1224,6 +1243,7 @@ class PydanticModelRunner:
                     request.request_recorder,
                     {
                         "api_type": config.api_type,
+                        "provider_id": config.provider_id,
                         "model": config.model,
                         "thinking": config.thinking,
                         "thinking_budget_tokens": config.thinking_budget_tokens,

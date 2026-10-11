@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import json
+import math
+import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast, get_args
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    ValidationError,
+    model_validator,
+)
 
 from fora.core.errors import DomainError
 
@@ -94,6 +105,203 @@ def thinking_settings(
     return {"google_thinking_config": {"thinking_level": thinking.upper()}}
 
 
+REQUEST_BODY_MAX_BYTES = 16 * 1024
+REQUEST_BODY_MAX_DEPTH = 16
+REQUEST_BODY_CLIENT_FIELDS = frozenset(
+    {
+        "apikey",
+        "authorization",
+        "accesstoken",
+        "refreshtoken",
+        "bearertoken",
+        "credentials",
+        "credential",
+        "password",
+        "secretkey",
+        "headers",
+        "extraheaders",
+        "extraquery",
+        "baseurl",
+        "httpoptions",
+        "httpclient",
+        "timeout",
+        "maxretries",
+        "proto",
+        "prototype",
+        "constructor",
+    }
+)
+REQUEST_BODY_PROTOCOL_FIELDS = frozenset(
+    {
+        "model",
+        "modelname",
+        "messages",
+        "input",
+        "prompt",
+        "instructions",
+        "system",
+        "contents",
+        "systeminstruction",
+        "tools",
+        "toolchoice",
+        "functions",
+        "functioncall",
+        "paralleltoolcalls",
+        "stream",
+        "streamoptions",
+        "responseformat",
+        "outputformat",
+        "text",
+        "modalities",
+        "audio",
+        "n",
+        "conversation",
+        "previousresponseid",
+        "store",
+        "background",
+        "include",
+        "truncation",
+        "contextmanagement",
+        "mcpservers",
+        "container",
+        "cachecontrol",
+        "cachedcontent",
+        "promptcachekey",
+        "promptcacheretention",
+        "promptcacheoptions",
+        "extrabody",
+    }
+)
+
+
+def _request_body_error(path: str, reason: str) -> None:
+    raise DomainError(
+        "invalid_request_body", f"Custom request body {path[:160]}: {reason}"
+    )
+
+
+def validate_request_body(value: Any, api_type: ApiType) -> dict[str, JsonValue]:
+    if type(value) is not dict:
+        _request_body_error("$", "Enter a JSON object.")
+    pending = [(value, 1, "$")]
+    while pending:
+        current, depth, path = pending.pop()
+        if isinstance(current, dict | list):
+            if depth > REQUEST_BODY_MAX_DEPTH:
+                _request_body_error(path, "Use at most 16 container levels.")
+            if isinstance(current, dict):
+                for key, item in current.items():
+                    if type(key) is not str:
+                        _request_body_error(path, "Field names must be strings.")
+                    if any(0xD800 <= ord(char) <= 0xDFFF for char in key):
+                        _request_body_error(path, "Use valid Unicode field names.")
+                    child = f"{path}.{key[:64]}"[:160]
+                    normalized = re.sub(r"[_\-\s]", "", key).lower()
+                    if normalized in REQUEST_BODY_CLIENT_FIELDS:
+                        _request_body_error(
+                            child, "Remove this protected client field."
+                        )
+                    if depth == 1:
+                        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", key) is None:
+                            _request_body_error(
+                                child,
+                                "Use a letter followed by up to 63 letters, numbers or underscores.",
+                            )
+                        if normalized in REQUEST_BODY_PROTOCOL_FIELDS:
+                            _request_body_error(
+                                child, "Remove this protected protocol field."
+                            )
+                    pending.append((item, depth + 1, child))
+            else:
+                pending.extend(
+                    (item, depth + 1, f"{path}[{index}]"[:160])
+                    for index, item in enumerate(current)
+                )
+        elif type(current) is str:
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in current):
+                _request_body_error(path, "Use valid Unicode text.")
+        elif type(current) is float:
+            if not math.isfinite(current):
+                _request_body_error(path, "Numbers must be finite.")
+        elif current is not None and type(current) not in (bool, int):
+            _request_body_error(path, "Use JSON values only.")
+    size = len(
+        json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    )
+    if size > REQUEST_BODY_MAX_BYTES:
+        _request_body_error("$", "Use at most 16 KiB of UTF-8 JSON.")
+    if api_type == "google" and value:
+        raise DomainError(
+            "unsupported_request_body",
+            "This API does not support a custom request body. Clear it before saving.",
+        )
+    incompatible = {
+        "openai-chat": {"max_output_tokens"},
+        "openai-responses": {"reasoning_effort", "max_completion_tokens", "max_tokens"},
+        "anthropic": {
+            "reasoning_effort",
+            "reasoning",
+            "max_completion_tokens",
+            "max_output_tokens",
+        },
+        "google": set(),
+    }
+    for key in value:
+        if key in incompatible[api_type]:
+            _request_body_error(f"$.{key}", "Remove this field for the selected API.")
+    for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+        if key in value and (type(value[key]) is not int or value[key] <= 0):
+            _request_body_error(f"$.{key}", "Enter a positive whole number.")
+    if "max_tokens" in value and "max_completion_tokens" in value:
+        _request_body_error("$", "Use one token limit field.")
+    if (
+        api_type == "openai-chat"
+        and "reasoning_effort" in value
+        and type(value["reasoning_effort"]) is not str
+    ):
+        _request_body_error("$.reasoning_effort", "Enter a string.")
+    if api_type == "openai-responses" and "reasoning" in value:
+        if type(value["reasoning"]) is not dict:
+            _request_body_error("$.reasoning", "Enter an object.")
+        if (
+            "effort" in value["reasoning"]
+            and type(value["reasoning"]["effort"]) is not str
+        ):
+            _request_body_error("$.reasoning.effort", "Enter a string.")
+    if api_type == "anthropic":
+        if "thinking" in value:
+            thinking = value["thinking"]
+            if type(thinking) is not dict or thinking.get("type") not in (
+                "enabled",
+                "adaptive",
+                "disabled",
+            ):
+                _request_body_error(
+                    "$.thinking",
+                    "Enter an object with type enabled, adaptive or disabled.",
+                )
+            if thinking["type"] == "enabled" and (
+                type(thinking.get("budget_tokens")) is not int
+                or thinking["budget_tokens"] <= 0
+            ):
+                _request_body_error(
+                    "$.thinking.budget_tokens", "Enter a positive whole number."
+                )
+        if "output_config" in value:
+            output = value["output_config"]
+            if type(output) is not dict:
+                _request_body_error("$.output_config", "Enter an object.")
+            if any(re.sub(r"[_\-\s]", "", key).lower() == "format" for key in output):
+                _request_body_error(
+                    "$.output_config.format", "Remove this protected output field."
+                )
+            if "effort" in output and type(output["effort"]) is not str:
+                _request_body_error("$.output_config.effort", "Enter a string.")
+    return deepcopy(cast(dict[str, JsonValue], value))
+
+
 class ConfigurationRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
@@ -105,6 +313,14 @@ class ProviderConfig(ConfigurationRecord):
     base_url: str = ""
     api_key: str = Field(default="", repr=False)
     enabled: bool = True
+    extra_body: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_body(cls, values: Any) -> Any:
+        if isinstance(values, dict) and values.get("api_type") in API_TYPES:
+            validate_request_body(values.get("extra_body", {}), values["api_type"])
+        return values
 
 
 class RegisteredModel(ConfigurationRecord):
@@ -192,6 +408,7 @@ class ModelCatalog(ConfigurationRecord):
             api_type=values.get("api_type", "openai-chat"),
             base_url=values.get("base_url", ""),
             api_key=values.get("api_key", ""),
+            extra_body=values.get("extra_body", {}),
         )
         model_name = values.get("model")
         if not model_name:
@@ -258,6 +475,8 @@ class ModelCatalog(ConfigurationRecord):
             )
 
     def validate_references(self) -> None:
+        for provider in self.providers:
+            validate_request_body(provider.extra_body, provider.api_type)
         if len({item.id for item in self.providers}) != len(self.providers):
             raise DomainError("invalid_model_config", "Provider IDs must be unique")
         if len({item.id for item in self.models}) != len(self.models):
@@ -412,6 +631,8 @@ class ModelCatalog(ConfigurationRecord):
             model=model.model,
             thinking=thinking,
             thinking_budget_tokens=model.thinking_budget_tokens,
+            extra_body=validate_request_body(provider.extra_body, provider.api_type),
+            provider_id=provider.id,
         )
 
 
@@ -423,3 +644,39 @@ class ModelConfig:
     model: str
     thinking: Thinking = "default"
     thinking_budget_tokens: int | None = None
+    extra_body: dict[str, JsonValue] = field(default_factory=dict)
+    provider_id: str | None = None
+
+
+def model_settings(config: ModelConfig) -> dict[str, Any]:
+    settings = thinking_settings(
+        config.api_type, config.model, config.thinking, config.thinking_budget_tokens
+    )
+    extra_body = validate_request_body(config.extra_body, config.api_type)
+    if config.api_type == "openai-chat":
+        if "reasoning_effort" in extra_body:
+            settings["openai_reasoning_effort"] = extra_body["reasoning_effort"]
+        for key in ("max_tokens", "max_completion_tokens"):
+            if key in extra_body:
+                settings["max_tokens"] = extra_body[key]
+    elif config.api_type == "openai-responses":
+        if "reasoning" in extra_body:
+            reasoning = cast(dict[str, JsonValue], extra_body["reasoning"])
+            settings.pop("openai_reasoning_effort", None)
+            if "effort" in reasoning:
+                settings["openai_reasoning_effort"] = reasoning["effort"]
+        if "max_output_tokens" in extra_body:
+            settings["max_tokens"] = extra_body["max_output_tokens"]
+    elif config.api_type == "anthropic":
+        if "thinking" in extra_body:
+            settings["anthropic_thinking"] = deepcopy(extra_body["thinking"])
+        if "output_config" in extra_body:
+            output = cast(dict[str, JsonValue], extra_body["output_config"])
+            settings.pop("anthropic_effort", None)
+            if "effort" in output:
+                settings["anthropic_effort"] = output["effort"]
+        if "max_tokens" in extra_body:
+            settings["max_tokens"] = extra_body["max_tokens"]
+    if extra_body:
+        settings["extra_body"] = extra_body
+    return settings

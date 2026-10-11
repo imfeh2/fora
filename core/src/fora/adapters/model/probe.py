@@ -16,7 +16,9 @@ from fora.adapters.model.config import (
     ApiType,
     ModelCatalog,
     ModelConfig,
+    model_settings,
     thinking_settings,
+    validate_request_body,
     validate_thinking,
     validate_thinking_budget,
 )
@@ -54,6 +56,7 @@ def describe(failure: BaseException, timeout: float) -> str:
 def resolve(
     values: dict[str, Any], stored: dict[str, Any] | None, *, model_required: bool
 ) -> ModelConfig:
+    provider_id = None
     if "provider_id" in values or "model_id" in values:
         catalog = ModelCatalog.restore(stored)
         if "model_id" in values:
@@ -79,6 +82,7 @@ def resolve(
                 for key in ("thinking", "thinking_budget_tokens")
                 if key in values
             }
+        provider_id = provider.id
         values = {
             **provider.model_dump(),
             **selection,
@@ -113,6 +117,8 @@ def resolve(
         model=model,
         thinking=thinking,
         thinking_budget_tokens=budget_tokens,
+        extra_body=validate_request_body(values.get("extra_body", {}), api_type),
+        provider_id=provider_id,
     )
 
 
@@ -145,7 +151,9 @@ def list_models(
     config = resolve(values, stored, model_required=False)
     try:
         names = asyncio.run(asyncio.wait_for(fetch(config), LIST_TIMEOUT))
-    except Exception as failure:  # noqa: BLE001
+    except Exception as failure:
+        if isinstance(failure, DomainError):
+            raise
         raise DomainError(
             "model_list_failed",
             sanitize(describe(failure, LIST_TIMEOUT), config.api_key),
@@ -163,24 +171,22 @@ def try_model(
 
     async def probe() -> str:
         agent: Agent[None, str] = Agent(build(config), name="fora_model_test")
-        configured = thinking_settings(
-            config.api_type,
-            config.model,
-            config.thinking,
-            config.thinking_budget_tokens,
-        )
-        result = await agent.run(
-            TEST_PROMPT,
-            model_settings={
-                "max_tokens": configured.get("max_tokens", TEST_MAX_TOKENS)
-            },
-        )
+        configured = model_settings(config)
+        async with agent:
+            result = await agent.run(
+                TEST_PROMPT,
+                model_settings={
+                    "max_tokens": configured.get("max_tokens", TEST_MAX_TOKENS)
+                },
+            )
         return result.output
 
     started = time.perf_counter()
     try:
         reply = asyncio.run(asyncio.wait_for(probe(), TEST_TIMEOUT))
-    except Exception as failure:  # noqa: BLE001
+    except Exception as failure:
+        if isinstance(failure, DomainError):
+            raise
         raise DomainError(
             "model_test_failed",
             sanitize(describe(failure, TEST_TIMEOUT), config.api_key),

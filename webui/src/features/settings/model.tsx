@@ -1,4 +1,4 @@
-import { Save } from "lucide-react";
+import { CircleHelp, Save } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Combobox } from "@/components/ui/combobox";
 import { Modal } from "@/components/ui/dialog";
@@ -8,9 +8,12 @@ import {
   Field,
   Input,
   Spinner,
+  Textarea,
   toast,
 } from "@/components/ui/index";
 import { Segmented } from "@/components/ui/segmented";
+import { Tooltip } from "@/components/ui/tooltip";
+import { parseRequestBody } from "@/features/settings/request-body";
 import {
   reportLoadFailure,
   useReportSettingsSave,
@@ -348,6 +351,7 @@ type SaveModel = (
   action: string,
   id: string | number | null,
   values?: Record<string, unknown>,
+  onBodyError?: (message: string) => void,
 ) => Promise<boolean>;
 
 export function ModelPanel() {
@@ -383,7 +387,7 @@ export function ModelPanel() {
       off();
     };
   }, [load]);
-  const save: SaveModel = async (action, id, values = {}) => {
+  const save: SaveModel = async (action, id, values = {}, onBodyError) => {
     loadGeneration.current += 1;
     setBusy(true);
     try {
@@ -400,6 +404,14 @@ export function ModelPanel() {
     } catch (error) {
       if (error instanceof BackendError && error.transport)
         backend.reportFailure(error);
+      else if (
+        onBodyError &&
+        error instanceof BackendError &&
+        ["invalid_request_body", "unsupported_request_body"].includes(
+          error.code,
+        )
+      )
+        onBodyError(error.message);
       else
         toast({
           tone: "danger",
@@ -615,13 +627,29 @@ function ProviderForm({
   const [apiKey, setApiKey] = useState("");
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const [clearKey, setClearKey] = useState(false);
+  const [extraBody, setExtraBody] = useState(
+    JSON.stringify(provider?.extra_body ?? {}),
+  );
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const bodyInput = useRef<HTMLTextAreaElement>(null);
+  const restoreBodyFocus = useRef(false);
   const dirty = useRef(false);
+  const body = parseRequestBody(extraBody, apiType);
+  const error = body.error ?? bodyError;
+  useEffect(() => {
+    if (!busy && restoreBodyFocus.current) {
+      restoreBodyFocus.current = false;
+      bodyInput.current?.focus();
+    }
+  }, [busy]);
   useEffect(() => {
     if (!dirty.current) {
       setName(provider?.name ?? "");
       setApiType(provider?.api_type ?? "openai-chat");
       setBaseUrl(provider?.base_url ?? "");
       setEnabled(provider?.enabled ?? true);
+      setExtraBody(JSON.stringify(provider?.extra_body ?? {}));
+      setBodyError(null);
     }
   }, [provider]);
   return (
@@ -632,15 +660,29 @@ function ProviderForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
+        if (body.error !== null) {
+          bodyInput.current?.focus();
+          return;
+        }
+        setBodyError(null);
         if (
-          await save("save_provider", provider?.id ?? null, {
-            name: name.trim(),
-            api_type: apiType,
-            base_url: baseUrl.trim(),
-            api_key: apiKey.trim(),
-            enabled,
-            ...(provider ? { clear_key: clearKey } : {}),
-          })
+          await save(
+            "save_provider",
+            provider?.id ?? null,
+            {
+              name: name.trim(),
+              api_type: apiType,
+              base_url: baseUrl.trim(),
+              api_key: apiKey.trim(),
+              enabled,
+              extra_body: body.value,
+              ...(provider ? { clear_key: clearKey } : {}),
+            },
+            (message) => {
+              setBodyError(message);
+              restoreBodyFocus.current = true;
+            },
+          )
         ) {
           dirty.current = false;
           setApiKey("");
@@ -664,8 +706,53 @@ function ProviderForm({
           onChange={(value) => {
             dirty.current = true;
             setApiType(value);
+            setBodyError(null);
           }}
         />
+      </Field>
+      <Field
+        label={
+          <span className="inline-flex items-center gap-1">
+            <label htmlFor={`${id}-body`}>Custom request body</label>
+            <Tooltip label="Add a JSON object to every model request for this provider. Supports OpenAI Chat, OpenAI Responses and Anthropic. Maximum 16 KiB of UTF-8 JSON and 16 container levels. Explicit fields take priority over thinking settings; nested objects are replaced as a whole. Changes apply to the next Turn. Clear the field to remove all custom content. Omit a key to remove it; null is sent as a real JSON null.">
+              <button
+                type="button"
+                aria-label="About custom request body"
+                className="inline-flex cursor-help"
+              >
+                <CircleHelp size={14} />
+              </button>
+            </Tooltip>
+          </span>
+        }
+      >
+        <Textarea
+          id={`${id}-body`}
+          ref={bodyInput}
+          rows={6}
+          spellCheck={false}
+          value={extraBody}
+          aria-invalid={error !== null}
+          aria-describedby={`${id}-body-hint${error ? ` ${id}-body-error` : ""}`}
+          onChange={(event) => {
+            setExtraBody(event.target.value);
+            setBodyError(null);
+          }}
+        />
+        <p id={`${id}-body-hint`} className="text-xs text-fg-muted">
+          {apiType === "google"
+            ? "This API does not support a custom request body. Clear it before saving."
+            : "Optional JSON object · 16 KiB maximum · applies to the next Turn."}
+        </p>
+        {error ? (
+          <p
+            id={`${id}-body-error`}
+            role="alert"
+            className="text-xs text-danger"
+          >
+            {error}
+          </p>
+        ) : null}
       </Field>
       <Field label="Base URL" htmlFor={`${id}-url`}>
         <Input
