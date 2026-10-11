@@ -105,10 +105,26 @@ mod tests {
     }
 
     #[test]
-    fn every_launcher_lets_the_system_pick_the_port() {
+    fn every_launcher_uses_a_free_port_and_loopback() {
         for development in [true, false] {
             let launcher = launcher(development, Path::new("repo/core"), Path::new("resources"));
-            assert_eq!(launcher.env, [("FORA_PORT".to_string(), "0".to_string())]);
+            assert_eq!(
+                launcher.env,
+                [
+                    ("FORA_PORT".to_string(), "0".to_string()),
+                    ("FORA_HOST".to_string(), "127.0.0.1".to_string()),
+                ]
+            );
+            let mut command = std::process::Command::new(&launcher.program);
+            command.env("FORA_HOST", "0.0.0.0").envs(launcher.env);
+            assert_eq!(
+                command
+                    .get_envs()
+                    .find(|(name, _)| *name == "FORA_HOST")
+                    .unwrap()
+                    .1,
+                Some(std::ffi::OsStr::new("127.0.0.1"))
+            );
         }
     }
 

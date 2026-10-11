@@ -19,7 +19,10 @@ pub struct Launcher {
 }
 
 pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher {
-    let env = vec![("FORA_PORT".to_string(), "0".to_string())];
+    let env = vec![
+        ("FORA_PORT".to_string(), "0".to_string()),
+        ("FORA_HOST".to_string(), "127.0.0.1".to_string()),
+    ];
     if development {
         let parent = project.parent().expect("the core project has a parent");
         Launcher {

@@ -11,17 +11,25 @@ import threading
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass
 from functools import partial
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.parse import quote, unquote
 
 from aiohttp import WSMsgType, web
+from yarl import URL
 
 from fora.adapters.jsonl.protocol import Dispatcher, RequestScope, encode, parse
 from fora.adapters.websocket.access_error import ACCESS_ERROR_PAGE
+from fora.adapters.websocket.address import (
+    HOST,
+    http_origin,
+    parse_origin,
+    validate_host,
+)
 from fora.core.attachment import Upload
 from fora.core.errors import DomainError
 from fora.services.uploads import Uploads
@@ -281,7 +289,6 @@ async def resource[T](
         await worker(release, result)
 
 
-HOST = "127.0.0.1"
 CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
@@ -338,49 +345,134 @@ class WebServer:
         port: int = 0,
         *,
         uploads: Uploads | None = None,
+        host: str = HOST,
     ) -> None:
         self._dispatcher = dispatcher
         self._token = token
         self._directory = directory
         self._uploads = uploads
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket.bind((HOST, port))
-        self._socket.listen(128)
-        self._socket.setblocking(False)
-        self._port = int(self._socket.getsockname()[1])
-        self._ready: Future[None] = Future()
-        self._finished: Future[None] = Future()
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._stop: asyncio.Event | None = None
-        self._connections: set[web.WebSocketResponse] = set()
-        self._control_transports: dict[web.WebSocketResponse, asyncio.Transport] = {}
-        self._handlers: set[asyncio.Task[Any]] = set()
-        self._http: set[asyncio.Task[Any]] = set()
-        self._requests: set[ControlRequest] = set()
-        self._executor = ThreadPoolExecutor(
-            max_workers=16, thread_name_prefix="fora-control"
+        self._host = validate_host(host)
+        if not 0 <= port <= 65535:
+            raise OverflowError("port must be between 0 and 65535")
+        addresses = socket.getaddrinfo(
+            self._host, port, socket.AF_UNSPEC, socket.SOCK_STREAM, socket.IPPROTO_TCP
         )
-        self._app = web.Application(
-            middlewares=[self._boundary], client_max_size=20 * 1024 * 1024
+        family, kind, protocol, _, address = next(
+            result
+            for result in addresses
+            if result[0] in (socket.AF_INET, socket.AF_INET6)
         )
-        self._thread = threading.Thread(target=self._run, name="fora-web")
-        self._origins = {
-            f"http://127.0.0.1:{self._port}",
-            f"http://localhost:{self._port}",
-            "http://localhost:1420",
-            "tauri://localhost",
-            "http://tauri.localhost",
-        }
-        self.add_websocket_route("/ws", self._control, max_msg_size=2**20)
-        self._app.router.add_put("/uploads/{upload_id}/content", self._upload)
-        self._app.router.add_get(
-            "/discussions/{discussion_id}/messages/{message_id}/attachments/{attachment_id}/content",
-            self._download,
-        )
+        with ExitStack() as resources:
+            self._socket = socket.socket(family, kind, protocol)
+            resources.callback(self._socket.close)
+            if family == socket.AF_INET6:
+                self._socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            self._socket.bind(address)
+            self._socket.listen(128)
+            self._socket.setblocking(False)
+            bound = self._socket.getsockname()
+            self._address = ip_address(bound[0])
+            self._port = int(bound[1])
+            if len(addresses) > 1:
+                log.info("Resolved %s; selected %s", self._host, self.listening_origin)
+            self._ready: Future[None] = Future()
+            self._finished: Future[None] = Future()
+            self._loop: asyncio.AbstractEventLoop | None = None
+            self._stop: asyncio.Event | None = None
+            self._connections: set[web.WebSocketResponse] = set()
+            self._control_transports: dict[
+                web.WebSocketResponse, asyncio.Transport
+            ] = {}
+            self._handlers: set[asyncio.Task[Any]] = set()
+            self._http: set[asyncio.Task[Any]] = set()
+            self._requests: set[ControlRequest] = set()
+            self._executor = ThreadPoolExecutor(
+                max_workers=16, thread_name_prefix="fora-control"
+            )
+            resources.callback(self._executor.shutdown, wait=True, cancel_futures=True)
+            self._app = web.Application(
+                middlewares=[self._boundary], client_max_size=20 * 1024 * 1024
+            )
+            self._thread = threading.Thread(target=self._run, name="fora-web")
+            self._origins = {
+                parse_origin(origin)
+                for origin in (
+                    http_origin(HOST, self._port),
+                    http_origin("::1", self._port),
+                    http_origin("localhost", self._port),
+                    "http://localhost:1420",
+                    "tauri://localhost",
+                    "http://tauri.localhost",
+                )
+            }
+            if not self.wildcard:
+                self._origins.update(
+                    (
+                        parse_origin(self.listening_origin),
+                        parse_origin(http_origin(self._host, self._port)),
+                    )
+                )
+            self.add_websocket_route("/ws", self._control, max_msg_size=2**20)
+            self._app.router.add_put("/uploads/{upload_id}/content", self._upload)
+            self._app.router.add_get(
+                "/discussions/{discussion_id}/messages/{message_id}/attachments/{attachment_id}/content",
+                self._download,
+            )
+            resources.pop_all()
 
     @property
     def port(self) -> int:
         return self._port
+
+    @property
+    def wildcard(self) -> bool:
+        return self._address.is_unspecified
+
+    @property
+    def loopback(self) -> bool:
+        return self._address.is_loopback
+
+    @property
+    def ipv6(self) -> bool:
+        return self._address.version == 6
+
+    @property
+    def listening_origin(self) -> str:
+        return http_origin(str(self._address), self._port)
+
+    @property
+    def access_origin(self) -> str:
+        host = str(self._address)
+        if self.wildcard:
+            host = "::1" if self.ipv6 else HOST
+        return http_origin(host, self._port)
+
+    def access_url(self, token: str) -> str:
+        return str(URL(self.access_origin).with_path("/").with_query(token=token))
+
+    def _allows_origin(self, request: web.Request, value: str) -> bool:
+        try:
+            origin = parse_origin(value)
+        except ValueError:
+            return False
+        if origin in self._origins:
+            return True
+        if not self.wildcard or origin.scheme != "http" or origin.port != self._port:
+            return False
+        transport = request.transport
+        if transport is None:
+            return False
+        address = transport.get_extra_info("sockname")
+        if address is None:
+            return False
+        try:
+            local = parse_origin(
+                http_origin(str(ip_address(address[0])), int(address[1]))
+            )
+            requested = parse_origin(f"http://{request.host}")
+        except ValueError:
+            return False
+        return origin == local == requested
 
     def add_websocket_route(
         self, path: str, handler: SocketHandler, *, max_msg_size: int
@@ -422,13 +514,26 @@ class WebServer:
         self._app.router.add_get(path, connected)
 
     def start(self) -> None:
-        self._app.router.add_route("*", "/{path:.*}", self._static)
-        self._thread.start()
-        self._ready.result()
+        try:
+            self._app.router.add_route("*", "/{path:.*}", self._static)
+            self._thread.start()
+            self._ready.result()
+        except BaseException:
+            if self._thread.ident is not None:
+                self._thread.join()
+            else:
+                self._executor.shutdown(wait=True, cancel_futures=True)
+                self._socket.close()
+            raise
 
     def stop(self) -> None:
-        assert self._loop is not None and self._stop is not None
-        self._loop.call_soon_threadsafe(self._stop.set)
+        if self._thread.ident is None:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._socket.close()
+            return
+        if not self._finished.done():
+            assert self._loop is not None and self._stop is not None
+            self._loop.call_soon_threadsafe(self._stop.set)
         self._thread.join()
         self._finished.result()
 
@@ -450,9 +555,9 @@ class WebServer:
         self._loop = asyncio.get_running_loop()
         self._stop = asyncio.Event()
         runner = web.AppRunner(self._app, access_log=None, shutdown_timeout=130)
-        await runner.setup()
-        site = web.SockSite(runner, self._socket)
         try:
+            await runner.setup()
+            site = web.SockSite(runner, self._socket)
             await site.start()
             async with asyncio.TaskGroup() as tasks:
                 cleanup = tasks.create_task(self._cleanup())
@@ -516,7 +621,7 @@ class WebServer:
         handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
     ) -> web.StreamResponse:
         origin = request.headers.get("Origin")
-        if origin is not None and origin not in self._origins:
+        if origin is not None and not self._allows_origin(request, origin):
             if (
                 request.path != "/ws"
                 or request.headers.get("Upgrade", "").lower() == "websocket"

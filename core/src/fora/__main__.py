@@ -11,7 +11,6 @@ from contextlib import ExitStack
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 from fora.adapters.host import (
     configure_stdio,
@@ -20,6 +19,7 @@ from fora.adapters.host import (
     stdin_is_piped,
     write_private,
 )
+from fora.adapters.websocket.address import HOST, validate_host
 from fora.runtime_info import RuntimeInfo
 
 if TYPE_CHECKING:
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 DATA_DIRECTORY_ENV = "FORA_DATA_DIR"
 PORT_ENV = "FORA_PORT"
+HOST_ENV = "FORA_HOST"
 TOKEN_ENV = "FORA_TOKEN"
 WEBUI_DIRECTORY_ENV = "FORA_WEBUI_DIR"
 DEVELOPMENT_PORT = 2461
@@ -58,7 +59,17 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         "--transport",
         choices=(WEBSOCKET, STDIO),
         default=WEBSOCKET,
-        help="websocket listens on a loopback port; stdio reads requests from stdin (default: websocket)",
+        help="websocket serves network requests; stdio reads requests from stdin (default: websocket)",
+    )
+    parser.add_argument(
+        "--host",
+        help=(
+            "websocket hostname or IP (default: FORA_HOST or 127.0.0.1); "
+            "0.0.0.0 and :: listen on all IPv4 or IPv6 interfaces; "
+            "other devices use this machine's actual IP, the same port and token; "
+            "non-loopback binding exposes the organization to reachable devices; "
+            "routing and firewall rules must allow access, and browser origins must use the listening port"
+        ),
     )
     parser.add_argument(
         "--port",
@@ -76,7 +87,18 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         default=os.environ.get(WEBUI_DIRECTORY_ENV) or None,
         help="directory with a built interface to serve beside the websocket endpoint",
     )
-    return parser.parse_args(argv)
+    options = parser.parse_args(argv)
+    if options.transport == STDIO:
+        if options.host is not None:
+            parser.error("--host is only supported with --transport websocket")
+    else:
+        if options.host is None:
+            options.host = os.environ.get(HOST_ENV) or HOST
+        try:
+            options.host = validate_host(options.host)
+        except ValueError as error:
+            parser.error(f"invalid --host: {error}")
+    return options
 
 
 def load_token(directory: Path, override: str | None) -> str:
@@ -291,14 +313,14 @@ def main(argv: list[str] | None = None) -> int:
             PydanticModelRunner(agent_store),
             on_event=lambda name, payload: dispatcher.emit(name, payload),
         )
+        scheduler.parameters()
         scheduler.recover()
         Api(scheduler, dispatcher, runtime_info=runtime_info, reading=store._db.read)
 
         stop = Stop()
         install_signal_handlers(stop.stop)
-        scheduler.start()
-
         if stdio:
+            scheduler.start()
             sink = stdio_sink(stop)
             dispatcher.attach(sink)
             write_run_file(run_file, None, None)
@@ -319,24 +341,37 @@ def main(argv: list[str] | None = None) -> int:
                 webui_directory(options.webui_dir),
                 port=options.port,
                 uploads=uploads,
+                host=options.host,
             )
+            resources.callback(server.stop)
             voice = VoiceEndpoint(lambda: agent_store.get_settings("voice"))
             server.add_websocket_route("/voice", voice.handle, max_msg_size=1048576)
-            resources.callback(server.stop)
             server.start()
+            scheduler.start()
             write_run_file(run_file, server.port, token)
             announced = True
             log.info(
-                "Listening on http://127.0.0.1:%d with data directory %s",
-                server.port,
+                "Listening on %s with data directory %s",
+                server.listening_origin,
                 directory,
             )
+            if server.wildcard:
+                log.info(
+                    "Listening on all %s interfaces; other devices use this machine's actual IP "
+                    "with the same port and token from the access link. Routing and firewall rules "
+                    "must allow access; browser origins must use the listening port.",
+                    "IPv6" if server.ipv6 else "IPv4",
+                )
+            if not server.loopback:
+                log.warning(
+                    "Reachable devices can access this organization using its access token."
+                )
             announce(
                 {
                     "type": "ready",
                     "port": server.port,
                     "token": token,
-                    "url": f"http://127.0.0.1:{server.port}/?token={quote(token, safe='')}",
+                    "url": server.access_url(token),
                     **runtime_info.as_dict(),
                 }
             )

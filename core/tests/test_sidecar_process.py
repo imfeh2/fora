@@ -50,6 +50,9 @@ class Kernel:
             else "/usr/bin:/bin:/usr/local/bin",
             "PYTHONPATH": SOURCE,
         }
+        for name in ("TMPDIR", "TEMP", "TMP"):
+            if name in os.environ:
+                self._env[name] = os.environ[name]
         if os.name == "nt":
             for name in (
                 "SYSTEMROOT",
@@ -2033,3 +2036,112 @@ def test_ui_pagination_read_and_bulk_contract_survive_real_websocket(
         assert result["read_through"] == 1
         assert result["first_unread_id"] is None
         assert result["messages"][0]["body"] == "own"
+
+
+@pytest.mark.parametrize(
+    ("environment", "arguments", "wildcard"),
+    [
+        ({"FORA_HOST": "0.0.0.0"}, (), True),
+        ({"FORA_HOST": "invalid host"}, ("--host=127.0.0.1",), False),
+        ({}, ("--host", "0.0.0.0"), True),
+    ],
+)
+def test_host_ready_logs_and_run_file(
+    tmp_path: Path, environment, arguments, wildcard
+) -> None:
+    from yarl import URL
+
+    data = tmp_path / "data"
+    with Kernel(data, env=environment, arguments=arguments) as kernel:
+        url = URL(kernel.ready["url"])
+        assert url.host == "127.0.0.1"
+        assert url.port == kernel.port
+        assert url.query["token"] == kernel.token
+        assert json.loads((data / "run.json").read_text())["port"] == kernel.port
+        with connect(
+            kernel.ws_url(), origin=f"http://127.0.0.1:{kernel.port}", proxy=None
+        ) as connection:
+            assert Client(connection).call({"id": 1, "method": "ping"})["result"] == {
+                "pong": None
+            }
+        assert kernel.shutdown() == 0, kernel.stderr
+        assert kernel.stdout == b""
+        assert kernel.token not in kernel.stderr
+    assert not (data / "run.json").exists()
+    log = (data / "logs/fora.log").read_text()
+    assert kernel.token not in log
+    expected = "0.0.0.0" if wildcard else "127.0.0.1"
+    assert f"Listening on http://{expected}:{kernel.port}" in log
+    if wildcard:
+        assert "all IPv4 interfaces" in log
+        assert "actual IP" in log
+        assert "firewall" in log
+        assert "access token" in log
+
+
+def test_stdio_process_ignores_invalid_host_environment(tmp_path: Path) -> None:
+    with Kernel(
+        tmp_path / "data",
+        env={"FORA_HOST": "invalid host"},
+        arguments=("--transport", "stdio"),
+    ) as kernel:
+        assert kernel.ready["transport"] == "stdio"
+        assert "url" not in kernel.ready
+        kernel.send_stdin(json.dumps({"id": 1, "method": "ping"}) + "\n")
+        assert kernel.read_frame()["result"] == {"pong": None}
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--transport", "stdio", "--host", "127.0.0.1"),
+        ("--host", "http://localhost"),
+        ("--host=",),
+    ],
+)
+def test_invalid_host_process_does_not_initialize_data(
+    tmp_path: Path, arguments
+) -> None:
+    data = tmp_path / "must-not-exist"
+    result = subprocess.run(
+        [sys.executable, "-m", "fora", "--data-dir", str(data), *arguments],
+        env={**os.environ, "PYTHONPATH": SOURCE},
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert result.stdout == b""
+    assert b"--host" in result.stderr
+    assert not data.exists()
+
+
+def test_bind_failure_has_no_ready_or_run_file(tmp_path: Path) -> None:
+    import socket
+
+    data = tmp_path / "data"
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "fora",
+                "--data-dir",
+                str(data),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(listener.getsockname()[1]),
+            ],
+            env={**os.environ, "PYTHONPATH": SOURCE},
+            capture_output=True,
+            timeout=TIMEOUT,
+            check=False,
+        )
+    assert result.returncode != 0
+    assert result.stdout == b""
+    assert b"OSError" in result.stderr
+    assert not (data / "run.json").exists()
