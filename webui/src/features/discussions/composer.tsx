@@ -224,6 +224,8 @@ export function Composer({
   const sending = busy || !!view?.busy;
   const canSend =
     !!controller &&
+    !view?.moved &&
+    !view?.recovering &&
     !view?.draft.pending?.cancelRequested &&
     !!(body.trim() || files.length || view?.draft.pending);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -690,7 +692,7 @@ export function Composer({
     await controller.send(onSend);
     if (!controller.snapshot().draft.body) setCaret(0);
   };
-  const pending = view?.draft.pending ?? null;
+  const pending = view?.moved ? null : (view?.draft.pending ?? null);
   const pendingError = pending && view?.error ? view.error : null;
   const draftFailure =
     draftError ??
@@ -775,13 +777,32 @@ export function Composer({
               onRemove={(id) => controller?.removeFile(id)}
             />
           ) : null}
+          {view?.recoveryCandidate && !view.moved ? (
+            <div className="px-4 pt-3 text-sm" role="status">
+              <button
+                type="button"
+                className="underline"
+                disabled={view.busy || view.saving}
+                onClick={() => void controller?.recover()}
+              >
+                Recover saved draft
+              </button>
+              <div className="mt-1 text-xs text-fg-muted">
+                Saved{" "}
+                {new Date(view.recoveryCandidate.updatedAt).toLocaleString()}.
+                This moves the saved draft to this tab. Stop sending in other
+                tabs first.
+              </div>
+            </div>
+          ) : null}
           {draftFailure ? (
             <div role="alert" className="px-4 pt-3 text-sm text-red-300">
               {draftFailure}
-              {view?.storageError ? (
+              {view?.storageError && !view.moved ? (
                 <button
                   type="button"
                   className="ml-2 underline"
+                  disabled={view.recovering || view.saving}
                   onClick={() => controller?.saveAgain()}
                 >
                   Retry saving draft
@@ -980,7 +1001,8 @@ export function Composer({
           <Textarea
             ref={input}
             value={body}
-            disabled={!controller}
+            readOnly={view?.moved}
+            disabled={!controller || !!view?.recovering}
             style={{
               paddingLeft: layout.expanded
                 ? isTouchOrNarrow
@@ -1116,7 +1138,7 @@ export function Composer({
           ) : null}
           <button
             type="button"
-            disabled={!controller}
+            disabled={!controller || !!view?.recovering || !!view?.moved}
             onClick={() => fileInput.current?.click()}
             aria-label="Attach files"
             title="Attach files"
@@ -1130,7 +1152,7 @@ export function Composer({
             type="button"
             aria-label="Attach files"
             title="Attach files"
-            disabled={!controller}
+            disabled={!controller || !!view?.recovering || !!view?.moved}
             onClick={() => fileInput.current?.click()}
             className="absolute left-2 bottom-2 narrow:left-1 narrow:bottom-1 touch:left-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
           >
@@ -1156,6 +1178,8 @@ export function Composer({
           }
           disabled={
             !controller ||
+            !!view?.moved ||
+            !!view?.recovering ||
             !!view?.draft.pending?.cancelRequested ||
             (!recordingActive && sending) ||
             voiceState === "finishing"

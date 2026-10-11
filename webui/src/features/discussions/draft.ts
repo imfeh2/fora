@@ -1,5 +1,11 @@
-import { type DBSchema, openDB } from "idb";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { v4 as uuidv4 } from "uuid";
+import {
+  DraftMovedError,
+  draftDatabase as database,
+  emptyDraft,
+  OwnedDraftStore,
+} from "@/features/discussions/draft-storage";
 import { BackendError, backend, type UploadRecord } from "@/lib/backend";
 
 export type DraftFile = {
@@ -24,16 +30,9 @@ export type Draft = {
   files: DraftFile[];
   pending: Submission | null;
   voiceSubmission?: { id: string; submittedBody: string } | null;
+  owner?: string;
+  storageRevision?: string;
 };
-interface DraftDatabase extends DBSchema {
-  drafts: { key: string; value: Draft };
-}
-const database = () =>
-  openDB<DraftDatabase>("fora-drafts", 1, {
-    upgrade(db) {
-      db.createObjectStore("drafts", { keyPath: "key" });
-    },
-  });
 
 let tab: Promise<string> | undefined;
 function tabId() {
@@ -46,7 +45,7 @@ function tabId() {
           { ifAvailable: true },
           async (lock) => {
             if (!lock) {
-              claim(crypto.randomUUID());
+              claim(uuidv4());
               return;
             }
             sessionStorage.setItem("fora.draft-tab", id);
@@ -56,7 +55,7 @@ function tabId() {
         )
         .catch(reject);
     };
-    claim(sessionStorage.getItem("fora.draft-tab") ?? crypto.randomUUID());
+    claim(sessionStorage.getItem("fora.draft-tab") ?? uuidv4());
   });
   return tab;
 }
@@ -95,6 +94,9 @@ export type DraftView = {
   saving: boolean;
   storageError: string | null;
   error: string | null;
+  moved: boolean;
+  recovering: boolean;
+  recoveryCandidate: Draft | null;
 };
 export type SendDraft = (
   body: string,
@@ -119,11 +121,13 @@ export class DraftController {
   #cancellationTransportFeedback: number | null = null;
   #operations = 0;
   #savedDraft: Draft | null;
+  #stopWatching: (() => void) | null = null;
 
   constructor(
     readonly discussionId: number,
     draft: Draft,
     readonly onIdle: () => void = () => {},
+    readonly storage?: OwnedDraftStore,
   ) {
     this.#savedDraft = draft;
     this.#view = {
@@ -133,6 +137,9 @@ export class DraftController {
       saving: false,
       storageError: null,
       error: null,
+      moved: false,
+      recovering: false,
+      recoveryCandidate: null,
     };
   }
 
@@ -145,6 +152,7 @@ export class DraftController {
     };
   };
   #notify(update: Partial<DraftView>) {
+    if (this.#view.moved) return;
     if ("error" in update) this.#errorVersion += 1;
     this.#view = { ...this.#view, ...update };
     for (const listener of this.#listeners) listener();
@@ -154,14 +162,142 @@ export class DraftController {
     return (
       this.#listeners.size === 0 &&
       this.#operations === 0 &&
-      this.#view.draft === this.#savedDraft &&
-      this.#view.storageError === null &&
-      !(
-        this.#view.draft.pending &&
-        this.#view.submissionResult?.id === this.#view.draft.pending.id
-      )
+      (this.#view.moved ||
+        (this.#view.draft === this.#savedDraft &&
+          this.#view.storageError === null &&
+          !(
+            this.#view.draft.pending &&
+            this.#view.submissionResult?.id === this.#view.draft.pending.id
+          )))
     );
   }
+
+  #markMoved() {
+    if (this.#view.moved) return;
+    this.#retryCancellationAfterBusy = false;
+    this.#abort?.abort();
+    this.#abort = null;
+    this.#notify({
+      moved: true,
+      storageError: null,
+      error: new DraftMovedError().message,
+      busy: false,
+      saving: false,
+      recovering: false,
+      recoveryCandidate: null,
+    });
+    this.dispose();
+  }
+
+  async #assertOwner() {
+    if (this.#view.moved) throw new DraftMovedError();
+    try {
+      await this.storage?.assertOwner();
+    } catch (error) {
+      if (error instanceof DraftMovedError) this.#markMoved();
+      throw error;
+    }
+  }
+
+  async #network<T>(operation: () => Promise<T>): Promise<T> {
+    await this.#assertOwner();
+    try {
+      return await operation();
+    } finally {
+      await this.#assertOwner();
+    }
+  }
+
+  refreshOwnership = () =>
+    this.#runOperation(async () => {
+      try {
+        await this.#assertOwner();
+      } catch (error) {
+        this.#notify({
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+  watchOwnership() {
+    if (!this.storage || this.#stopWatching || this.#view.moved) return;
+    const refresh = () => void this.refreshOwnership();
+    window.addEventListener("pageshow", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const channel =
+      typeof window.BroadcastChannel === "function"
+        ? new window.BroadcastChannel("fora-draft-ownership")
+        : null;
+    if (channel)
+      channel.onmessage = (event) => {
+        if (event.data === this.storage?.key) refresh();
+      };
+    this.#stopWatching = () => {
+      window.removeEventListener("pageshow", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      channel?.close();
+    };
+  }
+
+  dispose() {
+    this.#stopWatching?.();
+    this.#stopWatching = null;
+  }
+
+  async refreshRecovery() {
+    if (!this.storage || this.#view.moved) return;
+    const candidates = await this.storage.candidates();
+    if (!this.#view.saving && !this.#view.busy && emptyDraft(this.#view.draft))
+      this.#notify({ recoveryCandidate: candidates[0] ?? null });
+  }
+
+  recover = () =>
+    this.#runOperation(async () => {
+      const candidate = this.#view.recoveryCandidate;
+      if (
+        !this.storage ||
+        !candidate ||
+        this.#view.busy ||
+        this.#view.saving ||
+        this.#view.moved ||
+        !emptyDraft(this.#view.draft)
+      )
+        return;
+      this.#notify({ busy: true, recovering: true, error: null });
+      let recovered = false;
+      try {
+        await this.#writes;
+        const draft = await this.storage.recover(
+          candidate,
+          () => !this.#view.saving && emptyDraft(this.#view.draft),
+        );
+        this.#savedDraft = draft;
+        this.#notify({ draft, recoveryCandidate: null, storageError: null });
+        recovered = true;
+        if (typeof window.BroadcastChannel === "function") {
+          const channel = new window.BroadcastChannel("fora-draft-ownership");
+          channel.postMessage(candidate.key);
+          channel.close();
+        }
+      } catch (error) {
+        if (error instanceof DraftMovedError) this.#markMoved();
+        this.#notify({
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        this.#notify({ busy: false, recovering: false });
+      }
+      if (recovered) await this.#checkResult();
+      else {
+        try {
+          await this.refreshRecovery();
+        } catch (error) {
+          this.#notify({
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    });
 
   async #runOperation<T>(operation: () => Promise<T>): Promise<T> {
     this.#operations += 1;
@@ -174,25 +310,32 @@ export class DraftController {
   }
 
   #persist(draft: Draft): Promise<boolean> {
+    if (this.#view.moved || this.#view.recovering)
+      return Promise.resolve(false);
     const number = ++this.#writeNumber;
     draft = { ...draft, updatedAt: Date.now() };
     this.#savedDraft = null;
-    this.#notify({ draft, saving: true });
+    this.#notify({ draft, saving: true, recoveryCandidate: null });
     const operation = this.#runOperation(() =>
       this.#writes.then(async () => {
         try {
-          const db = await database();
-          try {
-            await db.put("drafts", draft);
-          } finally {
-            db.close();
+          let saved = draft;
+          if (this.storage) saved = await this.storage.save(draft);
+          else {
+            const db = await database();
+            try {
+              await db.put("drafts", draft);
+            } finally {
+              db.close();
+            }
           }
           if (number === this.#writeNumber) {
-            this.#savedDraft = draft;
-            this.#notify({ saving: false, storageError: null });
+            this.#savedDraft = saved;
+            this.#notify({ draft: saved, saving: false, storageError: null });
           }
           return true;
         } catch (error) {
+          if (error instanceof DraftMovedError) this.#markMoved();
           this.#notify({
             saving: false,
             storageError: `Draft not saved: ${error instanceof Error ? error.message : String(error)}`,
@@ -206,6 +349,7 @@ export class DraftController {
   }
 
   setBody = (body: string) => {
+    if (this.#view.moved || this.#view.recovering) return;
     const draft = this.#view.draft;
     void this.#persist({
       ...draft,
@@ -216,6 +360,7 @@ export class DraftController {
   };
 
   setVoiceBody = (body: string, voiceSubmission: Draft["voiceSubmission"]) => {
+    if (this.#view.moved || this.#view.recovering) return;
     const draft = this.#view.draft;
     if (voiceSubmission && !body.startsWith(voiceSubmission.submittedBody))
       throw new Error("Voice draft must retain its pending submission prefix");
@@ -228,6 +373,7 @@ export class DraftController {
   };
 
   addFiles = (incoming: File[]) => {
+    if (this.#view.moved || this.#view.recovering) return;
     const files = [...this.#view.draft.files];
     const errors = [];
     for (const file of incoming) {
@@ -235,8 +381,8 @@ export class DraftController {
       if (problem) errors.push(problem);
       else
         files.push({
-          id: crypto.randomUUID(),
-          clientId: crypto.randomUUID(),
+          id: uuidv4(),
+          clientId: uuidv4(),
           file,
         });
     }
@@ -245,6 +391,7 @@ export class DraftController {
   };
 
   removeFile = (id: string) => {
+    if (this.#view.moved || this.#view.recovering) return;
     void this.#persist({
       ...this.#view.draft,
       files: this.#view.draft.files.filter((item) => item.id !== id),
@@ -252,9 +399,11 @@ export class DraftController {
   };
 
   saveAgain = () => {
+    if (this.#view.moved || this.#view.recovering) return;
     void this.#persist(this.#view.draft);
   };
   cancel = () => {
+    if (this.#view.moved || this.#view.recovering) return;
     const pending = this.#view.draft.pending;
     if (pending?.phase === "uploading" && !pending.cancelRequested) {
       const requested = { ...pending, cancelRequested: true };
@@ -323,10 +472,8 @@ export class DraftController {
     for (let index = 0; index < resolved.files.length; index++) {
       const item = resolved.files[index];
       if (item.upload) continue;
-      const upload = await backend.createUpload(
-        this.discussionId,
-        item.clientId,
-        item.file,
+      const upload = await this.#network(() =>
+        backend.createUpload(this.discussionId, item.clientId, item.file),
       );
       resolved = {
         ...resolved,
@@ -370,7 +517,7 @@ export class DraftController {
 
   async #recoverCancellation(): Promise<void> {
     const pending = this.#view.draft.pending;
-    if (!pending?.cancelRequested) return;
+    if (this.#view.moved || !pending?.cancelRequested) return;
     if (this.#view.busy) {
       this.#retryCancellationAfterBusy = true;
       return;
@@ -412,7 +559,10 @@ export class DraftController {
     this.#notify({ error: null });
   };
 
-  connectionRestored = () => this.#completeCancellation();
+  connectionRestored = async () => {
+    await this.refreshOwnership();
+    if (!this.#view.moved) await this.#completeCancellation();
+  };
 
   async #cancelled(submission: Submission) {
     let requested = this.#requestedCancellation(submission);
@@ -427,7 +577,7 @@ export class DraftController {
       const ids = requested.files.flatMap((item) =>
         item.upload ? [item.upload.id] : [],
       );
-      if (ids.length) await backend.cancelUploads(ids);
+      if (ids.length) await this.#network(() => backend.cancelUploads(ids));
     } catch (error) {
       const current = this.#view.draft.pending;
       const failure = this.#cancellationFailure(error);
@@ -450,7 +600,7 @@ export class DraftController {
       ...current,
       files: current.files.map((item) =>
         cancelled.has(item.id)
-          ? { ...item, clientId: crypto.randomUUID(), upload: undefined }
+          ? { ...item, clientId: uuidv4(), upload: undefined }
           : item,
       ),
       pending: null,
@@ -483,7 +633,8 @@ export class DraftController {
       await this.#completeCancellation();
       return;
     }
-    if (pending?.phase !== "sending" || this.#view.busy) return;
+    if (this.#view.moved || pending?.phase !== "sending" || this.#view.busy)
+      return;
     this.#notify({ busy: true });
     try {
       const known =
@@ -498,7 +649,9 @@ export class DraftController {
         await this.#cancelled(pending);
         return;
       }
-      const result = await backend.sendStatus(this.discussionId, pending.id);
+      const result = await this.#network(() =>
+        backend.sendStatus(this.discussionId, pending.id),
+      );
       if (result.state === "sent") await this.#finish(pending);
       else if (result.state === "cancelled") await this.#cancelled(pending);
       else
@@ -530,11 +683,13 @@ export class DraftController {
       await this.#completeCancellation();
       return;
     }
-    if (!pending || this.#view.busy) return;
+    if (this.#view.moved || !pending || this.#view.busy) return;
     this.#notify({ busy: true });
     try {
       if (pending.phase === "sending") {
-        const result = await backend.cancelSend(this.discussionId, pending.id);
+        const result = await this.#network(() =>
+          backend.cancelSend(this.discussionId, pending.id),
+        );
         if (result.state === "sent") {
           await this.#finish(pending);
           return;
@@ -559,7 +714,7 @@ export class DraftController {
   send = (onSend: SendDraft) => this.#runOperation(() => this.#send(onSend));
 
   async #send(onSend: SendDraft) {
-    if (this.#view.busy) return;
+    if (this.#view.moved || this.#view.busy) return;
     const draft = this.#view.draft;
     if (draft.pending?.cancelRequested) {
       await this.#completeCancellation();
@@ -573,18 +728,20 @@ export class DraftController {
     });
     const abort = new AbortController();
     this.#abort = abort;
-    let submission: Submission = draft.pending ?? {
-      id: crypto.randomUUID(),
-      body: draft.body.trim(),
-      bodyRevision: draft.bodyRevision,
-      files: draft.files.map((item) => ({ ...item })),
-      phase: "uploading",
-    };
+    let submission: Submission | null = draft.pending;
     try {
+      await this.#assertOwner();
+      submission ??= {
+        id: uuidv4(),
+        body: draft.body.trim(),
+        bodyRevision: draft.bodyRevision,
+        files: draft.files.map((item) => ({ ...item })),
+        phase: "uploading",
+      };
       if (submission.phase === "sending") {
-        const result = await backend.sendStatus(
-          this.discussionId,
-          submission.id,
+        const pending = submission;
+        const result = await this.#network(() =>
+          backend.sendStatus(this.discussionId, pending.id),
         );
         if (result.state === "sent") {
           await this.#finish(submission);
@@ -602,13 +759,12 @@ export class DraftController {
         index++
       ) {
         abort.signal.throwIfAborted();
-        let item = submission.files[index];
-        let upload = item.upload
-          ? (await backend.uploadStatus([item.upload.id]))[0]
-          : await backend.createUpload(
-              this.discussionId,
-              item.clientId,
-              item.file,
+        let item: DraftFile = submission.files[index];
+        const previous = item.upload;
+        let upload = previous
+          ? (await this.#network(() => backend.uploadStatus([previous.id])))[0]
+          : await this.#network(() =>
+              backend.createUpload(this.discussionId, item.clientId, item.file),
             );
         if (
           upload.state !== "ready" ||
@@ -618,13 +774,12 @@ export class DraftController {
             upload.state !== "reserved" ||
             upload.expires_at * 1000 <= Date.now()
           ) {
-            await backend.cancelUploads([upload.id]);
+            const expired = upload;
+            await this.#network(() => backend.cancelUploads([expired.id]));
             abort.signal.throwIfAborted();
-            item = { ...item, clientId: crypto.randomUUID() };
-            upload = await backend.createUpload(
-              this.discussionId,
-              item.clientId,
-              item.file,
+            item = { ...item, clientId: uuidv4() };
+            upload = await this.#network(() =>
+              backend.createUpload(this.discussionId, item.clientId, item.file),
             );
           }
           item = { ...item, upload };
@@ -636,11 +791,9 @@ export class DraftController {
           };
           await this.#pending(submission);
           abort.signal.throwIfAborted();
-          await backend.uploadFile(
-            upload.id,
-            item.file,
-            abort.signal,
-            () => {},
+          const uploading = upload;
+          await this.#network(() =>
+            backend.uploadFile(uploading.id, item.file, abort.signal, () => {}),
           );
           upload = { ...upload, state: "ready" };
         }
@@ -660,7 +813,10 @@ export class DraftController {
         if (!item.upload) throw new Error("An uploaded file is missing its ID");
         return item.upload.id;
       });
-      const result = await onSend(submission.body, ids, submission.id);
+      const sending = submission;
+      const result = await this.#network(() =>
+        onSend(sending.body, ids, sending.id),
+      );
       if (result === "cancelled") {
         await this.#cancelled(submission);
         return;
@@ -671,7 +827,7 @@ export class DraftController {
         );
       await this.#finish(submission);
     } catch (error) {
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted && submission && !this.#view.moved) {
         try {
           await this.#cancelled(submission);
         } catch (cancellationError) {
@@ -710,15 +866,43 @@ function releaseIdleController(discussion: number, entry: ControllerEntry) {
     controllers.get(discussion) === entry &&
     entry.users === 0 &&
     entry.controller?.canRelease()
-  )
+  ) {
+    entry.controller.dispose();
     controllers.delete(discussion);
+  }
+}
+
+let httpDocument: { tab: string; owner: string; keys: Set<string> } | undefined;
+function httpIdentity() {
+  httpDocument ??= { tab: uuidv4(), owner: uuidv4(), keys: new Set() };
+  return httpDocument;
 }
 
 async function loadController(discussion: number, onIdle: () => void) {
   const organization = await backend.organization();
-  const tab = await tabId();
+  const nativeLocks = typeof navigator.locks?.request === "function";
+  const identity = nativeLocks ? null : httpIdentity();
+  const tab = identity ? identity.tab : await tabId();
   const prefix = `${organization.uuid}:${organization.human_id}:${discussion}:`;
   const key = `${prefix}${tab}`;
+  if (identity) {
+    const storage = new OwnedDraftStore(key, prefix, identity.owner);
+    const draft = await storage.open(
+      {
+        key,
+        updatedAt: Date.now(),
+        body: "",
+        bodyRevision: 0,
+        files: [],
+        pending: null,
+      },
+      !identity.keys.has(key),
+    );
+    identity.keys.add(key);
+    const controller = new DraftController(discussion, draft, onIdle, storage);
+    await controller.refreshRecovery();
+    return controller;
+  }
   const db = await database();
   let stored: Draft | undefined;
   try {
@@ -782,6 +966,7 @@ function controllerFor(discussion: number) {
     };
     created.pending = created.pending.then((controller) => {
       created.controller = controller;
+      controller.watchOwnership();
       void controller.checkResult();
       return controller;
     });

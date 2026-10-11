@@ -30,7 +30,8 @@
     "react-markdown": "^10.1.0",
     "remark-breaks": "4.0.0",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^3.7.0"
+    "tailwind-merge": "^3.7.0",
+    "uuid": "13.0.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
