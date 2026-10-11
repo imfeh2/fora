@@ -74,12 +74,14 @@ type Loaded = {
 function View({
   route,
   tokenLimit,
+  usageEntrySignal,
   focusDiscussionId,
   onComposerFocused,
   onDiscussionCreated,
 }: {
   route: Route;
   tokenLimit: number | null;
+  usageEntrySignal: number;
   focusDiscussionId: number | null;
   onComposerFocused: () => void;
   onDiscussionCreated: (id: number) => void;
@@ -98,7 +100,7 @@ function View({
     case "members":
       return <MembersPage tokenLimit={tokenLimit} />;
     case "usage":
-      return <UsagePage />;
+      return <UsagePage entrySignal={usageEntrySignal} />;
     case "member":
       return <MemberPage id={route.id} />;
     case "library":
@@ -166,6 +168,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [usageEntrySignal, setUsageEntrySignal] = useState(0);
   const [focusDiscussionId, setFocusDiscussionId] = useState<number | null>(
     null,
   );
@@ -220,7 +223,11 @@ function Chrome({ loaded }: { loaded: Loaded }) {
   );
 
   const selectRoute = (next: Route) => {
-    if (!settingsSaving) closeThen(() => navigate(next));
+    if (!settingsSaving)
+      closeThen(() => {
+        if (next.name === "usage") setUsageEntrySignal((value) => value + 1);
+        navigate(next);
+      });
   };
 
   return (
@@ -330,6 +337,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
         <View
           route={route}
           tokenLimit={loaded.tokenLimit}
+          usageEntrySignal={usageEntrySignal}
           focusDiscussionId={focusDiscussionId}
           onComposerFocused={onComposerFocused}
           onDiscussionCreated={onDiscussionCreated}

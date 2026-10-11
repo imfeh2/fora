@@ -1,3 +1,4 @@
+import Decimal from "decimal.js";
 import { useReducedMotion } from "framer-motion";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
@@ -78,8 +79,14 @@ export function formatInteger(value: string | null): string {
   return value === null ? "Unavailable" : BigInt(value).toLocaleString("en-US");
 }
 
-function formatCost(value: string | null, currency = "USD"): string {
-  return value === null ? "Unavailable" : `${currency} ${value}`;
+export function formatCost(value: string | null, currency = "USD"): string {
+  if (value === null) return "Unavailable";
+  const cost = new Decimal(value);
+  if (!cost.isFinite()) throw new Error("Saved cost must be finite");
+  const formatted = cost.toFixed(4, Decimal.ROUND_HALF_UP);
+  const amount =
+    !cost.isZero() && new Decimal(formatted).isZero() ? "<0.0001" : formatted;
+  return `${currency} ${amount}`;
 }
 
 function modelName(model: UsageRecord["model"]): string {
@@ -589,7 +596,8 @@ function GroupTable({
         </p>
       ) : null}
       <p className="border-t border-line px-4 py-3 text-xs text-fg-muted">
-        Statistics include saved model responses and historical Turn summaries.
+        Totals include saved requests and earlier saved usage; requests still in
+        progress are not counted.
       </p>
     </section>
   );
@@ -662,11 +670,6 @@ function Records({
             ))}
             <td data-align="end" className={numeric}>
               {formatCost(record.cost, record.currency)}
-              {record.cost !== null && record.cost_source === "genai-prices" ? (
-                <span className="block text-xs text-fg-muted">
-                  Estimated cost
-                </span>
-              ) : null}
             </td>
           </tr>
         ))}
@@ -906,7 +909,7 @@ function DetailContent({
   );
 }
 
-export function UsagePage() {
+export function UsagePage({ entrySignal = 0 }: { entrySignal?: number }) {
   const [range, setRange] = useState<Range>(() => preset("7"));
   const [dimension, setDimension] = useState<Group["dimension"]>("model_key");
   const [group, setGroup] = useState<Group | null>(null);
@@ -914,6 +917,12 @@ export function UsagePage() {
   const [context, setContext] = useState<UsageDetail | null>(null);
   const [revision, setRevision] = useState<number | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  useEffect(() => {
+    setGroup(null);
+    setRecord(null);
+    setContext(null);
+    setRevision(null);
+  }, [entrySignal]);
   const filters = {
     ...range.filters,
     ...(group ? { [group.dimension]: group.key } : {}),

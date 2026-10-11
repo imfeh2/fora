@@ -280,20 +280,28 @@ function summaryText() {
     .textContent;
 }
 
+async function mountApp() {
+  vi.spyOn(backendModule.backend, "connect").mockResolvedValue(undefined);
+  vi.spyOn(backendModule.backend, "organization").mockResolvedValue({
+    id: 1,
+    uuid: "usage-test-organization",
+    human_id: 1,
+    token_limit: null,
+    members: [{ id: 1, type: "human", name: "Reviewer", state: "idle" }],
+  });
+  vi.spyOn(backendModule.backend, "discussions").mockResolvedValue([]);
+  await testing.act(async () => {
+    testing.render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    );
+  });
+}
+
 describe("Usage dashboard", () => {
   it("provides a primary Usage entry alongside Members and opens the independent page", async () => {
-    vi.spyOn(backendModule.backend, "connect").mockResolvedValue(undefined);
-    vi.spyOn(backendModule.backend, "organization").mockResolvedValue({
-      id: 1,
-      uuid: "usage-test-organization",
-      human_id: 1,
-      token_limit: null,
-      members: [{ id: 1, type: "human", name: "Reviewer", state: "idle" }],
-    });
-    vi.spyOn(backendModule.backend, "discussions").mockResolvedValue([]);
-    await testing.act(async () => {
-      testing.render(<App />);
-    });
+    await mountApp();
     const entry = testing.screen.getByRole("button", { name: "Usage" });
     const members = testing.screen.getByRole("button", { name: "Members" });
     expect(entry.closest("li")?.parentElement).toBe(
@@ -305,6 +313,128 @@ describe("Usage dashboard", () => {
     expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
     expect(summaryText()).toContain("9,007,199,254,741,000");
   });
+  it("returns to the overview from model and Agent records through the primary entry while retaining the range", async () => {
+    await mountApp();
+    await click("Usage");
+    await click("Last 30 days");
+    const range = {
+      start_at: lastQuery().start_at,
+      end_at: lastQuery().end_at,
+    };
+    const rangeButton = testing.screen.getByRole("button", {
+      name: "Last 30 days",
+    });
+    const stale = deferred<UsageResult>();
+    queryMock.mockImplementationOnce(() => stale.promise);
+    await click("Saved model");
+    expect(lastQuery().model_key).toBe("saved-model");
+    expect(
+      testing.screen.getByRole("heading", { name: "Saved model" }),
+    ).toBeTruthy();
+    await click("Usage");
+    expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
+    expect(lastQuery()).toMatchObject(range);
+    expect(lastQuery().model_key).toBeUndefined();
+    expect(
+      testing.screen.getByRole("table", { name: "Usage groups" }),
+    ).toBeTruthy();
+    expect(testing.screen.getByRole("button", { name: "Last 30 days" })).toBe(
+      rangeButton,
+    );
+    await testing.act(async () =>
+      stale.resolve({
+        ...result({ model_key: "saved-model" }),
+        summary: { ...metrics, total_tokens: "777" },
+      }),
+    );
+    expect(summaryText()).not.toContain("777");
+    await click("Agent");
+    await click("Researcher");
+    await click("Next");
+    expect(lastQuery().cursor).toBe("opaque-next");
+    await click("Usage");
+    expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
+    expect(lastQuery()).toMatchObject(range);
+    expect(lastQuery().agent_id).toBeUndefined();
+    expect(lastQuery().cursor).toBeUndefined();
+    expect(
+      testing.screen
+        .getByRole("button", { name: "Agent" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    const calls = queryMock.mock.calls.length;
+    await click("Usage");
+    expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
+    expect(queryMock.mock.calls).toHaveLength(calls);
+  });
+
+  it.each([
+    [null, "Unavailable"],
+    ["0", "USD 0.0000"],
+    ["0.000000", "USD 0.0000"],
+    ["1", "USD 1.0000"],
+    ["0.6908532", "USD 0.6909"],
+    ["0.350215250", "USD 0.3502"],
+    ["0.1183297", "USD 0.1183"],
+    ["0.0029370", "USD 0.0029"],
+    ["0.123449999999999999999", "USD 0.1234"],
+    ["0.123450000000000000000", "USD 0.1235"],
+    ["999.999950000", "USD 1000.0000"],
+    ["9007199254740993.00005", "USD 9007199254740993.0001"],
+    ["0.000049999999999999999", "USD <0.0001"],
+    ["0.00005", "USD 0.0001"],
+    ["1E-1000", "USD <0.0001"],
+    ["0E-400", "USD 0.0000"],
+    ["123450000E-8", "USD 1.2345"],
+    ["4.99995", "USD 5.0000"],
+    ["-1.23455", "USD -1.2346"],
+    [`${"9".repeat(400)}.12345`, `USD ${"9".repeat(400)}.1235`],
+  ])("formats saved decimal %s with four decimal places", (value, expected) => {
+    expect(usage.formatCost(value)).toBe(expected);
+  });
+
+  it("retains currency identifiers and rejects invalid saved costs", () => {
+    expect(usage.formatCost("1.23455", "EUR")).toBe("EUR 1.2346");
+    expect(usage.formatCost("1E-100", "EUR")).toBe("EUR <0.0001");
+    expect(() => usage.formatCost("NaN")).toThrow("Saved cost must be finite");
+    expect(() => usage.formatCost("Infinity")).toThrow(
+      "Saved cost must be finite",
+    );
+  });
+
+  it("shows the saved usage explanation and rounded amounts while keeping precise record details", async () => {
+    queryMock.mockImplementation(async (params: UsageQuery) => {
+      const value = result(params);
+      value.groups.model_key[0].estimated_cost = "0.6908532";
+      value.records[0].cost = "0.350215250";
+      return value;
+    });
+    readMock.mockResolvedValue({ ...detail(), cost: "0.350215250" });
+    await mount();
+    const groups = testing.screen.getByRole("table", { name: "Usage groups" });
+    expect(testing.within(groups).getByText("USD 0.6909")).toBeTruthy();
+    expect(testing.within(groups).getByText("Estimated cost")).toBeTruthy();
+    expect(
+      testing.screen.getByText(
+        "Totals include saved requests and earlier saved usage; requests still in progress are not counted.",
+      ),
+    ).toBeTruthy();
+    await click("Saved model");
+    const records = testing.screen.getByRole("table", {
+      name: "Request records",
+    });
+    expect(testing.within(records).getByText("USD 0.3502")).toBeTruthy();
+    expect(testing.within(records).getByText("Cost")).toBeTruthy();
+    expect(testing.within(records).queryByText("Estimated cost")).toBeNull();
+    await click("2026-10-10 00:00:00 UTC");
+    const modal = testing.screen.getByRole("dialog", {
+      name: "Request details",
+    });
+    expect(testing.within(modal).getByText("0.350215250")).toBeTruthy();
+    expect(testing.within(modal).getByText("cost_source")).toBeTruthy();
+    expect(testing.within(modal).getByText("genai-prices")).toBeTruthy();
+  });
+
   it("shows four totals, a real responsive chart and one group table with exact saved numbers", async () => {
     await mount();
     expect(lastQuery()).toMatchObject({ contributions_only: true, limit: 20 });
