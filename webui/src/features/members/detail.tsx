@@ -18,23 +18,26 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useOrganization, useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader, Section } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
-import { ConfirmDialog, Modal } from "@/components/ui/dialog";
+import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   Button,
   Chip,
   Dot,
-  dismissToast,
   LoadingSkeleton,
   Meter,
   Skeleton,
+  Spinner,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
@@ -42,9 +45,16 @@ import { OverflowMenu } from "@/components/ui/menu";
 import { StatePanel } from "@/components/ui/state-panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TreeView } from "@/features/library/tree-view";
+import { ConversationSkeleton } from "@/features/members/activity-skeleton";
+import {
+  useWindowCache,
+  useWindowState,
+  type WindowCache,
+  WindowHistory,
+} from "@/features/members/activity-window";
+import { ConversationFeed } from "@/features/members/conversation";
 import { agentStateLabel, canResume } from "@/features/members/state";
-import { AgentModelPanel } from "@/features/settings/model";
-import { reportLoadFailure } from "@/features/settings/saver";
+import { AgentModelDialog } from "@/features/settings/model";
 import {
   type AgentDetail,
   type AgentHistoryRead,
@@ -108,7 +118,7 @@ export function MemberPage({ id }: { id: number }) {
           }
           leading={
             pending ? (
-              <Skeleton className="size-10 shrink-0 rounded-full" />
+              <Skeleton className="size-10 shrink-0 rounded-md" />
             ) : undefined
           }
         />
@@ -121,26 +131,9 @@ export function MemberPage({ id }: { id: number }) {
 
 function MemberSkeleton() {
   return (
-    <LoadingSkeleton label="Loading Member">
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px rounded-md border border-line bg-line">
-        {[1, 2, 3].map((card) => (
-          <div key={card} className="flex flex-col gap-3 bg-surface p-4">
-            <Skeleton className="w-15" />
-            <Skeleton className="h-5 w-24" />
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-col gap-3 rounded-md border border-line p-5">
-        <Skeleton className="w-1/2" />
-        <Skeleton className="h-8 w-3/4" />
-        <Skeleton className="h-8 w-2/3" />
-      </div>
-      <div className="flex flex-col gap-3 rounded-md border border-line p-5">
-        {["75%", "55%", "85%"].map((width) => (
-          <Skeleton key={width} style={{ width }} />
-        ))}
-      </div>
-    </LoadingSkeleton>
+    <div className="mx-auto w-full min-w-0 max-w-3xl bg-app px-3 py-4">
+      <ConversationSkeleton label="Loading Member" window />
+    </div>
   );
 }
 
@@ -156,7 +149,33 @@ function AgentPage({
   const { resource, refresh: load, invalidate } = useResource(read);
   const detail = resource.data;
   const [doomed, setDoomed] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [panel, setPanel] = useState<"model" | "workspace" | "context" | null>(
+    null,
+  );
   const paused = canResume(member);
+  const [changingState, setChangingState] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const stateRequest = useRef(false);
+  const toggle = async () => {
+    if (stateRequest.current) return;
+    stateRequest.current = true;
+    setChangingState(true);
+    try {
+      await (paused
+        ? backend.resumeAgent(member.id)
+        : backend.pauseAgent(member.id));
+      await refresh();
+      setActionError(null);
+    } catch (failure) {
+      setActionError(
+        failure instanceof Error ? failure.message : String(failure),
+      );
+    } finally {
+      stateRequest.current = false;
+      setChangingState(false);
+    }
+  };
 
   useEffect(() => {
     invalidate(true);
@@ -187,11 +206,16 @@ function AgentPage({
   return (
     <Page>
       <PageHeader
+        wrap
         title={member.name}
         status={
           <>
             <AgentState member={member} />
-            {detail ? <AgentDetailStatus detail={detail} /> : null}
+            {member.pause_requested && member.state === "running" ? (
+              <span className="text-sm text-warning wrap-anywhere">
+                Pause requested · Current activity will finish
+              </span>
+            ) : null}
           </>
         }
         crumb={{
@@ -203,12 +227,8 @@ function AgentPage({
           <>
             <Button
               variant={paused ? "primary" : "default"}
-              onClick={async () => {
-                await (paused
-                  ? backend.resumeAgent(member.id)
-                  : backend.pauseAgent(member.id));
-                await refresh();
-              }}
+              disabled={changingState}
+              onClick={() => void toggle()}
             >
               {paused ? <Play size={16} /> : <Pause size={16} />}
               {paused ? "Resume" : "Pause"}
@@ -216,6 +236,12 @@ function AgentPage({
             <OverflowMenu
               label={`Actions for ${member.name}`}
               actions={[
+                {
+                  id: "rename",
+                  label: "Rename",
+                  icon: <PencilLine size={15} />,
+                  onSelect: () => setRenaming(true),
+                },
                 {
                   id: "delete",
                   label: "Delete",
@@ -230,6 +256,16 @@ function AgentPage({
         }
       />
       <PageBody>
+        {actionError ? (
+          <p role="alert" className="text-danger wrap-anywhere">
+            {actionError}
+          </p>
+        ) : null}
+        <div className="flex min-w-0 flex-wrap gap-2 narrow:flex-col narrow:items-stretch">
+          <Button onClick={() => setPanel("model")}>Model settings</Button>
+          <Button onClick={() => setPanel("workspace")}>Workspace</Button>
+          <Button onClick={() => setPanel("context")}>Inspect context</Button>
+        </div>
         {resource.error &&
         !(resource.error.transport && backend.disconnected) ? (
           <LoadError
@@ -243,68 +279,81 @@ function AgentPage({
         ) : null}
         {detail ? (
           <>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px overflow-hidden rounded-md border border-line bg-line flex-none">
-              <Stat
-                label="Token spend"
-                value={detail.usage.total_tokens.toLocaleString("en-US")}
-                detail={
-                  detail.token_limit === null ? (
-                    <span className="text-fg-muted">
-                      Token ceiling unavailable
-                    </span>
-                  ) : detail.token_limit > 0 ? (
-                    <>
-                      <Meter
-                        value={detail.usage.total_tokens}
-                        max={detail.token_limit}
-                        label={`Token spend for ${member.name}`}
-                      />
-                      <span className="text-fg-muted">
-                        of {detail.token_limit.toLocaleString("en-US")}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-fg-muted">No ceiling</span>
-                  )
-                }
-              />
-              <Stat
-                label="Model requests"
-                value={detail.usage.requests.toLocaleString("en-US")}
-                detail={
-                  <span className="text-fg-muted">
-                    {detail.usage.input_tokens.toLocaleString("en-US")} in ·{" "}
-                    {detail.usage.output_tokens.toLocaleString("en-US")} out
-                  </span>
-                }
-              />
-              <Stat label="State" value={<AgentState member={member} />} />
-            </div>
-
-            {detail.reasons?.map((reason) => (
-              <p key={reason.code} className="text-warning">
-                {reason.message}. {reason.recovery}
-              </p>
-            ))}
-            {detail.error ? (
-              <p className="text-danger">Last Turn: {detail.error}</p>
+            {member.state === "blocked" || member.state === "error" ? (
+              <div className="flex flex-col gap-2" role="status">
+                {detail.reasons?.map((reason) => (
+                  <p key={reason.code} className="text-warning wrap-anywhere">
+                    {reason.message}. {reason.recovery}
+                  </p>
+                ))}
+              </div>
             ) : null}
-            {detail.statistics_unavailable ? (
-              <p className="text-warning">
-                Statistics unavailable: {detail.statistics_unavailable}
-              </p>
-            ) : null}
-
-            <AgentModelPanel key={member.id} agentId={member.id} />
-
-            <WorkspaceSection agentId={member.id} entries={detail.workspace} />
-
-            <HistorySection agentId={member.id} initialRuns={detail.runs} />
+            <HistorySection
+              key={member.id}
+              agentId={member.id}
+              initialRuns={detail.runs}
+              reading
+            />
           </>
         ) : resource.error ? null : (
           <MemberSkeleton />
         )}
       </PageBody>
+      {panel === "model" ? (
+        <AgentModelDialog agentId={member.id} onClose={() => setPanel(null)} />
+      ) : null}
+      <Modal
+        open={panel === "workspace" || panel === "context"}
+        onOpenChange={(open) => !open && setPanel(null)}
+        title={panel === "workspace" ? "Workspace" : "Full context"}
+        wide
+        footer={<Button onClick={() => setPanel(null)}>Close</Button>}
+      >
+        {resource.error &&
+        !(resource.error.transport && backend.disconnected) ? (
+          <LoadError error={resource.error} retry={() => void load()} />
+        ) : null}
+        {detail ? (
+          panel === "workspace" ? (
+            <WorkspaceSection agentId={member.id} entries={detail.workspace} />
+          ) : (
+            <AgentContextSummary member={member} detail={detail} />
+          )
+        ) : resource.error ? null : (
+          <LoadingSkeleton label="Loading Agent">
+            {panel === "workspace" ? (
+              [1, 2, 3, 4, 5].map((row) => (
+                <Skeleton key={row} className="h-7 w-44 max-w-full" />
+              ))
+            ) : (
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px rounded-md border border-line bg-line">
+                {[1, 2].map((card) => (
+                  <div
+                    key={card}
+                    className="flex flex-col gap-3 bg-surface p-4"
+                  >
+                    <Skeleton className="w-24" />
+                    <Skeleton className="h-6 w-32" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </LoadingSkeleton>
+        )}
+      </Modal>
+      <PromptDialog
+        open={renaming}
+        onOpenChange={setRenaming}
+        title="Rename Member"
+        protectUnsaved
+        label="Name"
+        initial={member.name}
+        submitLabel="Rename"
+        onSubmit={async (name) => {
+          await backend.renameMember(member.id, name);
+          await refresh();
+        }}
+      />
 
       <ConfirmDialog
         open={doomed}
@@ -321,6 +370,61 @@ function AgentPage({
   );
 }
 
+function AgentContextSummary({
+  member,
+  detail,
+}: {
+  member: Member;
+  detail: AgentDetail;
+}) {
+  return (
+    <>
+      {detail.statistics_unavailable ? (
+        <p className="text-warning">
+          Statistics unavailable: {detail.statistics_unavailable}
+        </p>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px overflow-hidden rounded-md border border-line bg-line flex-none">
+          <Stat
+            label="Token spend"
+            value={detail.usage.total_tokens.toLocaleString("en-US")}
+            detail={
+              detail.token_limit === null ? (
+                <span className="text-fg-muted">Token ceiling unavailable</span>
+              ) : detail.token_limit > 0 ? (
+                <>
+                  <Meter
+                    value={detail.usage.total_tokens}
+                    max={detail.token_limit}
+                    label={`Token spend for ${member.name}`}
+                  />
+                  <span className="text-fg-muted">
+                    of {detail.token_limit.toLocaleString("en-US")}
+                  </span>
+                </>
+              ) : (
+                <span className="text-fg-muted">No ceiling</span>
+              )
+            }
+          />
+          <Stat
+            label="Model requests"
+            value={detail.usage.requests.toLocaleString("en-US")}
+            detail={
+              <span className="text-fg-muted">
+                {detail.usage.input_tokens.toLocaleString("en-US")} in ·{" "}
+                {detail.usage.output_tokens.toLocaleString("en-US")} out
+              </span>
+            }
+          />
+        </div>
+      )}
+      <AgentDetailStatus detail={detail} />
+      <HistorySection agentId={member.id} initialRuns={detail.runs} />
+    </>
+  );
+}
+
 export function AgentDetailStatus({ detail }: { detail: AgentDetail }) {
   return (
     <>
@@ -331,10 +435,14 @@ export function AgentDetailStatus({ detail }: { detail: AgentDetail }) {
         </Chip>
       ) : null}
       {detail.pause_requested && detail.state === "running" ? (
-        <Chip tone="warning">Pause requested · Current Turn will finish</Chip>
+        <Chip tone="warning">
+          Pause requested · Current activity will finish
+        </Chip>
       ) : null}
       {detail.idle ? (
-        <Chip tone="warning">{plural(detail.idle_streak, "idle Turn")}</Chip>
+        <Chip tone="warning">
+          Idle · {detail.idle_streak.toLocaleString("en-US")}
+        </Chip>
       ) : null}
       {detail.window.number > 1 ? (
         <Tooltip
@@ -374,31 +482,38 @@ export function WorkspaceSection({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [path, setPath] = useState<string | null>(null);
   const [file, setFile] = useState<LibraryDocument | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const generation = useRef(0);
+  const load = useCallback(async () => {
+    if (path === null) return;
+    const current = ++generation.current;
+    setLoading(true);
+    try {
+      const result = await backend.workspaceRead(agentId, path);
+      if (current !== generation.current) return;
+      setFile(result);
+      setError(null);
+    } catch (failure) {
+      if (current === generation.current)
+        setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      if (current === generation.current) setLoading(false);
+    }
+  }, [agentId, path]);
 
   useEffect(() => {
-    if (path === null) return;
-    let active = true;
-    const toastId = `workspace-read:${agentId}:${path}`;
-    const load = async () => {
-      try {
-        const result = await backend.workspaceRead(agentId, path);
-        if (!active) return;
-        setFile(result);
-        dismissToast(toastId);
-      } catch (failure) {
-        if (active) reportLoadFailure(toastId, failure, () => void load());
-      }
-    };
+    setFile(null);
+    setError(null);
     void load();
     const off = backend.onEvent((event) => {
       if (event.type === "connection.restored") void load();
     });
     return () => {
-      active = false;
+      generation.current += 1;
       off();
-      dismissToast(toastId);
     };
-  }, [agentId, path]);
+  }, [load]);
 
   return (
     <Section title="Workspace">
@@ -435,7 +550,26 @@ export function WorkspaceSection({
         variant="history"
         footer={null}
       >
-        {file ? <WorkspaceContent file={file} /> : null}
+        {error ? (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-3 text-danger"
+          >
+            <span>{error}</span>
+            <Button disabled={loading} onClick={() => void load()}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {file ? (
+          <WorkspaceContent file={file} />
+        ) : loading ? (
+          <LoadingSkeleton label="Loading file">
+            {["90%", "75%", "85%"].map((width) => (
+              <Skeleton key={width} style={{ width }} />
+            ))}
+          </LoadingSkeleton>
+        ) : null}
       </Modal>
     </Section>
   );
@@ -491,6 +625,7 @@ function historyRun(run: AgentRun): AgentHistoryRun {
     usage: run.usage,
     error: run.error,
     legacy: requestCount === 0,
+    reminded: run.reminded,
   };
 }
 
@@ -562,6 +697,26 @@ function mergeHistoryWindows(
 export function HistorySection({
   agentId,
   initialRuns,
+  reading = false,
+}: {
+  agentId: number;
+  initialRuns: AgentRun[];
+  reading?: boolean;
+}) {
+  return reading ? (
+    <ConversationHistory
+      key={agentId}
+      agentId={agentId}
+      initialRuns={initialRuns}
+    />
+  ) : (
+    <InspectionHistory agentId={agentId} initialRuns={initialRuns} />
+  );
+}
+
+function InspectionHistory({
+  agentId,
+  initialRuns,
 }: {
   agentId: number;
   initialRuns: AgentRun[];
@@ -574,6 +729,15 @@ export function HistorySection({
   });
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
+  const [olderError, setOlderError] = useState<string | null>(null);
+  const olderGeneration = useRef(0);
+
+  useEffect(
+    () => () => {
+      olderGeneration.current += 1;
+    },
+    [],
+  );
 
   useEffect(() => {
     setRuns((current) =>
@@ -584,14 +748,22 @@ export function HistorySection({
 
   const loadOlder = async () => {
     if (loadingOlder || !hasOlder || before === undefined) return;
+    const generation = ++olderGeneration.current;
     setLoadingOlder(true);
     try {
       const page = await backend.agentHistory(agentId, before, 30);
+      if (generation !== olderGeneration.current) return;
       setRuns((current) => mergeHistoryRuns(current, page.runs));
       setHasOlder(page.has_before);
       setBefore(page.next_before ?? undefined);
+      setOlderError(null);
+    } catch (failure) {
+      if (generation === olderGeneration.current)
+        setOlderError(
+          failure instanceof Error ? failure.message : String(failure),
+        );
     } finally {
-      setLoadingOlder(false);
+      if (generation === olderGeneration.current) setLoadingOlder(false);
     }
   };
 
@@ -601,26 +773,31 @@ export function HistorySection({
         <StatePanel
           compact
           icons={[Terminal, Play, Gauge]}
-          title="No Turns yet"
-          description="This Agent's Turns will appear here."
+          title="No activity yet"
+          description="This Agent's activity will appear here."
         />
       ) : (
         <>
           <ul className="flex flex-col gap-2">
             {runs.map((run) => (
-              <TurnCard
+              <ActivityCard
                 key={run.sequence}
                 run={run}
                 onOpen={() => setSelected(run.sequence)}
               />
             ))}
           </ul>
+          {olderError ? (
+            <p role="alert" className="text-danger">
+              {olderError}
+            </p>
+          ) : null}
           {hasOlder ? (
             <Button disabled={loadingOlder} onClick={() => void loadOlder()}>
               {loadingOlder ? (
                 <RefreshCw className="animate-spin" size={14} />
               ) : null}
-              Load earlier Turns
+              {olderError ? "Retry earlier history" : "Load earlier history"}
             </Button>
           ) : null}
         </>
@@ -637,21 +814,474 @@ export function HistorySection({
   );
 }
 
+type HistoryRange = { upper: number; lower: number };
+type WindowHistoryState = { runs: AgentHistoryRun[]; ranges: HistoryRange[] };
+
+function refreshWindowSummary(
+  cache: WindowCache,
+  windowNumber: number | null,
+  summaries: AgentRun[],
+) {
+  const saved = cache.values.get("history") as WindowHistoryState | undefined;
+  if (!saved) return;
+  cache.values.set("history", {
+    ...saved,
+    runs: mergeHistoryRuns(
+      saved.runs,
+      summaries
+        .filter((run) => run.window_number === windowNumber)
+        .map(historyRun),
+    ),
+  });
+}
+
+function mergeHistoryRanges(
+  current: HistoryRange[],
+  incoming: HistoryRange[],
+): HistoryRange[] {
+  const ranges: HistoryRange[] = [];
+  for (const range of [...current, ...incoming].sort(
+    (left, right) => right.upper - left.upper,
+  )) {
+    const previous = ranges[ranges.length - 1];
+    if (previous && range.upper >= previous.lower)
+      previous.lower = Math.min(previous.lower, range.lower);
+    else ranges.push({ ...range });
+  }
+  return ranges;
+}
+
+function ConversationHistory({
+  agentId,
+  initialRuns,
+}: {
+  agentId: number;
+  initialRuns: AgentRun[];
+}) {
+  return (
+    <WindowHistory
+      agentId={agentId}
+      initialRuns={initialRuns}
+      mergeSummary={refreshWindowSummary}
+    >
+      {(windowNumber, isCurrent) => (
+        <ConversationWindow
+          agentId={agentId}
+          initialRuns={initialRuns}
+          windowNumber={windowNumber}
+          isCurrent={isCurrent}
+        />
+      )}
+    </WindowHistory>
+  );
+}
+
+function ConversationWindow({
+  agentId,
+  initialRuns,
+  windowNumber,
+  isCurrent,
+}: {
+  agentId: number;
+  initialRuns: AgentRun[];
+  windowNumber: number | null;
+  isCurrent: boolean;
+}) {
+  const cache = useWindowCache();
+  const [history, setHistory] = useWindowState<WindowHistoryState>(
+    "history",
+    () => ({
+      runs: initialRuns
+        .filter((run) => run.window_number === windowNumber)
+        .map(historyRun),
+      ranges: [],
+    }),
+  );
+  const { runs, ranges } = history;
+  const before = ranges[0]?.lower;
+  const hasOlder = before !== undefined && Number.isFinite(before);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useWindowState<BackendError | null>(
+    "history:error",
+    null,
+  );
+  const [latestLoading, setLatestLoading] = useState(false);
+  const [latestError, setLatestError] = useWindowState<BackendError | null>(
+    "history:latestError",
+    null,
+  );
+  const latestGeneration = useRef(0);
+  const latestBusy = useRef(false);
+  const latestDirty = useRef(false);
+  const connected = useRef(true);
+  const root = useRef<HTMLDivElement>(null);
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const [interruptedCursor, setInterruptedCursor] = useWindowState<
+    number | null
+  >("history:interrupted", null);
+  const interruptedBefore = useRef<number | null>(interruptedCursor);
+  const anchor = useRef<{ node: Element; top: number } | null>(null);
+  const capture = useRef<() => void>(() => {});
+
+  useEffect(
+    () => () => {
+      generation.current += 1;
+      latestGeneration.current += 1;
+      busy.current = false;
+      latestBusy.current = false;
+    },
+    [],
+  );
+
+  const loadLatest = useCallback(
+    async function refresh() {
+      if (!connected.current) return;
+      if (latestBusy.current) {
+        latestDirty.current = true;
+        return;
+      }
+      latestBusy.current = true;
+      latestDirty.current = false;
+      const current = ++latestGeneration.current;
+      setLatestLoading(true);
+      try {
+        const page = await backend.agentHistory(
+          agentId,
+          undefined,
+          30,
+          undefined,
+          30,
+          { window_number: windowNumber },
+        );
+        if (current !== latestGeneration.current) return;
+        if (
+          page.agent_id !== agentId ||
+          page.window_number !== windowNumber ||
+          page.runs.some((run) => run.window_number !== windowNumber) ||
+          (page.has_before &&
+            (!page.runs.length ||
+              page.next_before !==
+                Math.min(...page.runs.map((run) => run.sequence))))
+        )
+          throw new Error("Window history identity does not match");
+        setHistory((saved) => ({
+          runs: mergeHistoryRuns(saved.runs, page.runs),
+          ranges: mergeHistoryRanges(saved.ranges, [
+            {
+              upper: page.runs.length
+                ? Math.max(...page.runs.map((run) => run.sequence))
+                : Number.POSITIVE_INFINITY,
+              lower:
+                page.has_before && page.next_before !== null
+                  ? page.next_before
+                  : Number.NEGATIVE_INFINITY,
+            },
+          ]),
+        }));
+        setLatestError(null);
+      } catch (failure) {
+        if (current === latestGeneration.current)
+          setLatestError(historyFailure(failure));
+      } finally {
+        if (current === latestGeneration.current) {
+          latestBusy.current = false;
+          setLatestLoading(false);
+          if (latestDirty.current) void refresh();
+        }
+      }
+    },
+    [agentId, windowNumber, setHistory, setLatestError],
+  );
+
+  useEffect(() => {
+    setHistory((current) => ({
+      ...current,
+      runs: mergeHistoryRuns(
+        current.runs,
+        initialRuns
+          .filter((run) => run.window_number === windowNumber)
+          .map(historyRun),
+      ),
+    }));
+    const saved = cache?.values.get("history") as
+      | { ranges: HistoryRange[] }
+      | undefined;
+    if (isCurrent || !saved?.ranges.length) void loadLatest();
+  }, [initialRuns, windowNumber, isCurrent, cache, loadLatest, setHistory]);
+
+  useLayoutEffect(() => {
+    const content = root.current;
+    if (!content) return;
+    let parent = content.parentElement;
+    while (
+      parent &&
+      !["auto", "scroll"].includes(getComputedStyle(parent).overflowY)
+    )
+      parent = parent.parentElement;
+    const scroll = parent;
+    if (!scroll) return;
+    const remember = () => {
+      const top = scroll.getBoundingClientRect().top;
+      const bottom = scroll.getBoundingClientRect().bottom;
+      const visible = Array.from(
+        content.querySelectorAll(
+          "[data-activity-anchor], [data-activity-anchor] :is(p, pre, li, img, summary, button, time)",
+        ),
+      ).filter((entry) => {
+        const rect = entry.getBoundingClientRect();
+        return rect.height > 0 && rect.bottom > top && rect.top < bottom;
+      });
+      let node: Element | undefined;
+      for (const entry of visible) {
+        if (!node || node.contains(entry)) node = entry;
+        else break;
+      }
+      anchor.current = node
+        ? { node, top: node.getBoundingClientRect().top - top }
+        : null;
+      const unit = node?.closest("[data-activity-anchor]");
+      if (cache && node && unit) {
+        const path: number[] = [];
+        let child = node;
+        while (child !== unit && child.parentElement) {
+          path.unshift(Array.from(child.parentElement.children).indexOf(child));
+          child = child.parentElement;
+        }
+        cache.position = {
+          identity: unit.getAttribute("data-activity-anchor") ?? "",
+          path,
+          top: node.getBoundingClientRect().top - top,
+          scrollTop: scroll.scrollTop,
+        };
+      }
+    };
+    const restore = () => {
+      const position = cache?.position;
+      if (!position) return;
+      let node: Element | undefined = Array.from(
+        content.querySelectorAll("[data-activity-anchor]"),
+      ).find(
+        (unit) =>
+          unit.getAttribute("data-activity-anchor") === position.identity,
+      );
+      for (const index of position.path) node = node?.children[index];
+      if (node) {
+        scroll.scrollTop +=
+          node.getBoundingClientRect().top -
+          scroll.getBoundingClientRect().top -
+          position.top;
+        anchor.current = { node, top: position.top };
+      } else scroll.scrollTop = position.scrollTop;
+    };
+    const onScroll = () => {
+      if (cache)
+        cache.following =
+          scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop <= 24;
+      remember();
+    };
+    capture.current = remember;
+    scroll.addEventListener("scroll", onScroll, { passive: true });
+    const observer = new ResizeObserver(() => {
+      if (cache?.following)
+        scroll.scrollTop = Math.max(
+          0,
+          scroll.scrollHeight - scroll.clientHeight,
+        );
+      else {
+        const saved = anchor.current;
+        if (saved?.node.isConnected) {
+          const top =
+            saved.node.getBoundingClientRect().top -
+            scroll.getBoundingClientRect().top;
+          scroll.scrollTop += top - saved.top;
+        } else restore();
+      }
+      remember();
+    });
+    if (cache?.following)
+      scroll.scrollTop = Math.max(0, scroll.scrollHeight - scroll.clientHeight);
+    else restore();
+    observer.observe(content);
+    remember();
+    return () => {
+      remember();
+      observer.disconnect();
+      scroll.removeEventListener("scroll", onScroll);
+      capture.current = () => {};
+      generation.current += 1;
+    };
+  }, [cache]);
+
+  const loadOlder = useCallback(
+    async (cursor = interruptedBefore.current ?? before) => {
+      if (busy.current || cursor === undefined || !Number.isFinite(cursor))
+        return;
+      busy.current = true;
+      interruptedBefore.current = cursor;
+      setInterruptedCursor(cursor);
+      if (cache) cache.following = false;
+      const current = ++generation.current;
+      capture.current();
+      setLoading(true);
+      try {
+        const page = await backend.agentHistory(
+          agentId,
+          cursor,
+          30,
+          undefined,
+          30,
+          { window_number: windowNumber },
+        );
+        if (current !== generation.current) return;
+        if (
+          page.agent_id !== agentId ||
+          page.window_number !== windowNumber ||
+          page.runs.some(
+            (run) =>
+              run.sequence >= cursor || run.window_number !== windowNumber,
+          ) ||
+          (page.has_before &&
+            (page.next_before === null ||
+              page.next_before >= cursor ||
+              page.runs.length === 0 ||
+              page.next_before !==
+                Math.min(...page.runs.map((run) => run.sequence))))
+        )
+          throw new Error("Earlier history did not advance");
+        interruptedBefore.current = null;
+        setInterruptedCursor(null);
+        setHistory((saved) => ({
+          runs: mergeHistoryRuns(saved.runs, page.runs),
+          ranges: mergeHistoryRanges(saved.ranges, [
+            {
+              upper: cursor,
+              lower: page.has_before
+                ? Math.min(...page.runs.map((run) => run.sequence))
+                : Number.NEGATIVE_INFINITY,
+            },
+          ]),
+        }));
+        setError(null);
+      } catch (failure) {
+        if (current === generation.current) {
+          setError(historyFailure(failure));
+        }
+      } finally {
+        if (current === generation.current) {
+          busy.current = false;
+          setLoading(false);
+        }
+      }
+    },
+    [
+      agentId,
+      before,
+      windowNumber,
+      cache,
+      setHistory,
+      setError,
+      setInterruptedCursor,
+    ],
+  );
+
+  useEffect(
+    () =>
+      backend.onEvent((event) => {
+        if (event.type === "connection.closed") {
+          connected.current = false;
+          generation.current += 1;
+          latestGeneration.current += 1;
+          latestBusy.current = false;
+          busy.current = false;
+          setLoading(false);
+          setLatestLoading(false);
+        }
+        if (event.type === "connection.restored") {
+          connected.current = true;
+          void loadLatest();
+          if (interruptedBefore.current !== null)
+            void loadOlder(interruptedBefore.current);
+        }
+        if (
+          isCurrent &&
+          event.type.startsWith("turn.") &&
+          event.agent_id === agentId
+        )
+          void loadLatest();
+      }),
+    [agentId, isCurrent, loadLatest, loadOlder],
+  );
+
+  return (
+    <div ref={root} className="flex w-full min-w-0 flex-col gap-4">
+      {runs.length === 0 &&
+      ranges.length === 0 &&
+      !latestError &&
+      !backend.disconnected ? (
+        <ConversationSkeleton label="Loading window history" />
+      ) : null}
+      {latestError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-2 text-sm text-danger"
+        >
+          <span className="wrap-anywhere">{latestError.message}</span>
+          <Button
+            size="sm"
+            disabled={latestLoading}
+            onClick={() => void loadLatest()}
+          >
+            Retry window history
+          </Button>
+        </div>
+      ) : null}
+      {hasOlder ? (
+        <div className="flex flex-col items-start gap-2">
+          <Button disabled={loading} onClick={() => void loadOlder()}>
+            {loading ? <Spinner label="Loading earlier history" /> : null}
+            {error ? "Retry earlier history" : "Load earlier history"}
+          </Button>
+          {error ? (
+            <p role="alert" className="text-sm text-danger wrap-anywhere">
+              {error.message}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      <ConversationFeed
+        agentId={agentId}
+        runs={[...runs].reverse()}
+        loading={latestLoading || ranges.length === 0}
+      />
+    </div>
+  );
+}
+
 export function TurnHistoryModal({
   agentId,
   sequence,
-  initialOrdinal,
   open,
   onOpenChange,
+  inline = false,
+  latestOrdinal,
+  initialOrdinal,
 }: {
   agentId: number;
   sequence: number;
-  initialOrdinal?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  inline?: boolean;
+  latestOrdinal?: number;
+  initialOrdinal?: number;
 }) {
+  const following = useRef(inline && initialOrdinal === undefined);
+  const newestOrdinal = useRef(latestOrdinal);
+  newestOrdinal.current = latestOrdinal;
   const [read, setRead] = useState<AgentHistoryRead | null>(null);
-  const [ordinal, setOrdinal] = useState<number | undefined>();
+  const [ordinal, setOrdinal] = useState<number | undefined>(
+    inline && initialOrdinal === undefined ? latestOrdinal : initialOrdinal,
+  );
   const [error, setError] = useState<BackendError | null>(null);
   const loadGeneration = useRef(0);
 
@@ -818,12 +1448,14 @@ export function TurnHistoryModal({
   useEffect(() => {
     if (!open) return;
     setRead(null);
-    setOrdinal(initialOrdinal);
-    void load(initialOrdinal);
+    following.current = inline && initialOrdinal === undefined;
+    const initial = following.current ? newestOrdinal.current : initialOrdinal;
+    setOrdinal(initial);
+    void load(initial);
     return () => {
       loadGeneration.current += 1;
     };
-  }, [load, open, sequence, initialOrdinal]);
+  }, [initialOrdinal, inline, load, open, sequence]);
 
   useEffect(() => {
     if (!open) return;
@@ -841,111 +1473,131 @@ export function TurnHistoryModal({
           event.agent_id === agentId &&
           event.sequence === sequence)
       )
-        void load(ordinal);
+        void load(following.current ? newestOrdinal.current : ordinal);
     });
   }, [agentId, load, open, ordinal, sequence]);
 
+  useEffect(() => {
+    if (
+      !open ||
+      !following.current ||
+      latestOrdinal === undefined ||
+      latestOrdinal === ordinal
+    )
+      return;
+    setOrdinal(latestOrdinal);
+    void load(latestOrdinal);
+  }, [latestOrdinal, load, open, ordinal]);
+
   const selectRequest = (nextOrdinal: number) => {
+    following.current = false;
     setOrdinal(nextOrdinal);
     void load(nextOrdinal);
   };
 
-  return (
+  const content = (
+    <div className="min-w-0 min-h-0 flex flex-col gap-4">
+      {error ? (
+        <div className="flex items-center justify-between gap-3 py-2 px-3 border border-red-300/40 rounded-xs bg-red-500/15 text-red-100 text-xs">
+          <span className="flex items-center gap-2 min-w-0 wrap-anywhere">
+            <CircleAlert size={14} aria-hidden="true" />
+            {error.message}
+          </span>
+          <Button size="sm" onClick={() => void load(ordinal)}>
+            <RefreshCw size={13} />
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {read ? (
+        <HistoryReadPanel
+          read={read}
+          compact={inline}
+          ordinal={ordinal}
+          onSelectRequest={selectRequest}
+          onLoadMoreRun={() =>
+            void load(ordinal, {
+              target: "run",
+              offset:
+                read.messages.next_offset ??
+                read.messages.offset + read.messages.messages.length,
+            })
+          }
+          onLoadMoreRequests={() =>
+            read.requests_next_after === null
+              ? undefined
+              : void load(ordinal, {
+                  target: "requests",
+                  requestAfter: read.requests_next_after,
+                })
+          }
+          onLoadMoreWindows={() =>
+            read.windows_next_after === null
+              ? undefined
+              : void load(ordinal, {
+                  target: "windows",
+                  windowsAfter: read.windows_next_after,
+                })
+          }
+          onLoadMoreInput={() =>
+            read.request
+              ? void load(ordinal, {
+                  target: "input",
+                  offset:
+                    read.request.input.offset +
+                    read.request.input.messages.length,
+                })
+              : undefined
+          }
+          onLoadMoreResponse={() =>
+            read.request?.response
+              ? void load(ordinal, {
+                  target: "response",
+                  offset:
+                    read.request.response.offset +
+                    read.request.response.messages.length,
+                })
+              : undefined
+          }
+          onLoadMoreRelated={() =>
+            read.request
+              ? void load(ordinal, {
+                  target: "related",
+                  offset:
+                    read.request.related.offset +
+                    read.request.related.messages.length,
+                })
+              : undefined
+          }
+        />
+      ) : error ? null : (
+        <StatePanel
+          compact
+          icons={[Terminal, Gauge, FileText]}
+          title="Loading activity history"
+        />
+      )}
+    </div>
+  );
+  return inline ? (
+    content
+  ) : (
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title={`Turn #${sequence}`}
+      title={`Activity #${sequence}`}
       variant="history"
       wide
       footer={<Button onClick={() => onOpenChange(false)}>Close</Button>}
     >
-      <div className="min-h-0 overflow-auto flex flex-col gap-4 pr-1">
-        {error ? (
-          <div className="flex items-center justify-between gap-3 py-2 px-3 border border-red-300/40 rounded-xs bg-red-500/15 text-red-100 text-xs">
-            <span className="flex items-center gap-2 min-w-0 wrap-anywhere">
-              <CircleAlert size={14} aria-hidden="true" />
-              {error.message}
-            </span>
-            <Button size="sm" onClick={() => void load(ordinal)}>
-              <RefreshCw size={13} />
-              Retry
-            </Button>
-          </div>
-        ) : null}
-        {read ? (
-          <HistoryReadPanel
-            read={read}
-            ordinal={ordinal}
-            onSelectRequest={selectRequest}
-            onLoadMoreRun={() =>
-              void load(ordinal, {
-                target: "run",
-                offset:
-                  read.messages.next_offset ??
-                  read.messages.offset + read.messages.messages.length,
-              })
-            }
-            onLoadMoreRequests={() =>
-              read.requests_next_after === null
-                ? undefined
-                : void load(ordinal, {
-                    target: "requests",
-                    requestAfter: read.requests_next_after,
-                  })
-            }
-            onLoadMoreWindows={() =>
-              read.windows_next_after === null
-                ? undefined
-                : void load(ordinal, {
-                    target: "windows",
-                    windowsAfter: read.windows_next_after,
-                  })
-            }
-            onLoadMoreInput={() =>
-              read.request
-                ? void load(ordinal, {
-                    target: "input",
-                    offset:
-                      read.request.input.offset +
-                      read.request.input.messages.length,
-                  })
-                : undefined
-            }
-            onLoadMoreResponse={() =>
-              read.request?.response
-                ? void load(ordinal, {
-                    target: "response",
-                    offset:
-                      read.request.response.offset +
-                      read.request.response.messages.length,
-                  })
-                : undefined
-            }
-            onLoadMoreRelated={() =>
-              read.request
-                ? void load(ordinal, {
-                    target: "related",
-                    offset:
-                      read.request.related.offset +
-                      read.request.related.messages.length,
-                  })
-                : undefined
-            }
-          />
-        ) : error ? null : (
-          <StatePanel
-            compact
-            icons={[Terminal, Gauge, FileText]}
-            title="Loading Turn history"
-          />
-        )}
-      </div>
+      {content}
     </Modal>
   );
 }
 
 function HistoryReadPanel({
   read,
+  compact = false,
   ordinal,
   onSelectRequest,
   onLoadMoreRun,
@@ -956,6 +1608,7 @@ function HistoryReadPanel({
   onLoadMoreRelated,
 }: {
   read: AgentHistoryRead;
+  compact?: boolean;
   ordinal: number | undefined;
   onSelectRequest: (ordinal: number) => void;
   onLoadMoreRun: () => void;
@@ -967,31 +1620,43 @@ function HistoryReadPanel({
 }) {
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
-        <span>{read.run.status}</span>
-        <span>{formatTime(read.run.started_at)}</span>
-        {read.run.last_saved_at ? (
-          <span>Saved {formatTime(read.run.last_saved_at)}</span>
-        ) : null}
-        {read.run.window_number ? (
-          <span>
-            Window {read.run.window_number}
-            {read.run.window_reason ? ` · ${read.run.window_reason}` : ""}
-          </span>
-        ) : null}
-        {read.run.window_reset_at ? (
-          <span>Reset {formatTime(read.run.window_reset_at)}</span>
-        ) : null}
-        {read.run.run_id ? (
-          <span className="font-mono">{read.run.run_id}</span>
-        ) : null}
-      </div>
+      {read.run.error ? (
+        <p className="text-danger wrap-anywhere">{read.run.error}</p>
+      ) : null}
+      {!read.request && read.messages.messages.length === 0 ? (
+        <p className="text-sm text-fg-muted">
+          {read.run.status === "running"
+            ? "No saved progress yet"
+            : "No saved content"}
+        </p>
+      ) : null}
+      {!compact ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
+          <span>{read.run.status}</span>
+          <span>{formatTime(read.run.started_at)}</span>
+          {read.run.last_saved_at ? (
+            <span>Saved {formatTime(read.run.last_saved_at)}</span>
+          ) : null}
+          {read.run.window_number ? (
+            <span>
+              Window {read.run.window_number}
+              {read.run.window_reason ? ` · ${read.run.window_reason}` : ""}
+            </span>
+          ) : null}
+          {read.run.window_reset_at ? (
+            <span>Reset {formatTime(read.run.window_reset_at)}</span>
+          ) : null}
+          {read.run.run_id ? (
+            <span className="font-mono">{read.run.run_id}</span>
+          ) : null}
+        </div>
+      ) : null}
       {read.missing.length > 0 ? (
         <p className="py-2 px-3 border border-yellow-200/40 rounded-xs bg-yellow-500/10 text-warning text-xs">
           Missing historical data: {read.missing.join(", ")}
         </p>
       ) : null}
-      {read.windows.length > 0 ? (
+      {!compact && read.windows.length > 0 ? (
         <section className="flex flex-col gap-2">
           <h3 className="m-0 text-sm font-semibold tracking-title">
             Context windows
@@ -1000,7 +1665,7 @@ function HistoryReadPanel({
             {read.windows.map((event) => (
               <li key={event.number} className="flex flex-wrap gap-x-3 gap-y-1">
                 <span>Window {event.number}</span>
-                <span>From Turn {event.since_sequence}</span>
+                <span>From #{event.since_sequence}</span>
                 {event.reason ? <span>{event.reason}</span> : null}
                 {event.reset_at ? (
                   <span>{formatTime(event.reset_at)}</span>
@@ -1017,7 +1682,7 @@ function HistoryReadPanel({
       ) : null}
       {read.requests.length > 0 ? (
         <div
-          className="flex flex-wrap gap-1 border-b border-line pb-3"
+          className="flex min-w-0 flex-wrap gap-1 border-b border-line pb-3"
           role="tablist"
           aria-label="Model requests"
         >
@@ -1028,7 +1693,7 @@ function HistoryReadPanel({
               role="tab"
               aria-selected={ordinal === request.ordinal}
               className={clsx(
-                "inline-flex items-center gap-2 px-3 py-1 border rounded-sm text-xs cursor-pointer",
+                "inline-flex min-w-0 max-w-full flex-wrap items-center gap-2 px-3 py-1 border rounded-sm text-xs wrap-anywhere cursor-pointer",
                 ordinal === request.ordinal
                   ? "border-blue-300/60 bg-blue-500/18 text-blue-50"
                   : "border-line bg-transparent text-fg-muted hover:bg-surface-hover",
@@ -1052,17 +1717,19 @@ function HistoryReadPanel({
           agentId={read.agent_id}
           sequence={read.run.sequence}
           request={read.request}
+          compact={compact}
           onLoadMoreInput={onLoadMoreInput}
           onLoadMoreResponse={onLoadMoreResponse}
           onLoadMoreRelated={onLoadMoreRelated}
         />
       ) : null}
-      {read.messages.messages.length > 0 ? (
+      {(!compact || !read.request) && read.messages.messages.length > 0 ? (
         <HistoryMessagesPanel
           agentId={read.agent_id}
           sequence={read.run.sequence}
           title="Saved Turn messages"
           content={read.messages}
+          compact={compact}
           onLoadMore={read.messages.has_more ? onLoadMoreRun : undefined}
         />
       ) : null}
@@ -1074,6 +1741,7 @@ function RequestHistoryContent({
   agentId,
   sequence,
   request,
+  compact = false,
   onLoadMoreInput,
   onLoadMoreResponse,
   onLoadMoreRelated,
@@ -1081,10 +1749,39 @@ function RequestHistoryContent({
   agentId: number;
   sequence: number;
   request: NonNullable<AgentHistoryRead["request"]>;
+  compact?: boolean;
   onLoadMoreInput: () => void;
   onLoadMoreResponse: () => void;
   onLoadMoreRelated: () => void;
 }) {
+  const results = compact ? historyParts(request.related) : [];
+  const calls = new Set(
+    compact && request.response
+      ? historyParts(request.response)
+          .filter(
+            (part) =>
+              part.part_kind === "tool-call" &&
+              typeof part.tool_call_id === "string",
+          )
+          .map((part) => part.tool_call_id)
+      : [],
+  );
+  const related = compact
+    ? {
+        ...request.related,
+        messages: request.related.messages.flatMap((message) => {
+          if (!isRecord(message) || !Array.isArray(message.parts))
+            return [message];
+          const parts = message.parts.filter(
+            (part) =>
+              !isRecord(part) ||
+              part.part_kind !== "tool-return" ||
+              !calls.has(part.tool_call_id),
+          );
+          return parts.length > 0 ? [{ ...message, parts }] : [];
+        }),
+      }
+    : request.related;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
@@ -1097,40 +1794,46 @@ function RequestHistoryContent({
           <span className="text-danger">{request.summary.error}</span>
         ) : null}
       </div>
-      <HistoryMessagesPanel
-        agentId={agentId}
-        sequence={sequence}
-        title="Model input"
-        content={request.input}
-        onLoadMore={request.input.has_more ? onLoadMoreInput : undefined}
-      />
-      <HistoryValuePanel
-        key={`${sequence}-${request.summary.ordinal}-parameters`}
-        agentId={agentId}
-        sequence={sequence}
-        title="Model request parameters"
-        value={request.parameters}
-      />
-      <HistoryValuePanel
-        key={`${sequence}-${request.summary.ordinal}-settings`}
-        agentId={agentId}
-        sequence={sequence}
-        title="Model settings"
-        value={request.settings}
-      />
-      <HistoryValuePanel
-        key={`${sequence}-${request.summary.ordinal}-model`}
-        agentId={agentId}
-        sequence={sequence}
-        title="Model"
-        value={request.model}
-      />
+      {!compact ? (
+        <>
+          <HistoryMessagesPanel
+            agentId={agentId}
+            sequence={sequence}
+            title="Model input"
+            content={request.input}
+            onLoadMore={request.input.has_more ? onLoadMoreInput : undefined}
+          />
+          <HistoryValuePanel
+            key={`${sequence}-${request.summary.ordinal}-parameters`}
+            agentId={agentId}
+            sequence={sequence}
+            title="Model request parameters"
+            value={request.parameters}
+          />
+          <HistoryValuePanel
+            key={`${sequence}-${request.summary.ordinal}-settings`}
+            agentId={agentId}
+            sequence={sequence}
+            title="Model settings"
+            value={request.settings}
+          />
+          <HistoryValuePanel
+            key={`${sequence}-${request.summary.ordinal}-model`}
+            agentId={agentId}
+            sequence={sequence}
+            title="Model"
+            value={request.model}
+          />
+        </>
+      ) : null}
       {request.response ? (
         <HistoryMessagesPanel
           agentId={agentId}
           sequence={sequence}
           title="Model response"
           content={request.response}
+          compact={compact}
+          toolResults={results}
           onLoadMore={
             request.response.has_more ? onLoadMoreResponse : undefined
           }
@@ -1140,12 +1843,13 @@ function RequestHistoryContent({
           The model response is waiting for a saved result.
         </p>
       )}
-      {request.related.messages.length > 0 ? (
+      {related.messages.length > 0 || related.has_more ? (
         <HistoryMessagesPanel
           agentId={agentId}
           sequence={sequence}
           title="Associated tool results"
-          content={request.related}
+          content={related}
+          compact={compact}
           onLoadMore={request.related.has_more ? onLoadMoreRelated : undefined}
         />
       ) : null}
@@ -1159,26 +1863,40 @@ function HistoryMessagesPanel({
   title,
   content,
   onLoadMore,
+  compact = false,
+  toolResults = [],
 }: {
   agentId: number;
   sequence: number;
   title: string;
   content: HistoryMessages;
   onLoadMore?: () => void;
+  compact?: boolean;
+  toolResults?: { [key: string]: HistoryValue }[];
 }) {
   return (
     <section className="flex flex-col gap-2">
       <h3 className="m-0 text-sm font-semibold tracking-title">{title}</h3>
       <div className="flex flex-col gap-2">
-        {content.messages.map((message, index) => (
-          <HistoryValueView
-            key={`${content.offset + index}`}
-            value={message}
-            label={`Message ${content.offset + index + 1}`}
-            agentId={agentId}
-            sequence={sequence}
-          />
-        ))}
+        {content.messages.map((message, index) =>
+          compact ? (
+            <ModelMessageContent
+              key={`${content.offset + index}`}
+              value={message}
+              agentId={agentId}
+              sequence={sequence}
+              toolResults={toolResults}
+            />
+          ) : (
+            <HistoryValueView
+              key={`${content.offset + index}`}
+              value={message}
+              label={`Message ${content.offset + index + 1}`}
+              agentId={agentId}
+              sequence={sequence}
+            />
+          ),
+        )}
       </div>
       {onLoadMore ? (
         <Button size="sm" onClick={onLoadMore}>
@@ -1186,6 +1904,130 @@ function HistoryMessagesPanel({
         </Button>
       ) : null}
     </section>
+  );
+}
+
+function SavedMarkdown({ children }: { children: string }) {
+  return (
+    <div className="min-w-0 max-w-full text-sm leading-body wrap-anywhere [&_p]:my-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_pre]:min-w-0 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:bg-surface-raised [&_pre]:p-3 [&_code]:font-mono [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-3 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_img]:max-w-full [&_td]:p-2 [&_th]:p-2">
+      <Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown>
+    </div>
+  );
+}
+
+function historyParts(content: HistoryMessages) {
+  return content.messages.flatMap((message) =>
+    isRecord(message) && Array.isArray(message.parts)
+      ? message.parts.filter(isRecord)
+      : [],
+  );
+}
+
+function ModelMessageContent({
+  value,
+  agentId,
+  sequence,
+  toolResults = [],
+}: {
+  value: HistoryValue;
+  agentId: number;
+  sequence: number;
+  toolResults?: { [key: string]: HistoryValue }[];
+}) {
+  if (isRecord(value) && Array.isArray(value.parts)) {
+    return (
+      <div className="flex min-w-0 flex-col gap-3">
+        {value.parts.map((part, index) => (
+          <ModelMessageContent
+            key={index}
+            value={part}
+            agentId={agentId}
+            sequence={sequence}
+            toolResults={toolResults}
+          />
+        ))}
+      </div>
+    );
+  }
+  if (
+    isRecord(value) &&
+    (value.part_kind === "text" || value.part_kind === "thinking")
+  ) {
+    const reference = textValue(value.content);
+    const body =
+      typeof value.content === "string" ? (
+        <SavedMarkdown>{value.content}</SavedMarkdown>
+      ) : reference ? (
+        <HistoryTextPreview
+          agentId={agentId}
+          sequence={sequence}
+          reference={reference}
+          label={value.part_kind === "thinking" ? "Thinking" : "Response"}
+          markdown
+        />
+      ) : (
+        <HistoryValueView
+          value={value.content}
+          label="Content"
+          agentId={agentId}
+          sequence={sequence}
+        />
+      );
+    return value.part_kind === "thinking" ? (
+      <details className="min-w-0 max-w-full rounded-md border border-line p-3 text-fg-muted">
+        <summary className="cursor-pointer text-sm wrap-anywhere">
+          Thinking
+        </summary>
+        {body}
+      </details>
+    ) : (
+      body
+    );
+  }
+  if (
+    isRecord(value) &&
+    (value.part_kind === "tool-call" || value.part_kind === "tool-return")
+  ) {
+    const call = value.part_kind === "tool-call";
+    const results = call
+      ? toolResults.filter(
+          (part) =>
+            part.part_kind === "tool-return" &&
+            typeof value.tool_call_id === "string" &&
+            part.tool_call_id === value.tool_call_id,
+        )
+      : [];
+    return (
+      <details className="min-w-0 rounded-md border border-line bg-surface p-3">
+        <summary className="cursor-pointer text-sm wrap-anywhere">
+          {typeof value.tool_name === "string" ? value.tool_name : "Tool"} ·{" "}
+          {call ? "Call" : "Result"}
+        </summary>
+        <HistoryValueView
+          value={call ? value.args : value.content}
+          label={call ? "Arguments" : "Result"}
+          agentId={agentId}
+          sequence={sequence}
+        />
+        {results.map((result, index) => (
+          <HistoryValueView
+            key={index}
+            value={result.content}
+            label="Result"
+            agentId={agentId}
+            sequence={sequence}
+          />
+        ))}
+      </details>
+    );
+  }
+  return (
+    <HistoryValueView
+      value={value}
+      label="Saved content"
+      agentId={agentId}
+      sequence={sequence}
+    />
   );
 }
 
@@ -1264,6 +2106,7 @@ function HistoryValueView({
   if (text && agentId !== undefined && sequence !== undefined) {
     return (
       <HistoryTextPreview
+        key={`${agentId}:${sequence}:${text.source}:${text.request_ordinal}:${text.message_index}:${JSON.stringify(text.path)}`}
         agentId={agentId}
         sequence={sequence}
         reference={text}
@@ -1274,6 +2117,7 @@ function HistoryValueView({
   if (binary && agentId !== undefined && sequence !== undefined) {
     return (
       <HistoryImagePreview
+        key={`${agentId}:${sequence}:${binary.source}:${binary.request_ordinal}:${binary.message_index}:${JSON.stringify(binary.path)}`}
         agentId={agentId}
         sequence={sequence}
         reference={binary}
@@ -1282,8 +2126,11 @@ function HistoryValueView({
   }
   if (Array.isArray(value)) {
     return (
-      <details open className="border border-line rounded-sm bg-surface">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">
+      <details
+        open
+        className="min-w-0 max-w-full border border-line rounded-sm bg-surface"
+      >
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold wrap-anywhere">
           {label}
         </summary>
         <div className="flex flex-col gap-2 p-3 border-t border-line">
@@ -1302,8 +2149,11 @@ function HistoryValueView({
   }
   if (isRecord(value)) {
     return (
-      <details open className="border border-line rounded-sm bg-surface">
-        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">
+      <details
+        open
+        className="min-w-0 max-w-full border border-line rounded-sm bg-surface"
+      >
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold wrap-anywhere">
           {label}
         </summary>
         <div className="flex flex-col gap-2 p-3 border-t border-line">
@@ -1321,7 +2171,7 @@ function HistoryValueView({
     );
   }
   return (
-    <div className="flex flex-col gap-1 py-2 px-3 border border-line rounded-sm bg-surface">
+    <div className="flex min-w-0 max-w-full flex-col gap-1 py-2 px-3 border border-line rounded-sm bg-surface">
       <span className="text-xs text-fg-muted">{label}</span>
       <pre className="m-0 whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
         {value === null ? "null" : String(value)}
@@ -1335,23 +2185,70 @@ function HistoryTextPreview({
   sequence,
   reference,
   label,
+  markdown = false,
+  active = true,
 }: {
   agentId: number;
   sequence: number;
   reference: HistoryText;
   label: string;
+  markdown?: boolean;
+  active?: boolean;
 }) {
-  const [text, setText] = useState(reference.value);
-  const [nextOffset, setNextOffset] = useState(reference.next_offset);
-  const [hasMore, setHasMore] = useState(reference.has_more);
+  const textKey = `text:${agentId}:${sequence}:${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`;
+  const [text, setText] = useWindowState(textKey, reference.value);
+  const [nextOffset, setNextOffset] = useWindowState(
+    `${textKey}:offset`,
+    reference.next_offset,
+  );
+  const [hasMore, setHasMore] = useWindowState(
+    `${textKey}:more`,
+    reference.has_more,
+  );
   const [error, setError] = useState<BackendError | null>(null);
   const [loading, setLoading] = useState(false);
   const loadGeneration = useRef(0);
   const interruptedOffset = useRef<number | null>(null);
+  const textRequest = useRef(false);
+  const content = useRef({
+    value: text,
+    nextOffset,
+    total: reference.total_bytes,
+  });
   const pathKey = JSON.stringify(reference.path);
+
+  useEffect(() => {
+    const current = content.current;
+    const compatible = current.value.startsWith(reference.value);
+    if (!compatible || reference.total_bytes < current.nextOffset) {
+      loadGeneration.current += 1;
+      textRequest.current = false;
+      interruptedOffset.current = null;
+      setLoading(false);
+      setError(null);
+      content.current = {
+        value: reference.value,
+        nextOffset: reference.next_offset,
+        total: reference.total_bytes,
+      };
+      setText(reference.value);
+      setNextOffset(reference.next_offset);
+      setHasMore(reference.has_more);
+      return;
+    }
+    current.total = reference.total_bytes;
+    setHasMore(current.nextOffset < current.total);
+  }, [
+    reference.value,
+    reference.next_offset,
+    reference.total_bytes,
+    reference.has_more,
+  ]);
 
   const loadMore = useCallback(
     async (offset: number) => {
+      if (textRequest.current || !active) return;
+      textRequest.current = true;
       const generation = ++loadGeneration.current;
       interruptedOffset.current = offset;
       setLoading(true);
@@ -1361,10 +2258,17 @@ function HistoryTextPreview({
           offset,
         });
         if (generation !== loadGeneration.current) return;
+        if (result.offset !== offset || result.next_offset <= offset)
+          throw new Error("Saved text did not advance");
         interruptedOffset.current = null;
-        setText((current) => current + result.value);
-        setNextOffset(result.next_offset);
-        setHasMore(result.has_more);
+        content.current = {
+          value: content.current.value + result.value,
+          nextOffset: result.next_offset,
+          total: Math.max(content.current.total, result.total_bytes),
+        };
+        setText(content.current.value);
+        setNextOffset(content.current.nextOffset);
+        setHasMore(content.current.nextOffset < content.current.total);
         setError(null);
       } catch (failure) {
         if (generation !== loadGeneration.current) return;
@@ -1374,10 +2278,14 @@ function HistoryTextPreview({
           setError(problem);
         }
       } finally {
-        if (generation === loadGeneration.current) setLoading(false);
+        if (generation === loadGeneration.current) {
+          textRequest.current = false;
+          setLoading(false);
+        }
       }
     },
     [
+      active,
       agentId,
       pathKey,
       reference.source,
@@ -1388,12 +2296,19 @@ function HistoryTextPreview({
   );
 
   useEffect(() => {
+    if (!active) {
+      loadGeneration.current += 1;
+      textRequest.current = false;
+      setLoading(false);
+    }
     const stop = backend.onEvent((event) => {
       if (event.type === "connection.closed") {
         loadGeneration.current += 1;
+        textRequest.current = false;
         setLoading(false);
       }
       if (
+        active &&
         event.type === "connection.restored" &&
         interruptedOffset.current !== null
       )
@@ -1401,18 +2316,23 @@ function HistoryTextPreview({
     });
     return () => {
       loadGeneration.current += 1;
+      textRequest.current = false;
       stop();
     };
-  }, [loadMore]);
+  }, [active, loadMore]);
 
   return (
-    <div className="flex flex-col gap-2 py-2 px-3 border border-line rounded-sm bg-surface">
+    <div className="flex min-w-0 max-w-full flex-col gap-2 py-2 px-3 border border-line rounded-sm bg-surface">
       <span className="text-xs text-fg-muted">
         {label} · {formatBytes(reference.total_bytes)}
       </span>
-      <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
-        {text}
-      </pre>
+      {markdown ? (
+        <SavedMarkdown>{text}</SavedMarkdown>
+      ) : (
+        <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
+          {text}
+        </pre>
+      )}
       {error ? (
         <p className="m-0 text-danger text-xs">{error.message}</p>
       ) : null}
@@ -1422,7 +2342,11 @@ function HistoryTextPreview({
           disabled={loading}
           onClick={() => void loadMore(nextOffset)}
         >
-          Load more text
+          {loading
+            ? "Loading text..."
+            : error
+              ? "Retry text"
+              : "Load more text"}
         </Button>
       ) : null}
     </div>
@@ -1433,10 +2357,12 @@ function HistoryImagePreview({
   agentId,
   sequence,
   reference,
+  active = true,
 }: {
   agentId: number;
   sequence: number;
   reference: HistoryBinary;
+  active?: boolean;
 }) {
   const [image, setImage] = useState<string | null>(null);
   const [error, setError] = useState<BackendError | null>(null);
@@ -1446,6 +2372,7 @@ function HistoryImagePreview({
   const pathKey = JSON.stringify(reference.path);
 
   const load = useCallback(async () => {
+    if (!active) return;
     const generation = ++loadGeneration.current;
     setLoading(true);
     try {
@@ -1465,6 +2392,7 @@ function HistoryImagePreview({
       if (generation === loadGeneration.current) setLoading(false);
     }
   }, [
+    active,
     agentId,
     pathKey,
     reference.source,
@@ -1474,7 +2402,7 @@ function HistoryImagePreview({
   ]);
 
   useEffect(() => {
-    void load();
+    if (active) void load();
     const stop = backend.onEvent((event) => {
       if (event.type === "connection.closed") {
         loadGeneration.current += 1;
@@ -1518,7 +2446,15 @@ function HistoryImagePreview({
         <img
           src={image}
           alt="Saved model content"
-          className="block max-h-64 max-w-full object-contain"
+          className="block max-h-[200px] max-w-full object-contain"
+          onError={() =>
+            setError(
+              new BackendError(
+                "image_failed",
+                "The saved image could not be displayed",
+              ),
+            )
+          }
         />
         <span className="absolute right-2 bottom-2 inline-flex items-center justify-center p-1 rounded-xs bg-gray-1100/70 text-white">
           <Maximize2 size={14} aria-hidden="true" />
@@ -1542,7 +2478,7 @@ function HistoryImagePreview({
   );
 }
 
-function TurnCard({
+function ActivityCard({
   run,
   onOpen,
 }: {

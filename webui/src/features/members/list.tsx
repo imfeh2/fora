@@ -10,17 +10,14 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useOrganization } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import {
-  type Column,
   Page,
   PageBody,
   PageHeader,
   RowLink,
-  Table,
-  Toolbar,
   useNarrowViewport,
 } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
@@ -44,14 +41,6 @@ import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
 import { backend, type Member } from "@/lib/backend";
 import { plural } from "@/lib/format";
-
-const COLUMNS: Column[] = [
-  { key: "member", label: "Member" },
-  { key: "kind", label: "Kind", width: "120px", hideBelow: "md" },
-  { key: "spend", label: "Token spend", align: "end", width: "180px" },
-  { key: "state", label: "State", width: "150px" },
-  { key: "actions", label: "", width: "56px" },
-];
 
 type Filter = "all" | "agents" | "humans";
 
@@ -126,6 +115,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
   return (
     <Page>
       <PageHeader
+        wrap
         title="Members"
         actions={
           <Button
@@ -138,7 +128,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
           </Button>
         }
       />
-      <Toolbar>
+      <div className="flex min-w-0 flex-wrap items-center gap-3 px-8 pb-4 max-[940px]:px-6 [@media(max-width:640px)]:px-3">
         <SearchField
           icon={<Search size={15} />}
           value={query}
@@ -152,7 +142,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
           options={FILTERS}
           onChange={setFilter}
         />
-      </Toolbar>
+      </div>
       <PageBody>
         {organizationError ? (
           <LoadError
@@ -166,30 +156,21 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
         {shown === undefined ? (
           organizationError || connectionError ? null : (
             <LoadingSkeleton label="Loading Members">
-              <Table columns={COLUMNS} label="Members">
+              <div className="flex flex-col rounded-md border border-line bg-surface divide-y divide-line">
                 {[1, 2, 3, 4].map((row) => (
-                  <tr key={row}>
-                    <td>
-                      <div className="flex items-center gap-3">
-                        <Skeleton className="size-7 shrink-0 rounded-full" />
-                        <Skeleton className="w-30 max-w-full" />
-                      </div>
-                    </td>
-                    <td data-hide-below="md">
-                      <Skeleton className="w-16" />
-                    </td>
-                    <td>
-                      <Skeleton className="w-20" />
-                    </td>
-                    <td>
-                      <Skeleton className="w-16" />
-                    </td>
-                    <td>
-                      <Skeleton className="size-6" />
-                    </td>
-                  </tr>
+                  <div
+                    key={row}
+                    className="flex min-h-12 items-center gap-3 px-4 py-2"
+                  >
+                    <Skeleton className="size-[26px] shrink-0 rounded-sm" />
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                      <Skeleton className="w-30 max-w-full" />
+                      <Skeleton className="w-20 max-w-full" />
+                    </div>
+                    <Skeleton className="h-7 w-20" />
+                  </div>
                 ))}
-              </Table>
+              </div>
             </LoadingSkeleton>
           )
         ) : shown.length === 0 ? (
@@ -238,7 +219,10 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
             ))}
           </div>
         ) : (
-          <Table columns={COLUMNS} label="Members">
+          <ul
+            aria-label="Members"
+            className="flex flex-col rounded-md border border-line bg-surface divide-y divide-line"
+          >
             {shown.map((member) => (
               <MemberRow
                 key={member.id}
@@ -255,7 +239,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
                 onDelete={() => setDoomed(member)}
               />
             ))}
-          </Table>
+          </ul>
         )}
       </PageBody>
 
@@ -269,12 +253,12 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
         open={renaming !== null}
         onOpenChange={(next) => !next && setRenaming(null)}
         title="Rename Member"
+        protectUnsaved
         label="Name"
         initial={renaming?.name ?? ""}
         submitLabel="Rename"
         onSubmit={async (name) => {
           if (renaming) await backend.renameMember(renaming.id, name);
-          setRenaming(null);
           await refresh();
         }}
       />
@@ -401,91 +385,109 @@ export function MemberRow({
   member: Member;
   tokenLimit: number | null;
   onOpen: () => void;
-  onToggle: () => void;
+  onToggle: () => void | Promise<void>;
   onRename: () => void;
   onDelete: () => void;
 }) {
   const agent = member.type === "agent";
-  const tokens = member.tokens ?? 0;
+  const paused = canResume(member);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const toggle = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    try {
+      await onToggle();
+      setError(null);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      inFlight.current = false;
+      setPending(false);
+    }
+  };
 
   return (
-    <tr>
-      <td>
-        <div className="flex min-w-0 items-center gap-3">
-          <Avatar memberId={member.id} />
+    <li className="relative flex min-w-0 min-h-12 flex-wrap items-center gap-3 px-4 py-2 hover:bg-surface-hover [@media(max-width:640px)]:grid [@media(max-width:640px)]:grid-cols-[auto_minmax(0,1fr)]">
+      <Avatar memberId={member.id} />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <button
+          type="button"
+          className="min-w-0 text-left font-semibold wrap-anywhere cursor-pointer after:absolute after:inset-0"
+          onClick={agent ? onOpen : onRename}
+        >
+          {member.name}
+        </button>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <Chip tone={agent ? "blue" : "neutral"}>
+            {agent ? <Bot size={12} /> : <User size={12} />}
+            {agent ? "Agent" : "Human"}
+          </Chip>
           {agent ? (
-            <RowLink primary={member.name} onSelect={onOpen} />
-          ) : (
-            <span className="min-w-0 truncate font-semibold">
-              {member.name}
-            </span>
-          )}
-        </div>
-      </td>
-      <td data-hide-below="md">
-        <Chip tone={agent ? "blue" : "neutral"}>
-          {agent ? <Bot size={12} /> : <User size={12} />}
-          {agent ? "Agent" : "Human"}
-        </Chip>
-      </td>
-      <td data-align="end">
-        {agent ? (
-          <div className="flex min-w-[110px] flex-col items-end gap-[5px]">
-            <span className="tabular-nums whitespace-nowrap">
-              {tokens.toLocaleString()}
-              {tokenLimit !== null && tokenLimit > 0 ? (
-                <span className="text-fg-muted">
-                  {" "}
-                  / {tokenLimit.toLocaleString()}
-                </span>
-              ) : null}
-            </span>
-            {tokenLimit === null ? (
-              <span className="text-fg-muted">Token ceiling unavailable</span>
-            ) : null}
-            {tokenLimit !== null && tokenLimit > 0 ? (
-              <div className="w-24">
-                <Meter
-                  value={tokens}
-                  max={tokenLimit}
-                  label={`Token spend for ${member.name}`}
+            <StatusText
+              dot={
+                <StateDot
+                  state={member.state}
+                  ping={member.state === "running"}
                 />
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <span className="text-fg-muted">—</span>
-        )}
-      </td>
-      <td>
-        {agent ? (
-          <StatusText
-            dot={
-              <StateDot
-                state={member.state}
-                ping={member.state === "running"}
-              />
-            }
-          >
-            {agentStateLabel(member)}
-            {member.pause_requested && member.state === "running"
-              ? " · Pause requested"
-              : ""}
-          </StatusText>
-        ) : (
-          <span className="text-fg-muted">—</span>
-        )}
-      </td>
-      <td className="relative z-1 w-12 text-right">
+              }
+            >
+              {agentStateLabel(member)}
+            </StatusText>
+          ) : null}
+          {agent && member.pause_requested && member.state === "running" ? (
+            <span className="text-warning wrap-anywhere">
+              Pause requested · Current activity will finish
+            </span>
+          ) : null}
+          {agent ? (
+            <span className="text-fg-muted tabular-nums wrap-anywhere">
+              {member.tokens === undefined
+                ? "Token usage unavailable"
+                : `${member.tokens.toLocaleString()} tokens`}
+              {tokenLimit !== null && tokenLimit > 0
+                ? ` / ${tokenLimit.toLocaleString()}`
+                : ""}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div className="relative z-1 ml-auto flex min-w-0 flex-wrap items-center gap-2 [@media(max-width:640px)]:col-span-2 [@media(max-width:640px)]:w-full [@media(max-width:640px)]:justify-end">
+        <Button
+          size="sm"
+          disabled={pending}
+          onClick={agent ? () => void toggle() : onRename}
+        >
+          {agent ? (
+            paused ? (
+              <Play size={14} />
+            ) : (
+              <Pause size={14} />
+            )
+          ) : (
+            <SquarePen size={14} />
+          )}
+          {agent ? (paused ? "Resume" : "Pause") : "Rename"}
+        </Button>
         <OverflowMenu
           label={`Actions for ${member.name}`}
           actions={memberActions(member, {
             toggle: onToggle,
             rename: onRename,
             remove: onDelete,
-          })}
+          }).filter((action) => action.id !== "toggle")}
         />
-      </td>
-    </tr>
+      </div>
+      {error ? (
+        <p
+          role="alert"
+          className="relative z-1 w-full text-sm text-danger wrap-anywhere [@media(max-width:640px)]:col-span-2"
+        >
+          {error}
+        </p>
+      ) : null}
+    </li>
   );
 }

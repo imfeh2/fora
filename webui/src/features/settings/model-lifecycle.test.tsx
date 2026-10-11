@@ -146,7 +146,7 @@ function mountPanel(agent: boolean) {
     };
   }
   const panel = ModelPanel();
-  const defaults = panel.props.children.props.children[0];
+  const defaults = panel.props.children[1].props.children.props.children[0];
   return {
     save: () => defaults.props.save("set_defaults", null, {}),
     edit: () => {},

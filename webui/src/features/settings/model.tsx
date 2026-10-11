@@ -1,5 +1,7 @@
 import { CircleHelp, Save } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useRouter } from "@/app/router";
+import { LoadError } from "@/components/ui/access-error";
 import { Combobox } from "@/components/ui/combobox";
 import { Modal } from "@/components/ui/dialog";
 import {
@@ -169,18 +171,29 @@ export function AgentCreateDialog({
     thinking: null,
   });
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const generation = useRef(0);
   const load = useCallback(async () => {
+    const current = ++generation.current;
     try {
-      setCatalog(await backend.modelCatalog());
+      const result = await backend.modelCatalog();
+      if (current !== generation.current) return;
+      setCatalog(result);
+      setLoadError(null);
     } catch (error) {
-      reportLoadFailure("create-agent-models", error, () => void load());
+      if (current === generation.current)
+        setLoadError(error instanceof Error ? error.message : String(error));
     }
   }, []);
   useEffect(() => {
     void load();
-    return backend.onEvent((event) => {
+    const off = backend.onEvent((event) => {
       if (event.type === "connection.restored") void load();
     });
+    return () => {
+      generation.current += 1;
+      off();
+    };
   }, [load]);
   const create = async () => {
     if (!catalog || !name.trim() || busy) return;
@@ -233,6 +246,17 @@ export function AgentCreateDialog({
         </>
       }
     >
+      {loadError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 text-danger"
+        >
+          <span>{loadError}</span>
+          <Button disabled={busy} onClick={() => void load()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
       <fieldset
         className="flex flex-col gap-4 border-0 p-0"
         disabled={busy || !catalog}
@@ -246,15 +270,105 @@ export function AgentCreateDialog({
         </Field>
         {catalog ? (
           <ModelSelection catalog={catalog} value={value} onChange={setValue} />
-        ) : (
-          <Spinner label="Loading models" />
-        )}
+        ) : !loadError ? (
+          <LoadingSkeleton label="Loading models">
+            <FieldSkeleton />
+            <FieldSkeleton />
+          </LoadingSkeleton>
+        ) : null}
       </fieldset>
     </Modal>
   );
 }
 
-export function AgentModelPanel({ agentId }: { agentId: number }) {
+export function AgentModelDialog({
+  agentId,
+  onClose,
+}: {
+  agentId: number;
+  onClose: () => void;
+}) {
+  const [editing, setEditing] = useState({ dirty: false, busy: false });
+  const [discarding, setDiscarding] = useState(false);
+  const pendingNavigation = useRef<(() => void) | null>(null);
+  const { registerNavigationBlocker } = useRouter();
+  useEffect(
+    () =>
+      registerNavigationBlocker((_next, proceed) => {
+        if (editing.busy) return true;
+        if (!editing.dirty) return false;
+        pendingNavigation.current ??= proceed;
+        setDiscarding(true);
+        return true;
+      }),
+    [editing, registerNavigationBlocker],
+  );
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!editing.dirty && !editing.busy) return;
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [editing]);
+  const keepEditing = () => {
+    pendingNavigation.current = null;
+    setDiscarding(false);
+  };
+  const discard = () => {
+    const proceed = pendingNavigation.current;
+    pendingNavigation.current = null;
+    onClose();
+    proceed?.();
+  };
+  const close = () => {
+    if (editing.busy) return;
+    if (editing.dirty) setDiscarding(true);
+    else onClose();
+  };
+  return (
+    <>
+      <Modal
+        open
+        onOpenChange={(open) => !open && close()}
+        title="Model settings"
+        footer={
+          <Button disabled={editing.busy} onClick={close}>
+            Close
+          </Button>
+        }
+      >
+        <AgentModelPanel
+          key={agentId}
+          agentId={agentId}
+          onStateChange={setEditing}
+        />
+      </Modal>
+      <Modal
+        open={discarding}
+        onOpenChange={(open) => !open && keepEditing()}
+        title="Discard unsaved changes?"
+        description="You have unsaved modifications."
+        footer={
+          <>
+            <Button onClick={keepEditing}>Keep Editing</Button>
+            <Button variant="danger" onClick={discard}>
+              Discard
+            </Button>
+          </>
+        }
+      />
+    </>
+  );
+}
+
+export function AgentModelPanel({
+  agentId,
+  onStateChange,
+}: {
+  agentId: number;
+  onStateChange?: (state: { dirty: boolean; busy: boolean }) => void;
+}) {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [value, setValue] = useState<AgentModelConfig>({
     model_id: null,
@@ -262,6 +376,10 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
   });
   const [busy, setBusy] = useState(false);
   const dirty = useRef(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  useEffect(() => {
+    onStateChange?.({ dirty: dirty.current, busy });
+  }, [busy, value, onStateChange]);
   useReportSettingsSave(`agent-model-${agentId}`, busy);
   const loadGeneration = useRef(0);
   const load = useCallback(async () => {
@@ -270,6 +388,7 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
       const loaded = await backend.modelCatalog();
       if (generation !== loadGeneration.current) return;
       setCatalog(loaded);
+      setLoadError(null);
       if (!dirty.current) {
         setValue(
           loaded.agent_configs[String(agentId)] ?? {
@@ -280,7 +399,7 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
       }
     } catch (error) {
       if (generation === loadGeneration.current) {
-        reportLoadFailure(`agent-model:${agentId}`, error, () => void load());
+        setLoadError(error instanceof Error ? error.message : String(error));
       }
     }
   }, [agentId]);
@@ -330,16 +449,29 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
         }
       }}
     >
-      <h2 className="text-base font-medium">Model settings</h2>
+      {loadError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 text-danger"
+        >
+          <span>{loadError}</span>
+          <Button disabled={busy} onClick={() => void load()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
       <fieldset
         className="flex flex-col gap-4 border-0 p-0"
         disabled={!catalog || busy}
       >
         {catalog ? (
           <ModelSelection catalog={catalog} value={value} onChange={setValue} />
-        ) : (
-          <Spinner label="Loading models" />
-        )}
+        ) : !loadError ? (
+          <LoadingSkeleton label="Loading models">
+            <FieldSkeleton />
+            <FieldSkeleton />
+          </LoadingSkeleton>
+        ) : null}
         <Button type="submit" variant="primary">
           {busy ? <Spinner label="Saving Agent model settings" /> : null}
           Save model settings
@@ -364,10 +496,12 @@ export function ModelPanel() {
   const [expandedModels, setExpandedModels] = useState<string[]>([]);
   const selectionId = useId();
   useReportSettingsSave("model", busy);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
   const loadGeneration = useRef(0);
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     setFailed(false);
+    setLoadError(null);
     try {
       const loaded = await backend.modelCatalog();
       if (generation !== loadGeneration.current) return;
@@ -376,7 +510,7 @@ export function ModelPanel() {
     } catch (error) {
       if (generation === loadGeneration.current) {
         setFailed(true);
-        reportLoadFailure("settings-model", error, () => void load());
+        setLoadError(reportLoadFailure(error));
       }
     }
   }, []);
@@ -398,6 +532,7 @@ export function ModelPanel() {
       loadGeneration.current += 1;
       setCatalog(updated);
       setFailed(false);
+      setLoadError(null);
       if (action === "save_provider" && id === null) {
         const created = updated.providers[updated.providers.length - 1];
         if (!created) throw new Error("Saved provider is missing");
@@ -442,16 +577,14 @@ export function ModelPanel() {
         : [...current, id],
     );
   };
-  return (
+  const fields = (
     <fieldset
       className="model-settings m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
       aria-label="Model settings"
       disabled={!catalog || busy || failed}
     >
       {!catalog ? (
-        failed ? (
-          <p role="alert">Could not load model settings.</p>
-        ) : (
+        failed ? null : (
           <LoadingSkeleton label="Loading model settings">
             <div className="flex max-w-[560px] flex-col gap-4">
               <FieldSkeleton />
@@ -576,6 +709,14 @@ export function ModelPanel() {
         </>
       )}
     </fieldset>
+  );
+  return (
+    <>
+      {loadError && !(loadError.transport && backend.disconnected) ? (
+        <LoadError error={loadError} retry={() => void load()} />
+      ) : null}
+      {fields}
+    </>
   );
 }
 

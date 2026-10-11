@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { LoadError } from "@/components/ui/access-error";
 import {
   Button,
   Chip,
@@ -401,12 +402,14 @@ export function ExecutionForm({
 export function ExecutionPanel() {
   const [info, setInfo] = useState<ExecutionSettings | null>(null);
   const [failed, setFailed] = useState(false);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
   const generation = useRef(0);
   const saving = useRef(false);
   const load = useCallback(async () => {
     if (saving.current) return;
     const current = ++generation.current;
     setFailed(false);
+    setLoadError(null);
     try {
       const result = (await backend.settings("execution")) as ExecutionSettings;
       if (current === generation.current) {
@@ -416,7 +419,7 @@ export function ExecutionPanel() {
     } catch (failure) {
       if (current === generation.current) {
         setFailed(true);
-        reportLoadFailure("settings-execution", failure, () => void load());
+        setLoadError(reportLoadFailure(failure));
       }
     }
   }, []);
@@ -430,9 +433,13 @@ export function ExecutionPanel() {
       off();
     };
   }, [load]);
+  const recovery =
+    loadError && !(loadError.transport && backend.disconnected) ? (
+      <LoadError error={loadError} retry={() => void load()} />
+    ) : null;
   if (!info)
     return failed ? (
-      <p role="alert">Could not load execution settings.</p>
+      recovery
     ) : (
       <LoadingSkeleton label="Loading execution settings">
         {["target", "directory", "permissions"].map((field) => (
@@ -441,23 +448,26 @@ export function ExecutionPanel() {
       </LoadingSkeleton>
     );
   return (
-    <ExecutionForm
-      initial={info}
-      onSave={async (values) => {
-        generation.current++;
-        saving.current = true;
-        try {
-          const result = (await backend.updateSettings(
-            "execution",
-            values,
-          )) as ExecutionSettings;
-          setInfo(result);
-          return result;
-        } finally {
+    <>
+      {recovery}
+      <ExecutionForm
+        initial={info}
+        onSave={async (values) => {
           generation.current++;
-          saving.current = false;
-        }
-      }}
-    />
+          saving.current = true;
+          try {
+            const result = (await backend.updateSettings(
+              "execution",
+              values,
+            )) as ExecutionSettings;
+            setInfo(result);
+            return result;
+          } finally {
+            generation.current++;
+            saving.current = false;
+          }
+        }}
+      />
+    </>
   );
 }

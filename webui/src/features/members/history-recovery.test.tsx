@@ -765,7 +765,9 @@ describe("History connection recovery", () => {
     await testing.act(async () => {
       sockets[1].respond("agent.history.text", {
         value: "-tail",
+        offset: 10,
         next_offset: 20,
+        total_bytes: 20,
         has_more: false,
       });
       sockets[1].respond("agent.history.image", {

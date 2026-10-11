@@ -74,10 +74,12 @@ export function MessageAttachment({
   discussionId,
   messageId,
   attachment,
+  thumbnail = false,
 }: {
   discussionId: number;
   messageId: number;
   attachment: Attachment;
+  thumbnail?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -102,14 +104,15 @@ export function MessageAttachment({
     [],
   );
   const image = attachment.width !== null && attachment.height !== null;
-  const shouldLoad = image && (visible || opened);
+  const shouldLoad = image && (thumbnail || visible || opened);
   useEffect(() => {
+    if (thumbnail) return;
     const observer = new IntersectionObserver((entries) =>
       setVisible(entries.some((entry) => entry.isIntersecting)),
     );
     if (root.current) observer.observe(root.current);
     return () => observer.disconnect();
-  }, []);
+  }, [thumbnail]);
   useEffect(() => {
     if (!shouldLoad) {
       setUrl(null);
@@ -181,6 +184,19 @@ export function MessageAttachment({
     }
   };
 
+  const previewFeedback =
+    error || loading ? (
+      <div
+        role={error ? "alert" : undefined}
+        className="flex items-center gap-2 px-3 pb-3 text-sm text-fg-muted"
+      >
+        {error ? <span className="text-danger">{error}</span> : null}
+        <Button size="sm" onClick={() => setAttempt((value) => value + 1)}>
+          Retry preview
+        </Button>
+      </div>
+    ) : null;
+
   return (
     <div
       ref={root}
@@ -189,16 +205,19 @@ export function MessageAttachment({
       {image ? (
         <button
           type="button"
-          disabled={!url}
+          disabled={loading || error !== null}
           aria-label={`View ${attachment.name}`}
           onClick={() => setOpened(true)}
-          className="block w-full overflow-hidden bg-black/10"
+          className={
+            thumbnail
+              ? "block w-full max-h-[200px] overflow-hidden bg-black/10"
+              : "block w-full max-h-[280px] overflow-hidden bg-black/10"
+          }
           style={{
             aspectRatio: `${attachment.width}/${attachment.height}`,
-            maxHeight: 280,
           }}
         >
-          {url ? (
+          {url && !error && !loading ? (
             <img
               src={url}
               alt={attachment.name}
@@ -232,14 +251,7 @@ export function MessageAttachment({
           Download
         </Button>
       </div>
-      {error ? (
-        <div role="alert" className="px-3 pb-3 text-sm text-danger">
-          {error}
-          <Button size="sm" onClick={() => setAttempt((value) => value + 1)}>
-            Retry preview
-          </Button>
-        </div>
-      ) : null}
+      {!opened ? previewFeedback : null}
       {downloadError ? (
         <div role="alert" className="px-3 pb-3 text-sm text-danger">
           {downloadError}
@@ -263,11 +275,14 @@ export function MessageAttachment({
           </Button>
         }
       >
-        {url ? (
+        {loading ? <Spinner label="Loading image" /> : null}
+        {previewFeedback}
+        {url && !error && !loading ? (
           <img
             src={url}
             alt={attachment.name}
             className="max-h-[65vh] w-full object-contain"
+            onError={() => setError("The image could not be displayed.")}
           />
         ) : null}
       </Modal>

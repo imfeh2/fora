@@ -8,6 +8,7 @@ import {
   Field,
   IconButton,
   identiconFor,
+  Select,
   Textarea,
 } from "@/components/ui/index";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
@@ -196,6 +197,20 @@ describe("Textarea auto grow", () => {
     expect(renderToStaticMarkup(<Textarea aria-label="Notes" />)).toMatch(
       /<textarea[^>]*aria-label="Notes"/,
     );
+  });
+});
+
+describe("Select", () => {
+  it("preserves the accessible name, options and selected value", () => {
+    const html = renderToStaticMarkup(
+      <Select aria-label="Read Turn" defaultValue="3">
+        <option value="latest">Latest</option>
+        <option value="3">Turn 3</option>
+      </Select>,
+    );
+    expect(html).toContain('aria-label="Read Turn"');
+    expect(html).toContain('<option value="latest">Latest</option>');
+    expect(html).toMatch(/<option value="3" selected="">Turn 3<\/option>/);
   });
 });
 

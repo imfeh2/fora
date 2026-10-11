@@ -10,7 +10,11 @@ import {
   vi,
 } from "vitest";
 import { Composer } from "@/features/discussions/composer";
-import { type Draft, useDraft } from "@/features/discussions/draft";
+import {
+  type Draft,
+  type SendDraft,
+  useDraft,
+} from "@/features/discussions/draft";
 import {
   draftDatabase,
   OwnedDraftStore,
@@ -107,7 +111,11 @@ async function seed(id: number, extra: Partial<Draft> = {}) {
   return previous;
 }
 
-async function mount(id: number) {
+async function mount(
+  id: number,
+  disabled = false,
+  onSend: SendDraft = async () => true,
+) {
   await act(async () => {
     render(
       <Composer
@@ -115,8 +123,9 @@ async function mount(id: number) {
         members={[]}
         memberIds={new Set<number>()}
         busy={false}
+        disabled={disabled}
         placeholder="Message"
-        onSend={async () => true}
+        onSend={onSend}
         onHeightChange={() => {}}
         onOpenVoiceSettings={() => {}}
       />,
@@ -130,6 +139,55 @@ function input() {
     name: "Message",
   }) as HTMLTextAreaElement;
 }
+
+it("retains HTTP recovery and result checks while read availability blocks every send entry", async () => {
+  const previous = await seed(508, {
+    pending: {
+      id: "saved-http-send",
+      body: "Original pending message",
+      bodyRevision: 3,
+      files: [],
+      phase: "sending",
+    },
+  });
+  const status = vi.spyOn(backend, "sendStatus").mockResolvedValue({
+    state: "unknown",
+    message: null,
+  });
+  const send = vi.fn(async () => true);
+  await mount(508, true, send);
+  expect(status).not.toHaveBeenCalled();
+  await act(async () =>
+    screen.getByRole("button", { name: "Recover saved draft" }).click(),
+  );
+  const retry = (await screen.findByRole("button", {
+    name: "Retry send",
+  })) as HTMLButtonElement;
+  const hook = renderHook(() => useDraft(508));
+  await waitFor(() => expect(hook.result.current.controller).not.toBeNull());
+  const controller = hook.result.current.controller;
+  if (!controller) throw new Error("The draft has not loaded");
+  const attempt = vi.spyOn(controller, "send");
+  expect(input().value).toBe(previous.body);
+  expect(input().disabled).toBe(false);
+  expect(retry.disabled).toBe(true);
+  await act(async () => {
+    fireEvent.click(retry);
+    for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }])
+      fireEvent.keyDown(input(), { key: "Enter", ...modifiers });
+  });
+  expect(attempt).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+  expect(controller.snapshot().draft.pending?.id).toBe("saved-http-send");
+  const lookup = screen.getByRole("button", {
+    name: "Check result",
+  }) as HTMLButtonElement;
+  expect(lookup.disabled).toBe(false);
+  await act(async () => fireEvent.click(lookup));
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
+  expect(status).toHaveBeenLastCalledWith(508, "saved-http-send");
+  expect(controller.snapshot().draft.pending?.id).toBe("saved-http-send");
+});
 
 it("offers an explicit saved draft action without Web Locks or closing events", async () => {
   const previous = await seed(501);

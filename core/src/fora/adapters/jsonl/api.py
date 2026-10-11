@@ -19,6 +19,7 @@ from fora.adapters.voice.config import VoiceConfig
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import idle_streak
+from fora.ports.agent import HistoryWindowFilter
 from fora.runtime.scheduler import Scheduler
 from fora.runtime_info import RuntimeInfo
 from fora.tools import AgentTools
@@ -68,6 +69,10 @@ def _history_run_payload(run: Any) -> dict[str, Any]:
         "request_count": run.request_count,
         "last_saved_at": run.last_saved_at,
         "legacy": run.request_count == 0,
+        "reminded": [
+            {"discussion_id": discussion_id, "message_id": message_id}
+            for discussion_id, message_id in run.reminded
+        ],
     }
 
 
@@ -532,6 +537,30 @@ class Api:
                 str(params["path"]), str(params["destination"])
             )
 
+        def agent_history_windows(params: dict[str, Any]) -> Any:
+            agent_id = _required_integer(params, "agent_id")
+            self._human().authorize_agent_history(agent_id)
+            before = _integer_param(params, "before", maximum=2**63 - 1)
+            limit = _integer_param(params, "limit", default=30, maximum=30)
+            assert limit is not None
+            if limit == 0:
+                raise DomainError("invalid_params", "history limits must be positive")
+            with self._reading():
+                self._human().authorize_agent_history(agent_id)
+                page = self._scheduler.history.history_windows(
+                    agent_id, before=before, limit=limit + 1
+                )
+            windows = page.windows[:limit]
+            has_before = len(page.windows) > limit
+            return {
+                "agent_id": agent_id,
+                "current_window_number": page.current_window_number,
+                "windows": [asdict(window) for window in windows],
+                "has_unassigned": page.has_unassigned,
+                "has_before": has_before,
+                "next_before": windows[-1].number if has_before else None,
+            }
+
         def agent_history(params: dict[str, Any]) -> Any:
             agent_id = _required_integer(params, "agent_id")
             self._human().authorize_agent_history(agent_id, include_deleted=True)
@@ -545,22 +574,48 @@ class Api:
             if limit == 0 or windows_limit == 0:
                 raise DomainError("invalid_params", "history limits must be positive")
             before = _integer_param(params, "before", maximum=2**63 - 1)
+            window_number: int | None | HistoryWindowFilter = HistoryWindowFilter.ALL
+            if "window_number" in params:
+                window_number = _integer_param(
+                    params, "window_number", maximum=2**63 - 1
+                )
+                if window_number == 0:
+                    raise DomainError(
+                        "invalid_params",
+                        "window_number must be a positive integer or null",
+                    )
+            filtered = window_number is not HistoryWindowFilter.ALL
             with self._reading():
                 self._human().authorize_agent_history(agent_id)
-                runs = self._scheduler.history.history_runs(
-                    agent_id, before=before, limit=limit
+                run_page = (
+                    self._scheduler.history.history_runs(
+                        agent_id,
+                        before=before,
+                        limit=limit + 1,
+                        window_number=window_number,
+                    )
+                    if filtered
+                    else self._scheduler.history.history_runs(
+                        agent_id, before=before, limit=limit
+                    )
                 )
                 window_page = self._scheduler.history.window_events(
-                    agent_id, after=windows_after, limit=windows_limit + 1
+                    agent_id,
+                    after=windows_after,
+                    limit=windows_limit + 1,
+                    include_context=False,
                 )
             windows = window_page[:windows_limit]
             has_more_windows = len(window_page) > windows_limit
+            runs = run_page[:limit]
+            has_before = len(run_page) > limit if filtered else len(runs) == limit
             return {
                 "agent_id": agent_id,
+                **({"window_number": window_number} if filtered else {}),
                 "runs": [_history_run_payload(run) for run in runs],
                 "windows": [_window_event_payload(event) for event in windows],
-                "has_before": len(runs) == limit,
-                "next_before": runs[-1].sequence if len(runs) == limit else None,
+                "has_before": has_before,
+                "next_before": runs[-1].sequence if has_before else None,
                 "windows_has_more": has_more_windows,
                 "windows_next_after": (
                     windows[-1].number if has_more_windows and windows else None
@@ -645,7 +700,10 @@ class Api:
             requests = request_page[:request_limit]
             requests_has_more = len(request_page) > request_limit
             window_page = self._scheduler.history.window_events(
-                agent_id, after=windows_after, limit=windows_limit + 1
+                agent_id,
+                after=windows_after,
+                limit=windows_limit + 1,
+                include_context=False,
             )
             windows = window_page[:windows_limit]
             windows_has_more = len(window_page) > windows_limit
@@ -931,6 +989,10 @@ class Api:
                         "usage": run.usage_json,
                         "error": run.error,
                         "effects": produced.get(run.sequence, []),
+                        "reminded": [
+                            {"discussion_id": discussion_id, "message_id": message_id}
+                            for discussion_id, message_id in run.reminded
+                        ],
                     }
                     for run in runs
                 ],
@@ -1117,6 +1179,7 @@ class Api:
         )
         register("agent.detail", agent_detail, scope=detail_scope)
         register("agent.history", agent_history, scope=agent_query)
+        register("agent.history.windows", agent_history_windows, scope=agent_query)
         register("agent.history.read", agent_history_read, scope=agent_query)
         register("agent.history.text", agent_history_text, scope=agent_query)
         register("agent.history.image", agent_history_image, scope=agent_query)

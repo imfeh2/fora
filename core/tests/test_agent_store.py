@@ -25,6 +25,164 @@ def agent_store(tmp_path: Path) -> SqliteAgentStore:
     base.close()
 
 
+def test_history_window_directory_preserves_empty_windows_and_end_reasons(
+    agent_store, monkeypatch
+) -> None:
+    empty = agent_store.history_windows(AGENT)
+    assert empty.current_window_number == 1
+    assert len(empty.windows) == 1
+    assert empty.windows[0].started_at is None
+    assert empty.windows[0].is_current
+    assert not empty.has_unassigned
+    monkeypatch.setattr(agent_store, "_now", lambda: "2026-10-11T06:00:00Z")
+    first_run = agent_store.start_run(AGENT)
+    monkeypatch.setattr(agent_store, "_now", lambda: "2026-10-11T07:00:00Z")
+    prepared = agent_store.reset_window(AGENT, "prepared")
+    monkeypatch.setattr(agent_store, "_now", lambda: "2026-10-11T08:00:00Z")
+    overflow = agent_store.reset_window(AGENT, "overflow", "中文上下文")
+    page = agent_store.history_windows(AGENT)
+    assert [window.number for window in page.windows] == [3, 2, 1]
+    current, middle, initial = page.windows
+    assert current.is_current
+    assert current.start_reason == "overflow"
+    assert current.end_reason is None
+    assert current.ended_at is None
+    assert current.since_sequence == middle.since_sequence == 2
+    assert middle.started_at == prepared.reset_at
+    assert middle.start_reason == "prepared"
+    assert middle.ended_at == overflow.reset_at
+    assert middle.end_reason == "overflow"
+    assert initial.started_at == first_run.started_at
+    assert initial.ended_at == prepared.reset_at
+    assert initial.end_reason == "prepared"
+    assert not initial.is_current
+
+
+def test_history_window_directory_retains_initial_context_without_activity(
+    agent_store,
+) -> None:
+    agent_store.reset_window(AGENT, "prepared")
+    agent_store.reset_window(AGENT, "overflow")
+    windows = agent_store.history_windows(AGENT).windows
+    assert [window.number for window in windows] == [3, 2, 1]
+    assert windows[0].since_sequence == windows[1].since_sequence == 1
+    assert windows[-1].started_at is None
+    assert windows[-1].end_reason == "prepared"
+    assert agent_store.history_runs(AGENT, window_number=1) == ()
+
+
+def test_history_window_directory_and_filtered_runs_use_only_small_fields(
+    agent_store,
+) -> None:
+    for number in range(1, 36):
+        if number > 1:
+            agent_store.reset_window(AGENT, "prepared")
+        run = agent_store.start_run(AGENT)
+        agent_store.finish_run(
+            AGENT,
+            run.sequence,
+            status="completed",
+            messages_json='["' + "x" * 65536 + '"]',
+        )
+    with agent_store.transaction():
+        agent_store._db.execute(
+            "DELETE FROM agent_window_events WHERE agent_id = ? AND number = 4",
+            (AGENT,),
+        )
+        agent_store._db.execute(
+            "UPDATE agent_runs SET window_number = NULL WHERE agent_id = ? AND sequence = 2",
+            (AGENT,),
+        )
+    database = agent_store._db
+    with database.read():
+        database.execute("SELECT 1")
+    assert database._readers is not None
+    connections = [
+        database._connection,
+        *(reader._connection for reader in database._readers.connections),
+    ]
+    statements = []
+
+    def authorize(action, table, column, database, source):
+        if action == sqlite3.SQLITE_READ and column in (
+            "messages_json",
+            "overflow_context",
+        ):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    for connection in connections:
+        connection.set_authorizer(authorize)
+        connection.set_trace_callback(statements.append)
+    try:
+        page = agent_store.history_windows(AGENT, limit=30)
+        assert [window.number for window in page.windows] == list(range(35, 5, -1))
+        older = agent_store.history_windows(AGENT, before=6)
+        assert [window.number for window in older.windows] == [5, 4, 3, 2, 1]
+        migrated = older.windows[1]
+        assert migrated.number == 4
+        assert migrated.since_sequence == 4
+        assert migrated.start_reason is None
+        assert migrated.started_at is not None
+        assert page.has_unassigned and older.has_unassigned
+        assert [
+            run.sequence for run in agent_store.history_runs(AGENT, window_number=4)
+        ] == [4]
+        assert [
+            run.sequence for run in agent_store.history_runs(AGENT, window_number=None)
+        ] == [2]
+        assert agent_store.window_events(AGENT, include_context=False)
+
+        assert len(agent_store.history_runs(AGENT, limit=50)) == 35
+        assert agent_store.history_runs(AGENT, before=4, window_number=4) == ()
+    finally:
+        for connection in connections:
+            connection.set_authorizer(None)
+            connection.set_trace_callback(None)
+    queries = [
+        sql
+        for sql in statements
+        if sql.startswith(("WITH numbers", "SELECT r.sequence"))
+    ]
+    assert queries
+    for sql in queries:
+        plan = database._connection.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+        assert any("COVERING INDEX agent_runs_summary" in row[3] for row in plan)
+
+
+def test_history_preserves_reminder_identities_after_reopening(tmp_path: Path) -> None:
+    path = tmp_path / "reminded.sqlite3"
+    base = SqliteStore(path)
+    history = SqliteAgentStore(base._db)
+    run = history.start_run(AGENT, reminded=[(9, 31), (12, 3)])
+    empty = history.start_run(AGENT)
+    base.close()
+    reopened = SqliteStore(path)
+    saved = SqliteAgentStore(reopened._db)
+    remembered_run = saved.history_run(AGENT, run.sequence)
+    empty_run = saved.history_run(AGENT, empty.sequence)
+    assert remembered_run is not None
+    assert empty_run is not None
+    assert remembered_run.reminded == ((9, 31), (12, 3))
+    assert empty_run.reminded == ()
+    assert saved.history_runs(AGENT)[1].reminded == ((9, 31), (12, 3))
+    reopened.close()
+
+
+@pytest.mark.parametrize("payload", ["{}", "[[1]]", "[[true, 1]]", "[[1, 0]]"])
+def test_history_rejects_invalid_saved_reminder_identities(
+    agent_store, payload
+) -> None:
+    run = agent_store.start_run(AGENT)
+    with agent_store._db.transaction():
+        agent_store._db.execute(
+            "UPDATE agent_runs SET reminded_json = ? WHERE agent_id = ? AND sequence = ?",
+            (payload, AGENT, run.sequence),
+        )
+    with pytest.raises(ValueError, match="Invalid saved reminder identities"):
+        agent_store.history_run(AGENT, run.sequence)
+
+
 def test_history_reads_unicode_slices_without_loading_or_changing_the_run(
     agent_store: SqliteAgentStore,
 ) -> None:

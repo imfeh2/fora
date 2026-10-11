@@ -341,7 +341,10 @@ export type PageRequest = {
 
 export type TurnEffect = { ordinal: number; tool: string; summary: string };
 
+export type HistoryReminder = { discussion_id: number; message_id: number };
+
 export type AgentRun = {
+  reminded?: HistoryReminder[];
   sequence: number;
   run_id?: string | null;
   status: string;
@@ -407,6 +410,7 @@ export type HistoryText = {
 };
 
 export type AgentHistoryRun = {
+  reminded?: HistoryReminder[];
   sequence: number;
   run_id: string;
   status: string;
@@ -449,8 +453,28 @@ export type AgentWindowEvent = {
   reason: string | null;
 };
 
+export type AgentHistoryWindow = {
+  number: number;
+  since_sequence: number | null;
+  started_at: string | null;
+  start_reason: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  is_current: boolean;
+};
+
+export type AgentHistoryWindows = {
+  agent_id: number;
+  current_window_number: number;
+  windows: AgentHistoryWindow[];
+  has_unassigned: boolean;
+  has_before: boolean;
+  next_before: number | null;
+};
+
 export type AgentHistoryPage = {
   agent_id: number;
+  window_number?: number | null;
   runs: AgentHistoryRun[];
   windows: AgentWindowEvent[];
   has_before: boolean;
@@ -591,6 +615,7 @@ const READ_METHODS = new Set([
   "usage.query",
   "usage.read",
   "agent.history",
+  "agent.history.windows",
   "agent.history.read",
   "agent.history.text",
   "agent.history.image",
@@ -1386,12 +1411,21 @@ export class Backend {
     return this.call<AgentDetail>("agent.detail", { agent_id });
   }
 
+  agentHistoryWindows(agent_id: number, before?: number, limit = 30) {
+    return this.call<AgentHistoryWindows>("agent.history.windows", {
+      agent_id,
+      before,
+      limit,
+    });
+  }
+
   agentHistory(
     agent_id: number,
     before?: number,
     limit = 30,
     windows_after?: number,
     windows_limit = 30,
+    options?: { window_number: number | null },
   ) {
     return this.call<AgentHistoryPage>("agent.history", {
       agent_id,
@@ -1399,6 +1433,7 @@ export class Backend {
       limit,
       windows_after,
       windows_limit,
+      ...options,
     });
   }
 

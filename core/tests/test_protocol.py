@@ -1342,6 +1342,139 @@ def test_complete_detail_and_history_metadata_have_bounded_read_volume(
     assert deps.history.run_messages(agent_id, 64) == payload
 
 
+def test_history_window_directory_and_per_window_pagination(server) -> None:
+    dispatcher, output, deps = server
+    agent_id = call(dispatcher, output, "organization.create_agent", name="窗口历史")[
+        "result"
+    ]["id"]
+    empty = call(dispatcher, output, "agent.history.windows", agent_id=agent_id)[
+        "result"
+    ]
+    assert empty["current_window_number"] == 1
+    assert empty["windows"][0]["is_current"]
+    assert empty["windows"][0]["started_at"] is None
+    assert not empty["has_before"]
+    for _ in range(32):
+        run = deps.history.start_run(agent_id)
+        deps.history.finish_run(
+            agent_id, run.sequence, status="completed", messages_json="[]"
+        )
+    deps.history.reset_window(agent_id, "prepared")
+    run = deps.history.start_run(agent_id)
+    deps.history.finish_run(
+        agent_id, run.sequence, status="completed", messages_json="[]"
+    )
+    with deps.history.transaction():
+        deps.store._db.execute(
+            "UPDATE agent_runs SET window_number = NULL WHERE agent_id = ? AND sequence = 33",
+            (agent_id,),
+        )
+    for _ in range(34):
+        deps.history.reset_window(agent_id, "overflow")
+    directory = call(dispatcher, output, "agent.history.windows", agent_id=agent_id)[
+        "result"
+    ]
+    assert directory["current_window_number"] == 36
+    assert [item["number"] for item in directory["windows"]] == list(range(36, 6, -1))
+    assert directory["has_before"]
+    assert directory["next_before"] == 7
+    assert directory["has_unassigned"]
+    older = call(
+        dispatcher, output, "agent.history.windows", agent_id=agent_id, before=7
+    )["result"]
+    assert [item["number"] for item in older["windows"]] == [6, 5, 4, 3, 2, 1]
+    assert not older["has_before"]
+    assert older["windows"][-1]["end_reason"] == "prepared"
+    current = call(
+        dispatcher, output, "agent.history", agent_id=agent_id, window_number=36
+    )["result"]
+    assert current["window_number"] == 36
+    assert current["runs"] == []
+    assert not current["has_before"]
+    first = call(
+        dispatcher, output, "agent.history", agent_id=agent_id, window_number=1
+    )["result"]
+    assert [item["sequence"] for item in first["runs"]] == list(range(32, 2, -1))
+    assert first["has_before"] and first["next_before"] == 3
+    remaining = call(
+        dispatcher,
+        output,
+        "agent.history",
+        agent_id=agent_id,
+        window_number=1,
+        before=3,
+    )["result"]
+    assert [item["sequence"] for item in remaining["runs"]] == [2, 1]
+    assert not remaining["has_before"]
+    unassigned = call(
+        dispatcher, output, "agent.history", agent_id=agent_id, window_number=None
+    )["result"]
+    assert unassigned["window_number"] is None
+    assert [item["sequence"] for item in unassigned["runs"]] == [33]
+    assert not unassigned["has_before"]
+    mixed = call(dispatcher, output, "agent.history", agent_id=agent_id)["result"]
+    assert "window_number" not in mixed
+    assert mixed["runs"][0]["sequence"] == 33
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, "1", 1.5, [], {}])
+def test_history_rejects_invalid_window_filters(server, value) -> None:
+    dispatcher, output, _ = server
+    agent_id = call(dispatcher, output, "organization.create_agent", name="筛选")[
+        "result"
+    ]["id"]
+    response = call(
+        dispatcher, output, "agent.history", agent_id=agent_id, window_number=value
+    )
+    assert response["error"]["code"] == "invalid_params"
+
+
+def test_history_reminder_payload_and_source_reads_are_read_only(server) -> None:
+    dispatcher, output, deps = server
+    agent = call(dispatcher, output, "organization.create_agent", name="Main")["result"]
+    room = call(
+        dispatcher,
+        output,
+        "discussion.create",
+        topic="Trigger",
+        member_ids=[agent["id"]],
+    )["result"]
+    message = call(
+        dispatcher,
+        output,
+        "discussion.send",
+        discussion_id=room["id"],
+        body="@You input",
+    )["result"]
+    identity = {"discussion_id": room["id"], "message_id": message["id"]}
+    run = deps.history.start_run(agent["id"], reminded=[(room["id"], message["id"])])
+    deps.history.finish_run(
+        agent["id"], run.sequence, status="completed", messages_json="[]"
+    )
+    for method in ("agent.history", "agent.detail", "agent.history.read"):
+        result = call(
+            dispatcher, output, method, agent_id=agent["id"], sequence=run.sequence
+        )["result"]
+        saved = result["run"] if method.endswith("read") else result["runs"][0]
+        assert saved["reminded"] == [identity]
+    before = deps.store.watermark(room["id"], HUMAN_ID)
+    pending = deps.store.pending(HUMAN_ID)
+    page = call(
+        dispatcher,
+        output,
+        "discussion.page",
+        discussion_id=room["id"],
+        after=message["id"] - 1,
+        before=message["id"] + 1,
+        limit=1,
+        metadata=True,
+    )["result"]
+    assert page["messages"][0]["body"] == "@You input"
+    assert page["metadata"]["topic"] == "Trigger"
+    assert deps.store.watermark(room["id"], HUMAN_ID) == before
+    assert deps.store.pending(HUMAN_ID) == pending
+
+
 def test_agent_detail_reports_runs(server) -> None:
     dispatcher, output, deps = server
     agent = call(dispatcher, output, "organization.create_agent", name="Main")["result"]
@@ -1506,8 +1639,11 @@ def test_agent_history_does_not_mark_unsaved_running_data_as_missing(server) -> 
     )
 
 
+@pytest.mark.parametrize(
+    "method", ["agent.history", "agent.history.windows", "agent.history.read"]
+)
 def test_agent_history_requires_human_history_permission_before_body_reads(
-    server,
+    server, method
 ) -> None:
     dispatcher, output, deps = server
     agent_id = call(dispatcher, output, "organization.create_agent", name="Main")[
@@ -1544,7 +1680,7 @@ def test_agent_history_requires_human_history_permission_before_body_reads(
         response = call(
             dispatcher,
             output,
-            "agent.history.read",
+            method,
             agent_id=agent_id,
             sequence=run.sequence,
         )
@@ -2940,6 +3076,7 @@ def test_all_registered_operations_declare_their_business_resources(server):
         "uploads": {"upload.create", "upload.status", "upload.cancel"},
         "history": {
             "agent.history",
+            "agent.history.windows",
             "agent.history.read",
             "agent.history.text",
             "agent.history.image",

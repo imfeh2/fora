@@ -207,6 +207,10 @@ const organization: Organization = {
   ],
   humanId: 1,
   discussions: [],
+  connectionError: null,
+  organizationError: null,
+  discussionsError: null,
+  retry: async () => {},
   refresh: async () => {},
 };
 

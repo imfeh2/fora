@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { LoadError } from "@/components/ui/access-error";
 import {
   Button,
   Chip,
@@ -34,32 +35,57 @@ export function LangfusePanel() {
   const first = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<Record<string, unknown> | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
   const [publicKey, setPublicKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   useReportSettingsSave("langfuse", saving);
 
+  const editing = useRef(values);
+  editing.current = values;
+  const saved = useRef(values);
+  const generation = useRef(0);
+  const savingRef = useRef(false);
   const load = useCallback(async () => {
+    if (savingRef.current) return;
+    const current = ++generation.current;
     setBusy(true);
     setLoadFailed(false);
+    setLoadError(null);
     try {
-      setValues(await backend.settings("observability"));
+      const updated = await backend.settings("observability");
+      if (current !== generation.current) return;
+      if (editing.current === saved.current) {
+        saved.current = updated;
+        setValues(updated);
+      }
       setLoadFailed(false);
     } catch (failure) {
-      setLoadFailed(true);
-      reportLoadFailure("settings-langfuse", failure, () => void load());
+      if (current === generation.current) {
+        setLoadFailed(true);
+        setLoadError(reportLoadFailure(failure));
+      }
     } finally {
-      setBusy(false);
+      if (current === generation.current) setBusy(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load();
+    });
+    return () => {
+      generation.current++;
+      off();
+    };
   }, [load]);
 
   const save = async () => {
     if (!values || busy) return;
+    generation.current++;
+    savingRef.current = true;
     setBusy(true);
     setSaving(true);
     try {
@@ -67,7 +93,10 @@ export function LangfusePanel() {
         "observability",
         langfuseUpdate(values, publicKey, secretKey),
       );
+      saved.current = updated;
       setValues(updated);
+      setLoadFailed(false);
+      setLoadError(null);
       setPublicKey("");
       setSecretKey("");
     } catch (failure) {
@@ -81,6 +110,8 @@ export function LangfusePanel() {
             failure instanceof Error ? failure.message : String(failure),
         });
     } finally {
+      generation.current++;
+      savingRef.current = false;
       setBusy(false);
       setSaving(false);
       requestAnimationFrame(() => {
@@ -89,9 +120,13 @@ export function LangfusePanel() {
     }
   };
 
+  const recovery =
+    loadError && !(loadError.transport && backend.disconnected) ? (
+      <LoadError error={loadError} retry={() => void load()} />
+    ) : null;
   if (values === null)
     return loadFailed ? (
-      <p role="alert">Could not load Langfuse settings.</p>
+      recovery
     ) : (
       <div className="max-w-[560px]">
         <LoadingSkeleton label="Loading Langfuse settings">
@@ -112,6 +147,7 @@ export function LangfusePanel() {
         void save();
       }}
     >
+      {recovery}
       <fieldset
         className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
         disabled={busy || !values}

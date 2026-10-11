@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Protocol
 
 
@@ -46,6 +47,28 @@ class WindowEvent:
     overflow_context: str | None = None
 
 
+class HistoryWindowFilter(Enum):
+    ALL = "all"
+
+
+@dataclass(frozen=True)
+class AgentHistoryWindow:
+    number: int
+    since_sequence: int | None
+    started_at: str | None
+    start_reason: str | None
+    ended_at: str | None
+    end_reason: str | None
+    is_current: bool
+
+
+@dataclass(frozen=True)
+class AgentHistoryWindows:
+    current_window_number: int
+    windows: tuple[AgentHistoryWindow, ...]
+    has_unassigned: bool
+
+
 @dataclass(frozen=True)
 class AgentHistoryRun:
     sequence: int
@@ -60,6 +83,7 @@ class AgentHistoryRun:
     window_reason: str | None
     request_count: int
     last_saved_at: str | None
+    reminded: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -208,6 +232,7 @@ class HistoryStore(Protocol):
         *,
         after: int | None = None,
         limit: int = 30,
+        include_context: bool = True,
     ) -> tuple[WindowEvent, ...]: ...
 
     def start_run(
@@ -297,12 +322,21 @@ class HistoryStore(Protocol):
 
     def history_run(self, agent_id: int, sequence: int) -> AgentHistoryRun | None: ...
 
+    def history_windows(
+        self,
+        agent_id: int,
+        *,
+        before: int | None = None,
+        limit: int = 30,
+    ) -> AgentHistoryWindows: ...
+
     def history_runs(
         self,
         agent_id: int,
         *,
         before: int | None = None,
         limit: int = 30,
+        window_number: int | None | HistoryWindowFilter = HistoryWindowFilter.ALL,
     ) -> tuple[AgentHistoryRun, ...]: ...
 
     def model_request_summaries(

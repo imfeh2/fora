@@ -21,7 +21,9 @@ vi.mock("idb", () => ({ openDB: async () => storage }));
 let App: typeof import("@/App").default;
 let backend: typeof import("@/lib/backend").backend;
 let BackendError: typeof import("@/lib/backend").BackendError;
-let Controller: typeof DraftController;
+let drafts: typeof import("@/features/discussions/draft");
+let useDraft: typeof drafts.useDraft;
+let controller: DraftController | null;
 let testing: typeof import("@testing-library/react");
 let clearToasts: typeof import("@/components/ui/toast").clearToasts;
 let closeDom: () => void;
@@ -140,9 +142,8 @@ beforeAll(async () => {
   });
   testing = await import("@testing-library/react");
   ({ backend, BackendError } = await import("@/lib/backend"));
-  ({ DraftController: Controller } = await import(
-    "@/features/discussions/draft"
-  ));
+  drafts = await import("@/features/discussions/draft");
+  useDraft = drafts.useDraft;
   ({ clearToasts } = await import("@/components/ui/toast"));
   ({ default: App } = await import("@/App"));
 }, 30000);
@@ -167,6 +168,12 @@ beforeEach(() => {
   storage.getAll.mockReset().mockResolvedValue([]);
   storage.put.mockReset().mockResolvedValue(undefined);
   storage.close.mockReset();
+  controller = null;
+  vi.spyOn(drafts, "useDraft").mockImplementation((id) => {
+    const result = useDraft(id);
+    controller = result.controller;
+    return result;
+  });
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
   vi.spyOn(backend, "connect").mockResolvedValue();
   vi.spyOn(backend, "disconnected", "get").mockImplementation(
@@ -213,6 +220,11 @@ function input(view: Awaited<ReturnType<typeof openThread>>) {
   return view.getByRole("combobox", { name: "Message" }) as HTMLTextAreaElement;
 }
 
+function observeSend() {
+  if (!controller) throw new Error("DraftController is unavailable");
+  return vi.spyOn(controller, "send");
+}
+
 async function emit(event: BackendEvent) {
   await testing.act(async () => {
     for (const listener of events) listener(event);
@@ -247,10 +259,10 @@ it("keeps the waiting Composer editable while every send action is disabled", as
       file: new File(["content"], "saved.txt", { type: "text/plain" }),
     },
   ];
-  const send = vi.spyOn(Controller.prototype, "send");
   const createUpload = vi.spyOn(backend, "createUpload");
   const sendVisible = vi.spyOn(backend, "sendVisible");
   const view = await openThread();
+  const send = observeSend();
   const field = input(view);
   expect(field.disabled).toBe(false);
   expect(view.getByText("saved.txt")).toBeTruthy();
@@ -325,7 +337,6 @@ it("blocks pending retries without changing their identity and keeps cancellatio
     files: [],
     phase: "sending",
   };
-  const send = vi.spyOn(Controller.prototype, "send");
   vi.spyOn(backend, "sendStatus").mockResolvedValue({
     state: "unknown",
     message: null,
@@ -335,6 +346,7 @@ it("blocks pending retries without changing their identity and keeps cancellatio
     message: null,
   });
   const view = await openThread();
+  const send = observeSend();
   const field = input(view);
   const retry = view.getByRole("button", {
     name: "Retry send",
@@ -368,7 +380,7 @@ it("keeps draft and focus through disconnect and restoration while sends stay id
   field.focus();
   testing.fireEvent.change(field, { target: { value: "Connection draft" } });
   field.setSelectionRange(3, 8);
-  const send = vi.spyOn(Controller.prototype, "send");
+  const send = observeSend();
   disconnected = true;
   await emit({
     type: "connection.closed",
@@ -394,8 +406,8 @@ it("keeps draft and focus through disconnect and restoration while sends stay id
 });
 
 it("restricts sending when the Human is absent from the loaded Discussion", async () => {
-  const send = vi.spyOn(Controller.prototype, "send");
   const view = await openThread();
+  const send = observeSend();
   await testing.act(async () => read.resolve(page([members[1]])));
   const field = input(view);
   for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }])
@@ -423,8 +435,8 @@ it("preserves the saved pending identity until a permitted Retry sends once", as
     message: null,
   });
   vi.spyOn(backend, "sendVisible").mockResolvedValue({ id: 1 });
-  const send = vi.spyOn(Controller.prototype, "send");
   const view = await openThread();
+  const send = observeSend();
   const retry = view.getByRole("button", {
     name: "Retry send",
   }) as HTMLButtonElement;

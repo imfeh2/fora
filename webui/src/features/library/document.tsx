@@ -8,6 +8,7 @@ import {
   PageHeader,
   Toolbar,
 } from "@/components/layout/shell";
+import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Button,
@@ -76,6 +77,7 @@ export function DocumentPage({ path }: { path: string }) {
     "not_found" | "not_readable" | null
   >(null);
   const [failed, setFailed] = useState(false);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -88,6 +90,7 @@ export function DocumentPage({ path }: { path: string }) {
   const load = useCallback(
     async (preserve = false) => {
       const revision = ++loadRevision.current;
+      setLoadError(null);
       if (editing.current.loaded === null) {
         setFailed(false);
         setUnavailable(null);
@@ -117,7 +120,6 @@ export function DocumentPage({ path }: { path: string }) {
         }
         setUnavailable(null);
         setFailed(false);
-        dismissToast(`document-load:${path}`);
       } catch (failure) {
         if (revision !== loadRevision.current) return;
         setFailed(true);
@@ -127,11 +129,7 @@ export function DocumentPage({ path }: { path: string }) {
         ) {
           setUnavailable(failure.code);
         } else {
-          reportLoadFailure(
-            `document-load:${path}`,
-            failure,
-            () => void load(preserve),
-          );
+          setLoadError(reportLoadFailure(failure));
         }
       }
     },
@@ -146,7 +144,6 @@ export function DocumentPage({ path }: { path: string }) {
     return () => {
       loadRevision.current += 1;
       off();
-      dismissToast(`document-load:${path}`);
     };
   }, [load, path]);
 
@@ -252,10 +249,11 @@ export function DocumentPage({ path }: { path: string }) {
             </p>
           ) : null}
           {unavailable ? <DocumentUnavailable code={unavailable} /> : null}
+          {loadError && !(loadError.transport && backend.disconnected) ? (
+            <LoadError error={loadError} retry={() => void load(true)} />
+          ) : null}
           {loaded === null ? (
-            failed ? (
-              <p role="alert">Could not load document.</p>
-            ) : (
+            failed ? null : (
               <LoadingSkeleton label="Loading document">
                 {["90%", "75%", "85%", "50%"].map((width) => (
                   <Skeleton key={width} style={{ width }} />

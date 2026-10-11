@@ -496,8 +496,11 @@ it("ignores a late read after unmount and offers Retry after a current read fail
   expect(readToasts()).toHaveLength(0);
   vi.mocked(backend.settings).mockRejectedValueOnce(new Error("read failed"));
   render(<ExecutionPanel />);
-  await waitFor(() => expect(readToasts()).toHaveLength(1));
-  await act(async () => readToasts()[0].action?.onClick());
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("read failed"),
+  );
+  expect(readToasts()).toHaveLength(0);
+  await act(async () => fireEvent.click(button("Retry")));
   expect(button("Edit /work")).toBeTruthy();
 });
 

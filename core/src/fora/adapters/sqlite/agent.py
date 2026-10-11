@@ -30,6 +30,8 @@ from fora.core.parameters import validate_parameters
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, model_error_signature
 from fora.ports.agent import (
     AgentHistoryRun,
+    AgentHistoryWindow,
+    AgentHistoryWindows,
     AgentLifecycle,
     AgentMessagePage,
     AgentModelRequest,
@@ -37,6 +39,7 @@ from fora.ports.agent import (
     AgentRun,
     AgentTextPage,
     HistorySlice,
+    HistoryWindowFilter,
     ModelRequestHandle,
     RunSummary,
     TurnEffect,
@@ -851,6 +854,14 @@ class SqliteAgentStore:
         )
 
     def _history_run(self, row: sqlite3.Row) -> AgentHistoryRun:
+        reminded = json.loads(row["reminded_json"])
+        if not isinstance(reminded, list) or any(
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or any(type(value) is not int or value < 1 for value in pair)
+            for pair in reminded
+        ):
+            raise ValueError("Invalid saved reminder identities")
         return AgentHistoryRun(
             sequence=int(row["sequence"]),
             run_id=str(row["run_id"]),
@@ -866,6 +877,7 @@ class SqliteAgentStore:
             window_reason=row["window_reason"],
             request_count=int(row["request_count"]),
             last_saved_at=row["last_saved_at"],
+            reminded=tuple((pair[0], pair[1]) for pair in reminded),
         )
 
     @reading
@@ -883,7 +895,7 @@ class SqliteAgentStore:
         row = first(
             self._db.execute(
                 "SELECT r.sequence, r.run_id, r.status, r.started_at, r.completed_at,"
-                " r.usage_json, r.error, r.last_saved_at, r.window_number,"
+                " r.usage_json, r.error, r.last_saved_at, r.window_number, r.reminded_json,"
                 " (SELECT reset_at FROM agent_window_events w"
                 "  WHERE w.agent_id = r.agent_id AND w.number = r.window_number"
                 "  LIMIT 1) AS window_reset_at,"
@@ -900,20 +912,109 @@ class SqliteAgentStore:
         return self._history_run(row) if row is not None else None
 
     @reading
+    def history_windows(
+        self,
+        agent_id: int,
+        *,
+        before: int | None = None,
+        limit: int = 30,
+    ) -> AgentHistoryWindows:
+        state = first(
+            self._db.execute(
+                "SELECT number, since_sequence FROM agent_windows WHERE agent_id = ?",
+                (agent_id,),
+            )
+        )
+        current_number = int(state["number"]) if state is not None else 1
+        current_since = int(state["since_sequence"]) if state is not None else 1
+        clause = "" if before is None else " WHERE n.number < ?"
+        parameters: tuple[object, ...] = () if before is None else (before,)
+        rows = self._db.execute(
+            "WITH numbers AS ("
+            " SELECT number FROM agent_window_events WHERE agent_id = ?"
+            " UNION SELECT window_number FROM agent_runs INDEXED BY agent_runs_summary"
+            " WHERE agent_id = ? AND window_number IS NOT NULL"
+            " UNION SELECT ?"
+            " UNION SELECT 1 WHERE EXISTS (SELECT 1 FROM agent_window_events"
+            " WHERE agent_id = ? AND number = 2)"
+            ") SELECT n.number,"
+            " COALESCE(w.since_sequence,"
+            " (SELECT MIN(r.sequence) FROM agent_runs r INDEXED BY agent_runs_summary"
+            " WHERE r.agent_id = ? AND r.window_number = n.number),"
+            " CASE WHEN n.number = ? THEN ? END) AS since_sequence,"
+            " COALESCE(w.reset_at,"
+            " (SELECT r.started_at FROM agent_runs r INDEXED BY agent_runs_summary"
+            " WHERE r.agent_id = ? AND r.window_number = n.number"
+            " ORDER BY r.sequence ASC LIMIT 1)) AS started_at,"
+            " w.reason AS start_reason, following.reset_at AS ended_at,"
+            " following.reason AS end_reason"
+            " FROM numbers n LEFT JOIN agent_window_events w"
+            " ON w.agent_id = ? AND w.number = n.number"
+            " LEFT JOIN agent_window_events following"
+            " ON following.agent_id = ? AND following.number = n.number + 1"
+            f"{clause} ORDER BY n.number DESC LIMIT ?",
+            (
+                agent_id,
+                agent_id,
+                current_number,
+                agent_id,
+                agent_id,
+                current_number,
+                current_since,
+                agent_id,
+                agent_id,
+                agent_id,
+                *parameters,
+                limit,
+            ),
+        )
+        unassigned = first(
+            self._db.execute(
+                "SELECT 1 FROM agent_runs INDEXED BY agent_runs_summary"
+                " WHERE agent_id = ? AND window_number IS NULL LIMIT 1",
+                (agent_id,),
+            )
+        )
+        return AgentHistoryWindows(
+            current_window_number=current_number,
+            windows=tuple(
+                AgentHistoryWindow(
+                    number=int(row["number"]),
+                    since_sequence=row["since_sequence"],
+                    started_at=row["started_at"],
+                    start_reason=row["start_reason"],
+                    ended_at=row["ended_at"],
+                    end_reason=row["end_reason"],
+                    is_current=int(row["number"]) == current_number,
+                )
+                for row in rows
+            ),
+            has_unassigned=unassigned is not None,
+        )
+
+    @reading
     def history_runs(
         self,
         agent_id: int,
         *,
         before: int | None = None,
         limit: int = 30,
+        window_number: int | None | HistoryWindowFilter = HistoryWindowFilter.ALL,
     ) -> tuple[AgentHistoryRun, ...]:
         clause = "" if before is None else " AND r.sequence < ?"
         parameters: tuple[object, ...] = (
             (agent_id,) if before is None else (agent_id, before)
         )
+        if window_number is None:
+            clause += " AND r.window_number IS NULL"
+        elif window_number is not HistoryWindowFilter.ALL:
+            if type(window_number) is not int or window_number < 1:
+                raise ValueError("window_number must be a positive integer or null")
+            clause += " AND r.window_number = ?"
+            parameters += (window_number,)
         rows = self._db.execute(
             "SELECT r.sequence, r.run_id, r.status, r.started_at, r.completed_at,"
-            " r.usage_json, r.error, r.last_saved_at, r.window_number,"
+            " r.usage_json, r.error, r.last_saved_at, r.window_number, r.reminded_json,"
             " (SELECT reset_at FROM agent_window_events w"
             "  WHERE w.agent_id = r.agent_id AND w.number = r.window_number"
             "  LIMIT 1) AS window_reset_at,"
@@ -1148,13 +1249,15 @@ class SqliteAgentStore:
         *,
         after: int | None = None,
         limit: int = 30,
+        include_context: bool = True,
     ) -> tuple[WindowEvent, ...]:
+        context = "overflow_context" if include_context else "NULL AS overflow_context"
         clause = "" if after is None else " AND number > ?"
         parameters: tuple[object, ...] = (
             (agent_id,) if after is None else (agent_id, after)
         )
         rows = self._db.execute(
-            "SELECT number, since_sequence, reset_at, reason, overflow_context FROM agent_window_events"
+            f"SELECT number, since_sequence, reset_at, reason, {context} FROM agent_window_events"
             f" WHERE agent_id = ?{clause} ORDER BY number LIMIT ?",
             (*parameters, limit),
         )

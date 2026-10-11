@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { LoadError } from "@/components/ui/access-error";
 import {
   Button,
   Field,
@@ -20,7 +21,7 @@ import {
   useReportSettingsSave,
   useSaver,
 } from "@/features/settings/saver";
-import { backend } from "@/lib/backend";
+import { type BackendError, backend } from "@/lib/backend";
 
 const FIELDS = [
   { key: "context_window_tokens", label: "Context window (tokens)" },
@@ -161,6 +162,7 @@ export function AgentPanel() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
 
   const editing = useRef(drafts);
   editing.current = drafts;
@@ -169,6 +171,7 @@ export function AgentPanel() {
   const load = useCallback(async (preserve = false) => {
     setLoading(true);
     setLoadFailed(false);
+    setLoadError(null);
     try {
       const values = await backend.settings("agent");
       if (!preserve || editing.current === saved.current) {
@@ -181,7 +184,7 @@ export function AgentPanel() {
       setLoadFailed(false);
     } catch (error) {
       setLoadFailed(true);
-      reportLoadFailure("settings-agent", error, () => void load(preserve));
+      setLoadError(reportLoadFailure(error));
     } finally {
       setLoading(false);
     }
@@ -196,9 +199,13 @@ export function AgentPanel() {
 
   const { saving, save } = useSaver(load, first);
   useReportSettingsSave("agent", saving);
+  const recovery =
+    loadError && !(loadError.transport && backend.disconnected) ? (
+      <LoadError error={loadError} retry={() => void load(true)} />
+    ) : null;
   if (Object.keys(drafts).length === 0)
     return loadFailed ? (
-      <p role="alert">Could not load Agent settings.</p>
+      recovery
     ) : (
       <LoadingSkeleton label="Loading Agent settings">
         <div className="agent-groups">
@@ -216,13 +223,16 @@ export function AgentPanel() {
       </LoadingSkeleton>
     );
   return (
-    <AgentForm
-      drafts={drafts}
-      disabled={loading || saving || loadFailed}
-      saving={saving}
-      first={first}
-      onChange={setDrafts}
-      onSave={(values) => void save("agent", values)}
-    />
+    <>
+      {recovery}
+      <AgentForm
+        drafts={drafts}
+        disabled={loading || saving || loadFailed}
+        saving={saving}
+        first={first}
+        onChange={setDrafts}
+        onSave={(values) => void save("agent", values)}
+      />
+    </>
   );
 }

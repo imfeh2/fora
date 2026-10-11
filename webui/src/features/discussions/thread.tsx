@@ -144,7 +144,9 @@ export function ThreadPage(props: ThreadPageProps) {
         </PageBody>
       </Page>
     );
-  return <ThreadSession key={id} {...props} members={members} humanId={humanId} />;
+  return (
+    <ThreadSession key={id} {...props} members={members} humanId={humanId} />
+  );
 }
 
 function ThreadSkeleton() {
@@ -696,7 +698,7 @@ function ThreadSession({
     void thread.request("latest", { source: "user" });
   }, [thread]);
 
-  const discussionSummary = discussions.find((item) => item.id === id);
+  const discussionSummary = discussions?.find((item) => item.id === id);
   const unreadCount = discussionSummary?.unread ?? 0;
   const showScrollButton =
     initialReady.current &&

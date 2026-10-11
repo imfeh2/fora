@@ -19,15 +19,16 @@ import {
   AgentDetailStatus,
   HistorySection,
   MemberPage,
+  TurnHistoryModal,
   WorkspaceContent,
   WorkspaceSection,
 } from "@/features/members/detail";
-import * as saver from "@/features/settings/saver";
 import {
   type AgentDetail,
   type AgentHistoryRead,
   type AgentHistoryRequestSummary,
   type AgentRun,
+  BackendError,
   backend,
   type HistoryBinary,
   type HistoryImage,
@@ -151,24 +152,24 @@ describe("Agent deletion", () => {
 });
 
 describe("Agent detail status", () => {
-  it("shows pause intent while the current Turn completes", () => {
+  it("shows pause intent while the current activity completes", () => {
     expect(
       status({ ...detail, state: "running", pause_requested: true }),
-    ).toContain("Pause requested · Current Turn will finish");
+    ).toContain("Pause requested · Current activity will finish");
     expect(
       status({ ...detail, state: "paused", pause_requested: true }),
-    ).not.toContain("Current Turn will finish");
+    ).not.toContain("Current activity will finish");
     expect(status(detail)).not.toContain("Pause requested");
   });
   it("uses the kernel idle flag even below the previous threshold", () => {
     expect(status({ ...detail, idle: true, idle_streak: 1 })).toContain(
-      "1 idle Turn",
+      "Idle · 1",
     );
     expect(status({ ...detail, idle: false, idle_streak: 20 })).not.toContain(
-      "idle Turn",
+      "Idle ·",
     );
     expect(status({ ...detail, idle: true, idle_streak: 1000 })).toContain(
-      "1,000 idle Turns",
+      "Idle · 1,000",
     );
   });
 
@@ -278,6 +279,10 @@ describe("Agent history request fields", () => {
               ],
               humanId: 1,
               discussions: [],
+              connectionError: null,
+              organizationError: null,
+              discussionsError: null,
+              retry: async () => {},
               refresh: async () => {},
             }}
           >
@@ -300,6 +305,10 @@ describe("Agent history request fields", () => {
   }
 
   function events() {
+    vi.spyOn(backend, "disconnected", "get").mockReturnValue(false);
+    vi.spyOn(backend, "agentHistoryWindows").mockImplementation(
+      () => new Promise(() => {}),
+    );
     const listeners = new Set<Parameters<typeof backend.onEvent>[0]>();
     const stops = vi.fn();
     vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
@@ -324,6 +333,11 @@ describe("Agent history request fields", () => {
       id,
       usage: { ...detail.usage, total_tokens: value },
     };
+  }
+
+  async function openContext() {
+    fireEvent.click(screen.getByRole("button", { name: "Inspect context" }));
+    await act(async () => {});
   }
 
   it("filters unrelated events and merges bursts while publishing every completed read", async () => {
@@ -352,6 +366,7 @@ describe("Agent history request fields", () => {
     });
     expect(read).toHaveBeenCalledTimes(1);
     await act(async () => first.resolve(tokens(101)));
+    await openContext();
     expect(screen.getByText("101")).toBeTruthy();
     expect(read).toHaveBeenCalledTimes(2);
     await act(async () => {
@@ -374,8 +389,8 @@ describe("Agent history request fields", () => {
     };
     await act(async () => third.resolve({ ...tokens(303), runs: [finalRun] }));
     expect(screen.getByText("303")).toBeTruthy();
-    expect(screen.getByText("Final Turn error")).toBeTruthy();
-    expect(screen.getByText("failed")).toBeTruthy();
+    expect(screen.getAllByText("Final Turn error").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("failed").length).toBeGreaterThan(0);
     expect(
       screen.getByText(`Saved ${formatTime(finalRun.last_saved_at as string)}`),
     ).toBeTruthy();
@@ -395,9 +410,6 @@ describe("Agent history request fields", () => {
       const stream = events();
       const old = pendingDetail();
       const current = pendingDetail();
-      const report = vi
-        .spyOn(saver, "reportLoadFailure")
-        .mockImplementation(() => {});
       const read = vi
         .spyOn(backend, "agentDetail")
         .mockResolvedValueOnce(tokens(101))
@@ -405,6 +417,7 @@ describe("Agent history request fields", () => {
         .mockImplementationOnce(() => current.promise);
       const view = render(page(2));
       await act(async () => {});
+      await openContext();
       expect(screen.getByText("101")).toBeTruthy();
       await act(async () =>
         stream.emit({ type: "turn.progress", agent_id: 2 }),
@@ -418,44 +431,39 @@ describe("Agent history request fields", () => {
         else old.resolve(tokens(999));
         current.resolve(tokens(303, 3));
       });
+      await openContext();
       expect(screen.getByText("303")).toBeTruthy();
       expect(screen.queryByText("999")).toBeNull();
-      expect(report).not.toHaveBeenCalled();
-      expect(stream.listeners.size).toBe(1);
+      expect(screen.queryByText("stale Agent failure")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(stream.listeners.size).toBe(2);
+      view.unmount();
+      expect(stream.listeners.size).toBe(0);
     },
   );
 
   it("recovers an initial failure through Retry and displays empty history", async () => {
     events();
-    let retry: (() => void) | undefined;
-    vi.spyOn(saver, "reportLoadFailure").mockImplementation(
-      (_id, _error, action) => {
-        retry = action;
-      },
-    );
     const read = vi
       .spyOn(backend, "agentDetail")
       .mockRejectedValueOnce(new Error("initial failure"))
       .mockResolvedValueOnce(tokens(101));
     render(page(2));
     await act(async () => {});
-    expect(screen.queryByText("No Turns yet")).toBeNull();
-    expect(retry).toBeDefined();
-    await act(async () => retry?.());
+    expect(screen.queryByText("No activity yet")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("initial failure");
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Retry" })),
+    );
     expect(read).toHaveBeenCalledTimes(2);
+    await openContext();
     expect(screen.getByText("101")).toBeTruthy();
-    expect(screen.getByText("No Turns yet")).toBeTruthy();
+    expect(screen.getAllByText("No activity yet").length).toBeGreaterThan(0);
   });
 
   it("retains content on failure and merges Retry through the same refresh lifecycle", async () => {
     const stream = events();
     const recovery = pendingDetail();
-    let retry: (() => void) | undefined;
-    const report = vi
-      .spyOn(saver, "reportLoadFailure")
-      .mockImplementation((_id, _error, action) => {
-        retry = action;
-      });
     const read = vi
       .spyOn(backend, "agentDetail")
       .mockResolvedValueOnce(tokens(101))
@@ -464,16 +472,16 @@ describe("Agent history request fields", () => {
       .mockResolvedValueOnce(tokens(303));
     render(page(2));
     await act(async () => {});
+    await openContext();
     await act(async () => stream.emit({ type: "turn.failed", agent_id: 2 }));
     expect(screen.getByText("101")).toBeTruthy();
-    expect(report).toHaveBeenCalledWith(
-      "agent-load:2",
-      expect.any(Error),
-      expect.any(Function),
+    expect(screen.getAllByRole("alert")[0].textContent).toContain(
+      "read failed",
     );
+    const retry = screen.getAllByRole("button", { name: "Retry" })[0];
     await act(async () => {
-      retry?.();
-      retry?.();
+      fireEvent.click(retry);
+      fireEvent.click(retry);
       stream.emit({ type: "turn.progress", agent_id: 2 });
     });
     expect(read).toHaveBeenCalledTimes(3);
@@ -489,9 +497,6 @@ describe("Agent history request fields", () => {
       const old = pendingDetail();
       const current = pendingDetail();
       const followup = pendingDetail();
-      const report = vi
-        .spyOn(saver, "reportLoadFailure")
-        .mockImplementation(() => {});
       const read = vi
         .spyOn(backend, "agentDetail")
         .mockImplementationOnce(() => old.promise)
@@ -513,8 +518,10 @@ describe("Agent history request fields", () => {
       });
       expect(read).toHaveBeenCalledTimes(2);
       expect(screen.queryByText("999")).toBeNull();
-      expect(report).not.toHaveBeenCalled();
+      expect(screen.queryByText("old connection failure")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
       await act(async () => current.resolve(tokens(202)));
+      await openContext();
       expect(screen.getByText("202")).toBeTruthy();
       expect(read).toHaveBeenCalledTimes(3);
       await act(async () => followup.resolve(tokens(303)));
@@ -527,9 +534,6 @@ describe("Agent history request fields", () => {
     async (failure) => {
       const stream = events();
       const pending = pendingDetail();
-      const report = vi
-        .spyOn(saver, "reportLoadFailure")
-        .mockImplementation(() => {});
       const read = vi
         .spyOn(backend, "agentDetail")
         .mockImplementation(() => pending.promise);
@@ -544,10 +548,54 @@ describe("Agent history request fields", () => {
         if (failure) pending.reject(new Error("unmounted failure"));
         else pending.resolve(tokens(999));
       });
-      expect(report).not.toHaveBeenCalled();
+      expect(screen.queryByText("unmounted failure")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
       expect(read).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("keeps an explicitly located request through Retry and inline latest updates", async () => {
+    const read = vi
+      .spyOn(backend, "agentHistoryRead")
+      .mockRejectedValue(
+        new BackendError("not_found", "Saved request not found"),
+      );
+    const modal = (initialOrdinal: number, latestOrdinal: number) => (
+      <TooltipProvider>
+        <TurnHistoryModal
+          agentId={2}
+          sequence={4}
+          initialOrdinal={initialOrdinal}
+          latestOrdinal={latestOrdinal}
+          open
+          inline
+          onOpenChange={() => {}}
+        />
+      </TooltipProvider>
+    );
+    const view = render(modal(2, 5));
+    await act(async () => {});
+    expect(read.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+      [2, 4, 2],
+    ]);
+    view.rerender(modal(2, 9));
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Retry" })),
+    );
+    expect(read.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+      [2, 4, 2],
+      [2, 4, 2],
+    ]);
+    view.rerender(modal(3, 9));
+    await act(async () => {});
+    expect(read.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+      [2, 4, 2],
+      [2, 4, 2],
+      [2, 4, 3],
+    ]);
+  });
 
   it("resets long request fields before continuing the selected request", async () => {
     const summary = (ordinal: number): AgentHistoryRequestSummary => ({
@@ -1208,9 +1256,9 @@ describe("Agent history request fields", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /#4/ }));
     fireEvent.click(screen.getByRole("button", { name: "View full context" }));
-    expect(await screen.findByText("Loading Turn history")).toBeTruthy();
+    expect(await screen.findByText("Loading activity history")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.queryByText("Loading Turn history")).toBeNull();
+    expect(screen.queryByText("Loading activity history")).toBeNull();
 
     rejectRead(new Error("closed history failure"));
     await Promise.resolve();

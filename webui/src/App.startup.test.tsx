@@ -16,6 +16,11 @@ let RouterProvider: typeof import("@/app/router").RouterProvider;
 let useRouter: typeof import("@/app/router").useRouter;
 let MemberPage: typeof import("@/features/members/detail").MemberPage;
 let DocumentPage: typeof import("@/features/library/document").DocumentPage;
+let AgentPanel: typeof import("@/features/settings/agent").AgentPanel;
+let ExecutionPanel: typeof import("@/features/settings/execution").ExecutionPanel;
+let LangfusePanel: typeof import("@/features/settings/langfuse").LangfusePanel;
+let ModelPanel: typeof import("@/features/settings/model").ModelPanel;
+let TooltipProvider: typeof import("@/components/ui/tooltip").TooltipProvider;
 let backend: typeof import("@/lib/backend").backend;
 let BackendError: typeof import("@/lib/backend").BackendError;
 let render: typeof import("@testing-library/react").render;
@@ -23,6 +28,7 @@ let cleanup: typeof import("@testing-library/react").cleanup;
 let act: typeof import("@testing-library/react").act;
 let fireEvent: typeof import("@testing-library/react").fireEvent;
 let clearToasts: typeof import("@/components/ui/toast").clearToasts;
+let readToasts: typeof import("@/components/ui/toast").readToasts;
 let closeDom: () => void;
 let events: Set<(event: BackendEvent) => void>;
 let failures: Set<(error: InstanceType<typeof BackendError>) => void>;
@@ -107,12 +113,17 @@ beforeAll(async () => {
     "@testing-library/react"
   ));
   ({ backend, BackendError } = await import("@/lib/backend"));
-  ({ clearToasts } = await import("@/components/ui/toast"));
+  ({ clearToasts, readToasts } = await import("@/components/ui/toast"));
   ({ default: App } = await import("@/App"));
   ({ OrganizationProvider } = await import("@/app/organization"));
   ({ RouterProvider, useRouter } = await import("@/app/router"));
   ({ MemberPage } = await import("@/features/members/detail"));
   ({ DocumentPage } = await import("@/features/library/document"));
+  ({ AgentPanel } = await import("@/features/settings/agent"));
+  ({ ExecutionPanel } = await import("@/features/settings/execution"));
+  ({ LangfusePanel } = await import("@/features/settings/langfuse"));
+  ({ ModelPanel } = await import("@/features/settings/model"));
+  ({ TooltipProvider } = await import("@/components/ui/tooltip"));
 }, 30000);
 
 beforeEach(() => {
@@ -780,6 +791,258 @@ it("ends document and toolbar placeholders after an initial read failure", async
   expect(view.getByRole("alert")).toBeTruthy();
   expect(view.container.querySelectorAll(".animate-breathe")).toHaveLength(0);
 });
+
+const regions = [
+  "agent",
+  "execution",
+  "langfuse",
+  "model",
+  "document",
+] as const;
+type Region = (typeof regions)[number];
+
+function RegionalPanel({ region }: { region: Region }) {
+  if (region === "agent") return <AgentPanel />;
+  if (region === "execution") return <ExecutionPanel />;
+  if (region === "langfuse") return <LangfusePanel />;
+  if (region === "model")
+    return (
+      <TooltipProvider>
+        <ModelPanel />
+      </TooltipProvider>
+    );
+  return <DocumentPage path="guide.md" />;
+}
+
+function regionalReads() {
+  const settings = vi
+    .spyOn(backend, "settings")
+    .mockImplementation(async (section) => {
+      if (section === "agent")
+        return {
+          context_window_tokens: 1000,
+          memory_index_bytes: 2000,
+          exchange_nudge_after: 10,
+          idle_streak_after: 2,
+          no_tool_turns_before_pause: 3,
+          max_concurrent_turns: 4,
+          token_limit: 5000,
+          request_limit: 6,
+        };
+      if (section === "execution")
+        return {
+          write_directories: ["/project"],
+          unusable_write_directories: [],
+          error: null,
+        };
+      return {
+        enabled: false,
+        base_url: "https://example.test",
+        keys_set: false,
+      };
+    });
+  const model = vi.spyOn(backend, "modelCatalog").mockResolvedValue({
+    version: 2,
+    providers: [],
+    models: [],
+    default_model_id: null,
+    default_thinking: "default",
+    agent_configs: {},
+  });
+  const documentRead = vi.spyOn(backend, "readLibrary").mockResolvedValue({
+    path: "guide.md",
+    content: "Saved document",
+    hash: "saved-hash",
+  });
+  return { settings, model, documentRead };
+}
+
+function regionalRead(region: Region, reads: ReturnType<typeof regionalReads>) {
+  return region === "model"
+    ? reads.model
+    : region === "document"
+      ? reads.documentRead
+      : reads.settings;
+}
+
+function regionalInput(region: Region, view: ReturnType<typeof render>) {
+  if (region === "execution")
+    fireEvent.click(view.getByRole("button", { name: "Add directory" }));
+  const label = {
+    agent: "Context window (tokens)",
+    execution: "New directory path",
+    langfuse: "Base URL",
+    model: "Provider name",
+    document: "Document",
+  }[region];
+  return view.getByLabelText(label) as HTMLInputElement | HTMLTextAreaElement;
+}
+
+it.each(regions)(
+  "recovers the first %s read locally without a toast",
+  async (region) => {
+    const reads = regionalReads();
+    const read = regionalRead(region, reads);
+    read.mockRejectedValueOnce(
+      new BackendError("internal_error", `${region} read unavailable`),
+    );
+    const view = render(
+      <RouterProvider>
+        <RegionalPanel region={region} />
+      </RouterProvider>,
+    );
+    await act(async () => {});
+    expect(readToasts()).toEqual([]);
+    clearToasts();
+    expect(view.getByRole("alert").textContent).toContain(
+      `${region} read unavailable`,
+    );
+    const retry = view.getByRole("button", { name: "Retry" });
+    expect(retry.matches(":disabled")).toBe(false);
+    const retrying = deferred<never>();
+    read.mockReturnValueOnce(retrying.promise);
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.container.querySelector("[aria-busy=true]")).toBeTruthy();
+    await act(async () => {
+      retrying.reject(new Error(`${region} retry unavailable`));
+    });
+    expect(view.getByRole("alert").textContent).toContain(
+      `${region} retry unavailable`,
+    );
+    expect(view.container.querySelector("[aria-busy=true]")).toBeNull();
+    await act(async () => {
+      fireEvent.click(view.getByRole("button", { name: "Retry" }));
+    });
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(regionalInput(region, view)).toBeTruthy();
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(backend.organization).not.toHaveBeenCalled();
+    expect(backend.discussions).not.toHaveBeenCalled();
+    if (region === "model" || region === "document")
+      expect(reads.settings).not.toHaveBeenCalled();
+    if (region !== "model") expect(reads.model).not.toHaveBeenCalled();
+    if (region !== "document")
+      expect(reads.documentRead).not.toHaveBeenCalled();
+  },
+);
+
+it.each(regions)(
+  "retains the %s input through refresh failure and local Retry",
+  async (region) => {
+    const reads = regionalReads();
+    const read = regionalRead(region, reads);
+    const view = render(
+      <RouterProvider>
+        <RegionalPanel region={region} />
+      </RouterProvider>,
+    );
+    await act(async () => {});
+    const input = regionalInput(region, view);
+    const value =
+      region === "agent"
+        ? "333"
+        : region === "langfuse"
+          ? "https://draft.test"
+          : "local draft";
+    fireEvent.change(input, { target: { value } });
+    let publicKey: HTMLInputElement | undefined;
+    let secretKey: HTMLInputElement | undefined;
+    if (region === "langfuse") {
+      publicKey = view.getByLabelText("Public key") as HTMLInputElement;
+      secretKey = view.getByLabelText("Secret key") as HTMLInputElement;
+      fireEvent.change(publicKey, { target: { value: "test-public-input" } });
+      fireEvent.change(secretKey, { target: { value: "test-secret-input" } });
+    }
+    read.mockRejectedValueOnce(new Error(`${region} refresh unavailable`));
+    await emit({ type: "connection.restored" });
+    expect(input.isConnected).toBe(true);
+    expect(input.value).toBe(value);
+    expect(view.getByRole("alert").textContent).toContain(
+      `${region} refresh unavailable`,
+    );
+    expect(readToasts()).toEqual([]);
+    const retry = view.getByRole("button", { name: "Retry" });
+    expect(retry.matches(":disabled")).toBe(false);
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(input.isConnected).toBe(true);
+    expect(input.value).toBe(value);
+    if (publicKey && secretKey) {
+      expect(publicKey.value).toBe("test-public-input");
+      expect(secretKey.value).toBe("test-secret-input");
+    }
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(backend.organization).not.toHaveBeenCalled();
+    expect(backend.discussions).not.toHaveBeenCalled();
+  },
+);
+
+it.each(regions)(
+  "reports a connection failure once from %s without a local Retry",
+  async (region) => {
+    const reads = regionalReads();
+    const failure = new BackendError("disconnected", "Connection lost", true);
+    regionalRead(region, reads).mockRejectedValueOnce(failure);
+    vi.spyOn(backend, "disconnected", "get").mockReturnValue(true);
+    const report = vi
+      .spyOn(backend, "reportFailure")
+      .mockImplementation(() => {});
+    const view = render(
+      <RouterProvider>
+        <RegionalPanel region={region} />
+      </RouterProvider>,
+    );
+    await act(async () => {});
+    expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(view.container.querySelectorAll(".animate-breathe")).toHaveLength(0);
+    expect(readToasts()).toEqual([]);
+  },
+);
+
+it.each([false, true])(
+  "keeps Langfuse saving and its draft through an earlier read with failure=%s",
+  async (fails) => {
+    const reads = regionalReads();
+    const earlier = deferred<Record<string, unknown>>();
+    reads.settings.mockReturnValueOnce(earlier.promise);
+    const view = render(<LangfusePanel />);
+    await emit({ type: "connection.restored" });
+    const input = view.getByLabelText("Base URL") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "https://saved-draft.test" } });
+    const saving = deferred<Record<string, unknown>>();
+    vi.spyOn(backend, "updateSettings").mockReturnValueOnce(saving.promise);
+    const save = view.getByRole("button", { name: "Save" });
+    fireEvent.click(save);
+    await emit({ type: "connection.restored" });
+    expect(reads.settings).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      if (fails) earlier.reject(new Error("Outdated Langfuse read"));
+      else earlier.resolve({ enabled: false, base_url: "https://old.test" });
+    });
+    expect(input.value).toBe("https://saved-draft.test");
+    expect(save.matches(":disabled")).toBe(true);
+    expect(view.queryByRole("alert")).toBeNull();
+    await act(async () => {
+      saving.resolve({
+        enabled: false,
+        base_url: "https://saved-draft.test",
+        keys_set: false,
+      });
+    });
+    expect(save.matches(":disabled")).toBe(false);
+    expect(input.value).toBe("https://saved-draft.test");
+    expect(readToasts()).toEqual([]);
+    view.unmount();
+    expect(events.size).toBe(0);
+  },
+);
 
 it("keeps the shell visible on authentication failure", async () => {
   const view = render(<App />);

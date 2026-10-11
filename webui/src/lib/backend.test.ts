@@ -76,6 +76,52 @@ function harness(connection: Connection = { url: URL }) {
   return { backend, socket, connected };
 }
 
+describe("window history requests", () => {
+  it.each([undefined, { window_number: 3 }, { window_number: null }])(
+    "preserves history cursors with window options %j",
+    async (options) => {
+      const { backend, connected } = harness();
+      const socket = await connected();
+      const pending = backend.agentHistory(2, 7, 5, 3, 9, options);
+      await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+      expect(socket.sent[0].method).toBe("agent.history");
+      expect(socket.sent[0].params).toEqual({
+        agent_id: 2,
+        before: 7,
+        limit: 5,
+        windows_after: 3,
+        windows_limit: 9,
+        ...options,
+      });
+      socket.reply({
+        type: "response",
+        id: socket.sent[0].id,
+        result: { runs: [] },
+      });
+      await pending;
+    },
+  );
+
+  it("requests a bounded independent window directory", async () => {
+    const { backend, connected } = harness();
+    const socket = await connected();
+    const pending = backend.agentHistoryWindows(2, 11, 5);
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent[0].method).toBe("agent.history.windows");
+    expect(socket.sent[0].params).toEqual({
+      agent_id: 2,
+      before: 11,
+      limit: 5,
+    });
+    socket.reply({
+      type: "response",
+      id: socket.sent[0].id,
+      result: { windows: [] },
+    });
+    await pending;
+  });
+});
+
 describe("connectionFrom", () => {
   it("derives the same-origin socket for the full-stack page", () => {
     expect(connectionFrom("?token=abc", "http://127.0.0.1:8000")).toEqual({
@@ -413,6 +459,73 @@ describe("Backend", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each(["timeout", "disconnected"])(
+    "keeps window directory %s failures read-only and recovers the same cursor",
+    async (code) => {
+      vi.useFakeTimers();
+      const { backend, connected, socket } = harness();
+      const old = await connected();
+      const failures = vi.fn();
+      const events = vi.fn();
+      backend.onFailure(failures);
+      backend.onEvent(events);
+      const first = backend
+        .agentHistoryWindows(2, 11, 5)
+        .catch((error) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(old.sent).toHaveLength(1);
+      expect(old.sent[0]).toMatchObject({
+        method: "agent.history.windows",
+        params: { agent_id: 2, before: 11, limit: 5 },
+      });
+      if (code === "timeout") {
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(failures).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+      } else old.fail();
+      const error = await first;
+      expect(error).toBeInstanceOf(BackendError);
+      expect(error).toMatchObject({ code, transport: true });
+      expect(failures).toHaveBeenCalledOnce();
+      expect(failures).toHaveBeenCalledWith(error);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(backend.disconnected).toBe(code === "disconnected");
+      if (code === "disconnected") {
+        expect(events).toHaveBeenCalledWith({
+          type: "connection.closed",
+          error,
+        });
+        const recovery = backend.reconnect();
+        socket().open();
+        await recovery;
+        expect(events).toHaveBeenCalledWith({ type: "connection.restored" });
+      }
+      const current = socket();
+      const next = backend.agentHistoryWindows(2, 11, 5);
+      await vi.advanceTimersByTimeAsync(0);
+      const request = current.sent[current.sent.length - 1];
+      expect(request).toMatchObject({
+        method: "agent.history.windows",
+        params: { agent_id: 2, before: 11, limit: 5 },
+      });
+      old.reply({ type: "response", id: old.sent[0].id, result: "late" });
+      const result = {
+        agent_id: 2,
+        current_window_number: 12,
+        windows: [],
+        has_unassigned: false,
+        has_before: false,
+        next_before: null,
+      };
+      current.reply({ type: "response", id: request.id, result });
+      await expect(next).resolves.toEqual(result);
+      expect(failures).toHaveBeenCalledOnce();
+      expect(backend.disconnected).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("reports a request timeout without declaring the connection dead", async () => {
     vi.useFakeTimers();

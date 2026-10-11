@@ -78,21 +78,14 @@ export function useSaver(
   return { saving, save };
 }
 
-export function reportLoadFailure(
-  id: string,
-  failure: unknown,
-  retry: () => void,
-): void {
-  if (failure instanceof BackendError && failure.transport) {
-    backend.reportFailure(failure);
-    return;
-  }
-  toast({
-    id,
-    tone: "danger",
-    title: "Could not load",
-    description: failure instanceof Error ? failure.message : String(failure),
-    duration: null,
-    action: { label: "Retry", onClick: retry },
-  });
+export function reportLoadFailure(failure: unknown): BackendError {
+  const error =
+    failure instanceof BackendError
+      ? failure
+      : new BackendError(
+          "load_failed",
+          failure instanceof Error ? failure.message : String(failure),
+        );
+  if (error.transport) backend.reportFailure(error);
+  return error;
 }

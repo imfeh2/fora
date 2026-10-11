@@ -196,6 +196,7 @@ export function PromptDialog({
   initial = "",
   submitLabel,
   onSubmit,
+  protectUnsaved = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -208,82 +209,131 @@ export function PromptDialog({
   initial?: string;
   submitLabel: string;
   onSubmit: (value: string) => void | Promise<void>;
+  protectUnsaved?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const inputId = useId();
+  const wasOpen = useRef(false);
+  const savedValue = useRef(initial);
+  const inFlight = useRef(false);
 
   useEffect(() => {
-    if (open) setValue(initial);
-  }, [open, initial]);
+    if (open && (!protectUnsaved || !wasOpen.current)) {
+      savedValue.current = initial;
+      setValue(initial);
+      setDiscarding(false);
+    }
+    wasOpen.current = open;
+  }, [open, initial, protectUnsaved]);
 
   const submitted = trim ? value.trim() : value;
   const error = validate?.(submitted);
 
   const commit = async () => {
-    if (!submitted || error || busy) return;
+    if (!submitted || error || inFlight.current) return;
+    inFlight.current = true;
+    input.current?.focus();
     setBusy(true);
     try {
       await onSubmit(submitted);
       onOpenChange(false);
     } catch (failure) {
       reportFailure(`Could not ${submitLabel.toLowerCase()}`, failure);
-      refocus(input.current);
+      requestAnimationFrame(() => input.current?.focus());
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
 
+  const close = () => {
+    if (inFlight.current) return;
+    if (protectUnsaved && value !== savedValue.current) setDiscarding(true);
+    else onOpenChange(false);
+  };
+  const keepEditing = () => {
+    setDiscarding(false);
+    requestAnimationFrame(() => input.current?.focus());
+  };
+
   return (
-    <Modal
-      open={open}
-      onOpenChange={onOpenChange}
-      title={title}
-      variant="form"
-      description={description}
-      footer={
-        <>
-          <Button disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!submitted || !!error || busy}
-            onClick={commit}
-          >
-            {submitLabel}
-          </Button>
-        </>
-      }
-    >
-      <Field label={label} htmlFor={inputId}>
-        <Input
-          ref={input}
-          id={inputId}
-          value={value}
-          placeholder={placeholder}
-          aria-invalid={!!error}
-          aria-describedby={error ? `${inputId}-error` : undefined}
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void commit();
-            }
-          }}
-        />
-        {error ? (
-          <p
-            id={`${inputId}-error`}
-            className="text-sm text-danger"
-            role="alert"
-          >
-            {error}
-          </p>
-        ) : null}
-      </Field>
-    </Modal>
+    <>
+      <Modal
+        open={open}
+        onOpenChange={(next) => (next ? onOpenChange(true) : close())}
+        title={title}
+        variant="form"
+        description={description}
+        footer={
+          <>
+            <Button disabled={busy} onClick={close}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!submitted || !!error || busy}
+              onClick={commit}
+            >
+              {submitLabel}
+            </Button>
+          </>
+        }
+      >
+        <Field label={label} htmlFor={inputId}>
+          <Input
+            ref={input}
+            id={inputId}
+            value={value}
+            readOnly={busy}
+            placeholder={placeholder}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${inputId}-error` : undefined}
+            onChange={(event) => {
+              if (!inFlight.current) setValue(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void commit();
+              }
+            }}
+          />
+          {error ? (
+            <p
+              id={`${inputId}-error`}
+              className="text-sm text-danger"
+              role="alert"
+            >
+              {error}
+            </p>
+          ) : null}
+        </Field>
+      </Modal>
+      <Modal
+        open={open && discarding}
+        onOpenChange={(next) => !next && keepEditing()}
+        title="Discard unsaved changes?"
+        variant="confirm"
+        description="You have unsaved modifications."
+        footer={
+          <>
+            <Button onClick={keepEditing}>Keep Editing</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setDiscarding(false);
+                onOpenChange(false);
+              }}
+            >
+              Discard
+            </Button>
+          </>
+        }
+      />
+    </>
   );
 }
 

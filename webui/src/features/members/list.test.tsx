@@ -15,18 +15,16 @@ function agent(state: Member["state"]): Member {
 
 function render(member: Member, tokenLimit = 0) {
   return renderToStaticMarkup(
-    <table>
-      <tbody>
-        <MemberRow
-          member={member}
-          tokenLimit={tokenLimit}
-          onOpen={() => {}}
-          onToggle={() => {}}
-          onRename={() => {}}
-          onDelete={() => {}}
-        />
-      </tbody>
-    </table>,
+    <ul>
+      <MemberRow
+        member={member}
+        tokenLimit={tokenLimit}
+        onOpen={() => {}}
+        onToggle={() => {}}
+        onRename={() => {}}
+        onDelete={() => {}}
+      />
+    </ul>,
   );
 }
 
@@ -83,11 +81,11 @@ describe("member row", () => {
     expect(nameAction?.replace(/<[^>]*>/g, "")).toBe("Helper");
   });
 
-  it("shows a human as plain text", () => {
+  it("offers a human name action and Rename", () => {
     const html = render(human);
     const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
-    expect(buttons.join("")).not.toContain(">You<");
-    expect(html).toMatch(/<span\b[^>]*>You<\/span>/);
+    expect(buttons.join("")).toContain(">You<");
+    expect(buttons.join("")).toContain("Rename");
   });
 
   it("reports the backend state in the State column", () => {
@@ -95,10 +93,12 @@ describe("member row", () => {
     expect(render(agent("error"), 2000)).toContain("Error");
   });
 
-  it("offers Resume while the current Turn completes", () => {
+  it("offers Resume while the current activity completes", () => {
     const member = { ...agent("running"), pause_requested: true };
     expect(memberActions(member, noop)[0].label).toBe("Resume");
-    expect(render(member)).toContain("Pause requested");
+    expect(render(member)).toContain(
+      "Pause requested · Current activity will finish",
+    );
   });
 });
 

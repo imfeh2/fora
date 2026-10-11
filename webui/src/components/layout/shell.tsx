@@ -343,12 +343,14 @@ export function PageHeader({
   actions,
   crumb,
   leading,
+  wrap = false,
 }: {
   title: ReactNode;
   status?: ReactNode;
   actions?: ReactNode;
   crumb?: Crumb | Crumb[];
   leading?: ReactNode;
+  wrap?: boolean;
 }) {
   return (
     <header className="flex flex-col gap-2 pt-6 px-8 pb-4 flex-none max-[940px]:px-6 narrow:px-3 narrow:pt-3 narrow:pb-3">
@@ -386,12 +388,27 @@ export function PageHeader({
           {crumb.label}
         </button>
       ) : null}
-      <div className="flex items-start gap-4 narrow:flex-wrap">
+      <div
+        className={clsx(
+          "flex items-start gap-4 narrow:flex-wrap",
+          wrap && "flex-wrap",
+        )}
+      >
         {leading}
-        <div className="flex-1 min-w-0 max-w-full flex flex-col gap-1">
+        <div
+          className={clsx(
+            "flex-1 min-w-0 max-w-full flex flex-col gap-1",
+            wrap && "basis-auto",
+          )}
+        >
           <h1 className="wrap-anywhere">{title}</h1>
           {status ? (
-            <div className="flex items-center gap-2 text-fg-muted">
+            <div
+              className={clsx(
+                "flex items-center gap-2 text-fg-muted",
+                wrap && "flex-wrap",
+              )}
+            >
               {status}
             </div>
           ) : null}

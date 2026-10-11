@@ -72,6 +72,7 @@ export function useResource<T>(read: () => Promise<T>) {
       }
       const generation = epoch.current;
       const current = () => active.current && generation === epoch.current;
+      dirty.current = false;
       publish(
         state.current.status !== "ready"
           ? { status: "pending", data: null, error: null, refreshing: true }
@@ -80,8 +81,7 @@ export function useResource<T>(read: () => Promise<T>) {
       const operation = Promise.resolve()
         .then(async () => {
           if (!current()) return;
-          do {
-            dirty.current = false;
+          for (;;) {
             try {
               const data = await read();
               if (!current()) return;
@@ -103,7 +103,9 @@ export function useResource<T>(read: () => Promise<T>) {
                   : { ...state.current, error, refreshing: true },
               );
             }
-          } while (current() && dirty.current);
+            if (!current() || !dirty.current) return;
+            dirty.current = false;
+          }
         })
         .finally(() => {
           if (!current()) return;
