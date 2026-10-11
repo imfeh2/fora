@@ -18,10 +18,13 @@ class Mention:
     length: int
 
 
-def _candidates(members: Iterable[Member]) -> list[tuple[str, int]]:
-    entries = [
-        (name_key(member.name), member.id) for member in members if member.active
-    ]
+def _candidates(members: Iterable[Member]) -> list[tuple[str, int | None]]:
+    entries: list[tuple[str, int | None]] = [("all", None)]
+    entries.extend(
+        (name_key(member.name), member.id)
+        for member in members
+        if name_key(member.name) != "all"
+    )
     entries.sort(key=lambda item: len(item[0]), reverse=True)
     return entries
 
@@ -29,8 +32,15 @@ def _candidates(members: Iterable[Member]) -> list[tuple[str, int]]:
 def find_mention_ids(
     body: str, members: Iterable[Member]
 ) -> tuple[tuple[int, int, int], ...]:
-    entries = _candidates(members)
+    active = tuple(
+        sorted(
+            (member for member in members if member.active),
+            key=lambda member: member.id,
+        )
+    )
+    entries = _candidates(active)
     found: list[tuple[int, int, int]] = []
+    expanded_all = False
     index = 0
     length = len(body)
     while index < length:
@@ -48,7 +58,12 @@ def find_mention_ids(
                 continue
             if end < length and _TRAILING_WORD.match(body[end]):
                 continue
-            found.append((member_id, at, end - at))
+            if member_id is None:
+                if not expanded_all:
+                    found.extend((member.id, at, end - at) for member in active)
+                    expanded_all = True
+            else:
+                found.append((member_id, at, end - at))
             index = end
             matched = True
             break

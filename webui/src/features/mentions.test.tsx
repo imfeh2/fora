@@ -102,6 +102,36 @@ describe("candidatesFor", () => {
     const groups = candidatesFor(members, here, "");
     expect(groups.inDiscussion.map((m) => m.name)).toEqual(["You", "Main"]);
     expect(groups.elsewhere).toEqual([]);
+    expect(groups.hasAll).toBe(true);
+  });
+
+  it.each(["", "a", "al", "all", "ALL", " Al "])(
+    "offers everyone for prefix %s",
+    (query) => expect(candidatesFor(members, here, query).hasAll).toBe(true),
+  );
+
+  it.each(["allo", "allison", "ma", "zzz"])(
+    "does not offer everyone for %s",
+    (query) => expect(candidatesFor(members, here, query).hasAll).toBe(false),
+  );
+
+  it("requires a discussion member for the everyone candidate", () => {
+    expect(candidatesFor(members, new Set(), "").hasAll).toBe(false);
+    expect(candidatesFor(members, new Set(), "all").hasAll).toBe(false);
+  });
+
+  it("offers one everyone entry and keeps longer names", () => {
+    const people: Member[] = [
+      ...members,
+      { id: 5, type: "agent", name: "ALL", state: "paused" },
+      { id: 6, type: "agent", name: "All Hands", state: "idle" },
+      { id: 7, type: "agent", name: "Allison", state: "idle" },
+      { id: 8, type: "agent", name: "all", state: "idle" },
+    ];
+    const groups = candidatesFor(people, new Set([1, 5, 6]), "all");
+    expect(groups.hasAll).toBe(true);
+    expect(groups.inDiscussion.map((m) => m.name)).toEqual(["All Hands"]);
+    expect(groups.elsewhere.map((m) => m.name)).toEqual(["Allison"]);
   });
 
   it("a keyword searches the whole organization", () => {
@@ -136,6 +166,36 @@ describe("renderMentions", () => {
     expect(render(body, [{ member_id: 2, position, length: 5 }])).toBe(
       expected,
     );
+  });
+
+  it("renders one recorded everyone span for multiple recipients", () => {
+    expect(
+      render("😀 @ALL @all", [
+        { member_id: 2, position: 2, length: 4 },
+        { member_id: 3, position: 2, length: 4 },
+        { member_id: 4, position: 2, length: 4 },
+      ]),
+    ).toBe("😀 <mark>@ALL</mark> @all");
+  });
+
+  it("keeps distinct recorded positions and repeated text", () => {
+    expect(
+      render("@Main @all @You @all", [
+        { member_id: 2, position: 0, length: 5 },
+        { member_id: 3, position: 6, length: 4 },
+        { member_id: 4, position: 6, length: 4 },
+        { member_id: 1, position: 11, length: 4 },
+      ]),
+    ).toBe("<mark>@Main</mark> <mark>@all</mark> <mark>@You</mark> @all");
+  });
+
+  it("renders the longest valid span at the same position", () => {
+    expect(
+      render("@All Hands", [
+        { member_id: 2, position: 0, length: 4 },
+        { member_id: 3, position: 0, length: 10 },
+      ]),
+    ).toBe("<mark>@All Hands</mark>");
   });
 
   it("marks adjacent spans without dropping text", () => {

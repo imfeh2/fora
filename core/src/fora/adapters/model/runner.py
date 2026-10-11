@@ -823,7 +823,10 @@ class PydanticModelRunner:
                 "bound, returned oldest first. Without bounds, limit selects the latest messages. "
                 "Archive is reversible and is the only way to put a Discussion away. "
                 "Each message lists its mentions; an @Name that is not listed there notified nobody. "
-                "Send requires at least one exact @Name for another active member of that Discussion."
+                "Send requires at least one other active recipient through an exact @Name or @all. "
+                "Use @all to notify every other active Member of this Discussion at send time, "
+                "including paused Members, once per recipient. Longer matching Member names "
+                "keep their individual meaning. Read the saved mentions for the actual recipients."
             ),
         )
         def discussion(

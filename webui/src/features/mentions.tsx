@@ -12,7 +12,7 @@ export function renderMentions(
   let index = 0;
 
   for (const { position, length } of [...mentions].sort(
-    (a, b) => a.position - b.position,
+    (a, b) => a.position - b.position || b.length - a.length,
   )) {
     const end = position + length;
     if (
@@ -61,22 +61,36 @@ export function matchMembers(members: Member[], query: string): Member[] {
     .sort((a, b) => a.name.length - b.name.length);
 }
 
-export type MentionCandidates = { inDiscussion: Member[]; elsewhere: Member[] };
+export type MentionCandidate =
+  | { kind: "all"; id: "all"; name: "all" }
+  | { kind: "member"; id: number; name: string; member: Member };
+
+export type MentionCandidates = {
+  hasAll: boolean;
+  inDiscussion: Member[];
+  elsewhere: Member[];
+};
 
 export function candidatesFor(
   members: Member[],
   inDiscussion: ReadonlySet<number>,
   query: string,
 ): MentionCandidates {
+  const needle = query.trim().toLowerCase();
+  const hasAll = inDiscussion.size > 0 && "all".startsWith(needle);
+  const mentionable = members.filter(
+    (member) => member.name.toLowerCase() !== "all",
+  );
   const here = matchMembers(
-    members.filter((member) => inDiscussion.has(member.id)),
+    mentionable.filter((member) => inDiscussion.has(member.id)),
     query,
   );
-  if (!query.trim()) return { inDiscussion: here, elsewhere: [] };
+  if (!needle) return { hasAll, inDiscussion: here, elsewhere: [] };
   return {
+    hasAll,
     inDiscussion: here,
     elsewhere: matchMembers(
-      members.filter((member) => !inDiscussion.has(member.id)),
+      mentionable.filter((member) => !inDiscussion.has(member.id)),
       query,
     ),
   };

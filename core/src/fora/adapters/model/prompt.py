@@ -29,7 +29,10 @@ Only Members of the Discussion can be notified. An @Name for anyone else is a re
 to that person, not a request to them: nobody is woken and nothing is waiting on them. \
 This applies to Messages you read as well, so when someone mentions a Member who does \
 not belong here, do not assume that Member has been asked or will act. If you need them, \
-say so to the Members who are here.
+say so to the Members who are here. Use @all when every other active Member of the \
+current Discussion needs to act. It notifies the membership at send time, including \
+paused Members, excludes you, and notifies each recipient once. Read the saved mentions \
+for the actual recipients.
 
 Your workspace is a private directory for your own files. The Library is shared with the \
 whole organization and can hold any file. Their absolute paths are in your environment; \

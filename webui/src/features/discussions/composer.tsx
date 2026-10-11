@@ -24,6 +24,7 @@ import { type SendDraft, useDraft } from "@/features/discussions/draft";
 import {
   candidatesFor,
   completeMention,
+  type MentionCandidate,
   mentionQuery,
 } from "@/features/mentions";
 import { backend, type Member } from "@/lib/backend";
@@ -85,6 +86,27 @@ function MicIcon() {
         stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function EveryoneIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="5" cy="4" r="2" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M1.5 12V10a3.5 3.5 0 0 1 7 0v2M9 2.25a2 2 0 0 1 0 3.5M10.5 7a3 3 0 0 1 2 2.83V12"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -581,14 +603,21 @@ export function Composer({
     () =>
       mention
         ? candidatesFor(members, memberIds, mention.query)
-        : { inDiscussion: [], elsewhere: [] },
+        : { hasAll: false, inDiscussion: [], elsewhere: [] },
     [mention, members, memberIds],
   );
 
-  const candidates = [...grouped.inDiscussion, ...grouped.elsewhere].slice(
-    0,
-    MENU_LIMIT,
-  );
+  const candidates: MentionCandidate[] = [
+    ...(grouped.hasAll
+      ? [{ kind: "all" as const, id: "all" as const, name: "all" as const }]
+      : []),
+    ...[...grouped.inDiscussion, ...grouped.elsewhere].map((member) => ({
+      kind: "member" as const,
+      id: member.id,
+      name: member.name,
+      member,
+    })),
+  ].slice(0, MENU_LIMIT);
   const suggesting = mention !== null && candidates.length > 0 && !dismissed;
   const [menuMaxHeight, setMenuMaxHeight] = useState<number | undefined>(
     undefined,
@@ -638,17 +667,18 @@ export function Composer({
   ]);
   const active = candidates.length > 0 ? highlighted % candidates.length : 0;
   const elsewhereFrom = Math.min(
-    grouped.inDiscussion.length,
+    Number(grouped.hasAll) + grouped.inDiscussion.length,
     candidates.length,
   );
 
-  const accept = (member: Member) => {
+  const accept = (candidate: MentionCandidate) => {
     if (!mention) return;
-    const next = completeMention(body, mention, caret, member.name);
+    const next = completeMention(body, mention, caret, candidate.name);
     cancelRecording();
     setBody(next.text);
     setCaret(next.caret);
     setHighlighted(0);
+    setDismissed(true);
     requestAnimationFrame(() => {
       input.current?.focus();
       input.current?.setSelectionRange(next.caret, next.caret);
@@ -869,10 +899,11 @@ export function Composer({
             role="listbox"
             aria-label="Members"
           >
-            {candidates.map((member, index) => {
-              const inside = memberIds.has(member.id);
+            {candidates.map((candidate, index) => {
+              const inside =
+                candidate.kind === "all" || memberIds.has(candidate.id);
               return (
-                <Fragment key={member.id}>
+                <Fragment key={candidate.id}>
                   {index === elsewhereFrom && index > 0 ? (
                     <div
                       className="mt-1 border-t border-line px-2 pt-3 pb-1 text-xs text-fg-muted"
@@ -890,11 +921,11 @@ export function Composer({
                         : "bg-transparent",
                     )}
                     role="option"
-                    id={`${menuId}-${member.id}`}
+                    id={`${menuId}-${candidate.id}`}
                     aria-selected={index === active}
                     onMouseDown={(event) => {
                       event.preventDefault();
-                      accept(member);
+                      accept(candidate);
                     }}
                     onTouchStart={(event) => {
                       const touch = event.touches[0];
@@ -915,18 +946,28 @@ export function Composer({
                       }
                     }}
                   >
-                    <Avatar memberId={member.id} size="sm" />
+                    {candidate.kind === "all" ? (
+                      <span className="size-[22px] rounded-sm bg-surface inline-flex items-center justify-center flex-none text-fg-muted select-none">
+                        <EveryoneIcon />
+                      </span>
+                    ) : (
+                      <Avatar memberId={candidate.id} size="sm" />
+                    )}
                     <span
                       className={clsx(
                         "min-w-0 flex-1 truncate",
                         inside ? "font-medium" : "font-normal text-fg-muted",
                       )}
                     >
-                      {member.name}
+                      {candidate.name}
                     </span>
                     {inside ? (
                       <span className="flex-none text-xs text-fg-muted">
-                        {member.type === "human" ? "Human" : member.state}
+                        {candidate.kind === "all"
+                          ? "Everyone"
+                          : candidate.member.type === "human"
+                            ? "Human"
+                            : candidate.member.state}
                       </span>
                     ) : null}
                   </button>
