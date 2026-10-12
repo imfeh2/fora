@@ -1,6 +1,10 @@
 import "fake-indexeddb/auto";
 import { webcrypto } from "node:crypto";
+import { createRequire } from "node:module";
+import { dirname, join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { v4 as uuidv4 } from "uuid";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { type Draft, DraftController } from "@/features/discussions/draft";
 import {
@@ -88,13 +92,23 @@ it("clears busy when browser UUID generation has no secure random source", async
   const controller = new DraftController(2, draft());
   const send = vi.fn(async () => true);
   await controller.send(send);
-  expect(browserUuid.path).toMatch(/\/uuid\/dist\/index\.js$/);
   expect(controller.snapshot().busy).toBe(false);
   expect(controller.snapshot().draft.body).toBe("Saved message");
   expect(controller.snapshot().error).toContain(
     "getRandomValues() not supported",
   );
   expect(send).not.toHaveBeenCalled();
+});
+
+it("imports the installed UUID browser entry and its real v4 implementation", async () => {
+  const packagePath = createRequire(import.meta.url).resolve(
+    "uuid/package.json",
+  );
+  expect(relative(dirname(packagePath), browserUuid.path)).toBe(
+    join("dist", "index.js"),
+  );
+  const actual = await import(pathToFileURL(browserUuid.path).href);
+  expect(uuidv4).toBe(actual.v4);
 });
 
 it("creates browser UUID v4 identities with randomUUID completely absent", async () => {
