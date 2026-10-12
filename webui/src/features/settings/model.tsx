@@ -169,7 +169,9 @@ export function ModelSelection({
       <p className="text-sm text-fg-muted">
         {selected
           ? `Effective model: ${catalog.providers.find((provider) => provider.id === selected.provider_id)?.name} / ${selected.name}. Changes apply to the next Turn.`
-          : "No model selected. Configure a provider and model before this Agent runs."}
+          : inherit
+            ? "No model selected. Configure a provider and model before this Agent runs."
+            : "No default model selected. Configure a provider and model to set the organization default."}
       </p>
     </div>
   );
@@ -1039,12 +1041,15 @@ export function ModelPanel() {
               data-provider-list
               className={`min-w-0 flex-col gap-3 border-line p-3 md:w-[280px] md:shrink-0 md:border-r ${open ? "hidden md:flex" : "flex w-full"}`}
             >
-              <SearchField
-                icon={<Search size={16} />}
-                aria-label="Search providers"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
+              <div className="shrink-0">
+                <SearchField
+                  icon={<Search size={16} />}
+                  aria-label="Search providers"
+                  placeholder="Search providers"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
               <div className="flex-1">
                 {[true, false].map((group) => (
                   <section
@@ -1064,66 +1069,66 @@ export function ModelPanel() {
                             .toLowerCase()
                             .includes(search.toLowerCase()),
                       )
-                      .map((item) => (
-                        <div
-                          key={item.id}
-                          className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 hover:bg-surface-hover ${selected === item.id ? "bg-surface-hover" : ""}`}
-                        >
-                          <button
-                            type="button"
-                            data-provider-target
-                            className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
-                            aria-current={
-                              selected === item.id ? "true" : undefined
-                            }
-                            disabled={busy || uncertain || !connected}
-                            onKeyDown={navigateList}
-                            onClick={(event) =>
-                              activate(item.id, event.currentTarget)
-                            }
+                      .map((item) => {
+                        const modelCount = catalog.models.filter(
+                          (model) => model.provider_id === item.id,
+                        ).length;
+                        return (
+                          <div
+                            key={item.id}
+                            className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 hover:bg-surface-hover ${selected === item.id ? "bg-surface-hover" : ""}`}
                           >
-                            <span className="block font-medium">
-                              {item.name}
-                            </span>
-                            <span className="text-xs text-fg-muted">
-                              {item.api_type} ·{" "}
-                              {
-                                catalog.models.filter(
-                                  (model) => model.provider_id === item.id,
-                                ).length
-                              }{" "}
-                              models
-                            </span>
-                          </button>
-                          <OverflowMenu
-                            label={`Actions for ${item.name}`}
-                            actions={[
-                              {
-                                id: "edit",
-                                label: "Edit",
-                                disabled: busy || uncertain || !connected,
-                                onSelect: () => choose(item.id, true),
-                              },
-                              {
-                                id: "delete",
-                                label: "Delete",
-                                tone: "danger",
-                                disabled:
-                                  busy ||
-                                  uncertain ||
-                                  !connected ||
-                                  catalog.models.some(
-                                    (model) => model.provider_id === item.id,
-                                  ) ||
-                                  !catalog.providers.some(
-                                    (provider) => provider.id === item.id,
-                                  ),
-                                onSelect: () => setDeleteProvider(item),
-                              },
-                            ]}
-                          />
-                        </div>
-                      ))}
+                            <button
+                              type="button"
+                              data-provider-target
+                              className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
+                              aria-current={
+                                selected === item.id ? "true" : undefined
+                              }
+                              disabled={busy || uncertain || !connected}
+                              onKeyDown={navigateList}
+                              onClick={(event) =>
+                                activate(item.id, event.currentTarget)
+                              }
+                            >
+                              <span className="block font-medium">
+                                {item.name}
+                              </span>
+                              <span className="text-xs text-fg-muted">
+                                {item.api_type} · {modelCount}{" "}
+                                {modelCount === 1 ? "model" : "models"}
+                              </span>
+                            </button>
+                            <OverflowMenu
+                              label={`Actions for ${item.name}`}
+                              actions={[
+                                {
+                                  id: "edit",
+                                  label: "Edit",
+                                  disabled: busy || uncertain || !connected,
+                                  onSelect: () => choose(item.id, true),
+                                },
+                                {
+                                  id: "delete",
+                                  label: "Delete",
+                                  tone: "danger",
+                                  disabled:
+                                    busy ||
+                                    uncertain ||
+                                    !connected ||
+                                    catalog.models.some(
+                                      (model) => model.provider_id === item.id,
+                                    ) ||
+                                    !catalog.providers.some(
+                                      (provider) => provider.id === item.id,
+                                    ),
+                                  onSelect: () => setDeleteProvider(item),
+                                },
+                              ]}
+                            />
+                          </div>
+                        );
+                      })}
                   </section>
                 ))}
                 {!visibleProviders.some((item) =>
@@ -1290,9 +1295,12 @@ function ProviderModelEditor({
             <p className="font-medium">{model.name}</p>
             <p className="text-xs text-fg-muted">{model.model}</p>
           </div>
-          <Chip>{provider.api_type}</Chip>
-          <label className="flex items-center gap-2 text-sm">
-            <input
+          <label
+            htmlFor={`${id}-enabled`}
+            className="flex items-center gap-2 text-sm"
+          >
+            <Input
+              id={`${id}-enabled`}
               type="checkbox"
               aria-label={`Enable model ${model.name}`}
               checked={model.enabled}
@@ -1382,12 +1390,12 @@ function DefaultModelForm({
     thinking: catalog.default_thinking,
   });
   const dirty = useRef(false);
+  const draftDirty =
+    value.model_id !== catalog.default_model_id ||
+    value.thinking !== catalog.default_thinking;
   useEffect(() => {
-    onDraft?.(
-      value.model_id !== catalog.default_model_id ||
-        value.thinking !== catalog.default_thinking,
-    );
-  }, [onDraft, value, catalog.default_model_id, catalog.default_thinking]);
+    onDraft?.(draftDirty);
+  }, [onDraft, draftDirty]);
   useEffect(() => {
     if (!dirty.current) {
       setValue({
@@ -1404,6 +1412,7 @@ function DefaultModelForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
+        if (busy || !draftDirty) return;
         if (await save("set_defaults", null, value)) dirty.current = false;
       }}
     >
@@ -1414,7 +1423,7 @@ function DefaultModelForm({
         onChange={setValue}
         inherit={false}
       />
-      <Button type="submit" variant="primary">
+      <Button type="submit" variant="primary" disabled={busy || !draftDirty}>
         {busy ? <Spinner label="Saving model defaults" /> : <Save size={16} />}
         Save defaults
       </Button>
@@ -1532,7 +1541,7 @@ function ProviderForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
-        if (unavailable) return;
+        if (busy || unavailable || !draftDirty) return;
         if (body.error !== null) {
           setAdvanced(true);
           requestAnimationFrame(() => bodyInput.current?.focus());
@@ -1725,8 +1734,12 @@ function ProviderForm({
           </p>
         ) : null}
         {provider?.api_key_set ? (
-          <label className="flex items-center gap-2 text-sm">
-            <input
+          <label
+            htmlFor={`${id}-clear-key`}
+            className="flex items-center gap-2 text-sm"
+          >
+            <Input
+              id={`${id}-clear-key`}
               type="checkbox"
               checked={clearKey}
               onChange={(event) => setClearKey(event.target.checked)}
@@ -1735,7 +1748,11 @@ function ProviderForm({
           </label>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" variant="primary" disabled={unavailable}>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={busy || unavailable || !draftDirty}
+          >
             {saving ? <Spinner label="Saving provider" /> : null}
             {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
           </Button>
@@ -1790,8 +1807,12 @@ function ProviderForm({
               <Pencil size={16} />
             </IconButton>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
+          <label
+            htmlFor={`${id}-enabled`}
+            className="flex items-center gap-2 text-sm"
+          >
+            <Input
+              id={`${id}-enabled`}
               type="checkbox"
               aria-label={`Enable ${provider.name}`}
               checked={provider.enabled}
@@ -2279,7 +2300,7 @@ function ModelForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
-        if (unavailable) return;
+        if (busy || unavailable || !draftDirty) return;
         if (!remote.trim()) {
           event.currentTarget
             .querySelector<HTMLInputElement>('[role="combobox"]')
@@ -2369,8 +2390,12 @@ function ModelForm({
           />
         </Field>
       ) : null}
-      <label className="flex items-center gap-2 text-sm">
-        <input
+      <label
+        htmlFor={`${id}-enabled`}
+        className="flex items-center gap-2 text-sm"
+      >
+        <Input
+          id={`${id}-enabled`}
           type="checkbox"
           checked={enabled}
           onChange={(event) => setEnabled(event.target.checked)}
@@ -2402,7 +2427,11 @@ function ModelForm({
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" variant="primary" disabled={unavailable}>
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={busy || unavailable || !draftDirty}
+        >
           {saving ? <Spinner label="Saving model" /> : null}
           Save
         </Button>

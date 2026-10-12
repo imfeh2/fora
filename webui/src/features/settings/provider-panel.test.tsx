@@ -398,9 +398,99 @@ describe("Provider configuration", () => {
     );
     expect(value("API address")).toBe("https://example.test/v1");
   });
+  it("saves only changed provider fields and updates the saved baseline", async () => {
+    await open();
+    const form = screen
+      .getByLabelText("API address")
+      .closest("form") as HTMLFormElement;
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(form);
+    expect(backend.configureModel).not.toHaveBeenCalled();
+    change("API address", "https://draft.test");
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(false);
+    change("API address", "https://example.test/v1");
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    change("API address", "https://changed.test");
+    fireEvent.click(button("Save"));
+    await waitFor(() => {
+      expect(saved.providers[0].base_url).toBe("https://changed.test");
+      expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    });
+    fireEvent.submit(form);
+    expect(backend.configureModel).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enable Example" }));
+    await waitFor(() => {
+      expect(saved.providers[0].enabled).toBe(false);
+      expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    });
+    expect(backend.configureModel).toHaveBeenCalledTimes(2);
+  });
+  it("saves only changed global defaults and retains failed changes for retry", async () => {
+    await open();
+    const form = button("Save defaults").closest("form") as HTMLFormElement;
+    expect((button("Save defaults") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(form);
+    expect(backend.configureModel).not.toHaveBeenCalled();
+    change("Thinking effort", "high");
+    expect((button("Save defaults") as HTMLButtonElement).disabled).toBe(false);
+    change("Thinking effort", "default");
+    expect((button("Save defaults") as HTMLButtonElement).disabled).toBe(true);
+    change("Thinking effort", "high");
+    vi.mocked(backend.configureModel).mockRejectedValueOnce(
+      new BackendError("model_unavailable", "Default unavailable"),
+    );
+    fireEvent.click(button("Save defaults"));
+    await screen.findByText("Default unavailable");
+    await waitFor(() =>
+      expect((button("Save defaults") as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+    expect(value("Thinking effort")).toBe("high");
+    fireEvent.click(button("Save defaults"));
+    await waitFor(() => {
+      expect(saved.default_thinking).toBe("high");
+      expect((button("Save defaults") as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    });
+    fireEvent.submit(form);
+    expect(backend.configureModel).toHaveBeenCalledTimes(2);
+  });
+  it("saves only changed model fields and keeps the provider draft independent", async () => {
+    await open();
+    change("API address", "https://draft.test");
+    await model();
+    const form = screen
+      .getByLabelText("Display name")
+      .closest("form") as HTMLFormElement;
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(form);
+    expect(backend.configureModel).not.toHaveBeenCalled();
+    change("Display name", "Changed model");
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(false);
+    change("Display name", "Example model");
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button("Save"));
+    await waitFor(() => {
+      expect(saved.models[0].enabled).toBe(false);
+      expect((button("Save") as HTMLButtonElement).disabled).toBe(true);
+    });
+    fireEvent.submit(form);
+    expect(backend.configureModel).toHaveBeenCalledTimes(1);
+    fireEvent.click(button("Cancel"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit model" })).toBeNull(),
+    );
+    expect(value("API address")).toBe("https://draft.test");
+    expect((button("Save") as HTMLButtonElement).disabled).toBe(false);
+  });
   it("preserves a blank stored key and supports explicit clearing", async () => {
     await open();
     expect(value("API key")).toBe("");
+    change("API address", "https://changed.test/v1");
     fireEvent.click(button("Save"));
     await waitFor(() =>
       expect(backend.configureModel).toHaveBeenCalledWith(
@@ -889,6 +979,7 @@ describe("Provider configuration", () => {
   });
   it("ignores a catalog response after connection closure and reads on restoration", async () => {
     await open();
+    change("API address", "https://draft.test");
     const read = deferred<ModelCatalog>();
     vi.mocked(backend.modelCatalog).mockImplementationOnce(() => read.promise);
     await emit({ type: "settings.updated", section: "model" });
@@ -1109,7 +1200,7 @@ describe("Provider configuration", () => {
       ),
     );
     await waitFor(() =>
-      expect((button("Save") as HTMLButtonElement).disabled).toBe(false),
+      expect((button("Save") as HTMLButtonElement).disabled).toBe(true),
     );
     await model();
     change("Display name", "Model entered");
