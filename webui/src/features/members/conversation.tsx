@@ -1148,7 +1148,7 @@ function LongContent({
   useEffect(() => {
     if (!root.current) return;
     const node = root.current;
-    const measure = () => setLong(node.scrollHeight > (preview ? 32 : 300));
+    const measure = () => setLong(node.scrollHeight > (preview ? 40 : 300));
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     measure();
@@ -1162,17 +1162,20 @@ function LongContent({
           !expanded &&
             long &&
             (preview
-              ? "max-h-8 overflow-hidden"
+              ? "max-h-10 overflow-hidden"
               : "max-h-[300px] overflow-hidden"),
         )}
       >
         <div ref={root} className="min-w-0">
           {children}
         </div>
-        {!expanded && long && !preview ? (
+        {!expanded && long ? (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-linear-to-t from-surface-raised to-transparent"
+            className={clsx(
+              "pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t to-transparent",
+              preview ? "h-5 from-app" : "h-12 from-surface-raised",
+            )}
           />
         ) : null}
       </div>
@@ -1221,55 +1224,77 @@ function Content({
   const hasImage = leaves.some(
     (leaf) => activityRecord(leaf.value) && leaf.value.kind === "binary",
   );
-  return (
-    <LongContent
-      identity={`${sequence}:${identity}`}
-      preview={preview && !hasImage}
-    >
-      <div className="flex min-w-0 flex-col gap-2">
-        {leaves.map((leaf, index) => {
-          const text = activityText(leaf.value);
-          const key = `${identity}:${leaf.label || index}`;
-          if (text)
-            return (
-              <TextContent
-                key={`${text.source}:${text.request_ordinal}:${text.message_index}:${JSON.stringify(text.path)}`}
-                agentId={agentId}
-                sequence={sequence}
-                reference={text}
-                markdown={markdown}
-              />
-            );
-          if (activityRecord(leaf.value) && leaf.value.kind === "binary") {
-            const reference = leaf.value as unknown as HistoryBinary;
-            return (
-              <ImageContent
-                key={`${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`}
-                agentId={agentId}
-                sequence={sequence}
-                reference={reference}
-              />
-            );
-          }
-          return (
-            <div key={key} className="min-w-0">
-              {leaf.label ? (
-                <div className="text-xs text-fg-muted wrap-anywhere">
-                  {leaf.label}
-                </div>
-              ) : null}
-              {markdown && typeof leaf.value === "string" ? (
-                <Prose>{leaf.value}</Prose>
-              ) : (
-                <pre className="m-0 min-w-0 max-w-full overflow-x-auto font-mono text-xs leading-body whitespace-pre-wrap wrap-anywhere">
-                  {leaf.value === null ? "null" : String(leaf.value)}
-                </pre>
-              )}
-            </div>
+  const previewText = preview && !hasImage;
+  const content = (
+    <div className="flex min-w-0 flex-col gap-2">
+      {leaves.map((leaf, index) => {
+        const text = activityText(leaf.value);
+        const key = `${identity}:${leaf.label || index}`;
+        if (text) {
+          const textKey = `${text.source}:${text.request_ordinal}:${text.message_index}:${JSON.stringify(text.path)}`;
+          const body = (
+            <TextContent
+              key={textKey}
+              agentId={agentId}
+              sequence={sequence}
+              reference={text}
+              markdown={markdown}
+            />
           );
-        })}
-      </div>
-    </LongContent>
+          return previewText ? (
+            <LongContent
+              key={textKey}
+              identity={`${sequence}:${key}:${textKey}`}
+              preview
+            >
+              {body}
+            </LongContent>
+          ) : (
+            body
+          );
+        }
+        if (activityRecord(leaf.value) && leaf.value.kind === "binary") {
+          const reference = leaf.value as unknown as HistoryBinary;
+          return (
+            <ImageContent
+              key={`${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`}
+              agentId={agentId}
+              sequence={sequence}
+              reference={reference}
+            />
+          );
+        }
+        const body =
+          markdown && typeof leaf.value === "string" ? (
+            <Prose>{leaf.value}</Prose>
+          ) : (
+            <pre className="m-0 min-w-0 max-w-full overflow-x-auto font-mono text-xs leading-5 whitespace-pre-wrap wrap-anywhere">
+              {leaf.value === null ? "null" : String(leaf.value)}
+            </pre>
+          );
+        return (
+          <div key={key} className="min-w-0">
+            {leaf.label ? (
+              <div className="text-xs text-fg-muted wrap-anywhere">
+                {leaf.label}
+              </div>
+            ) : null}
+            {previewText ? (
+              <LongContent identity={`${sequence}:${key}`} preview>
+                {body}
+              </LongContent>
+            ) : (
+              body
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+  return previewText ? (
+    content
+  ) : (
+    <LongContent identity={`${sequence}:${identity}`}>{content}</LongContent>
   );
 }
 
@@ -1372,7 +1397,7 @@ function TextContent({
       {markdown ? (
         <Prose>{saved.value}</Prose>
       ) : (
-        <pre className="m-0 max-w-full overflow-x-auto text-xs whitespace-pre-wrap wrap-anywhere">
+        <pre className="m-0 max-w-full overflow-x-auto text-xs leading-5 whitespace-pre-wrap wrap-anywhere">
           {saved.value}
         </pre>
       )}

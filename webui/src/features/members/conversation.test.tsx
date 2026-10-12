@@ -591,6 +591,249 @@ describe("Member conversation", () => {
     expect(details?.textContent).not.toContain("argv 1");
   });
 
+  it.each([20, 40, 60])(
+    "previews whole result lines at a measured body height of %ipx",
+    async (height) => {
+      const output = ["读取资料完成", "测试执行完成", "发布记录完成"]
+        .slice(0, height / 20)
+        .join("\n");
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+        function (this: HTMLElement) {
+          return this.textContent === output ? height : 20;
+        },
+      );
+      vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+        command({ stdout: output, exit_code: 0 }),
+      );
+      mount();
+      const action = await testing.screen.findByRole("button", {
+        name: /Result saved/,
+      });
+      testing.fireEvent.click(action);
+      const body = await testing.screen.findByText(output, {
+        selector: "pre",
+        normalizer: (value) => value,
+      });
+      const frame = body.closest(".relative");
+      expect(body.classList.contains("leading-5")).toBe(true);
+      expect(frame?.contains(testing.screen.getByText("Output"))).toBe(false);
+      expect(
+        frame?.contains(testing.screen.getByText("Exited with code 0")),
+      ).toBe(false);
+      expect(frame?.classList.contains("max-h-10")).toBe(height > 40);
+      expect(frame?.querySelector(".bg-linear-to-t") !== null).toBe(
+        height > 40,
+      );
+      if (height <= 40) {
+        expect(
+          testing.screen.queryByRole("button", { name: "Show more" }),
+        ).toBeNull();
+        return;
+      }
+      expect(frame?.querySelector(".from-app.h-5")).toBeTruthy();
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Show more" }),
+      );
+      expect(frame?.classList.contains("max-h-10")).toBe(false);
+      expect(frame?.querySelector(".bg-linear-to-t")).toBeNull();
+      testing.fireEvent.click(action);
+      testing.fireEvent.click(action);
+      expect(
+        await testing.screen.findByRole("button", { name: "Show less" }),
+      ).toBeTruthy();
+      const restored = testing.screen.getByText(output, {
+        selector: "pre",
+        normalizer: (value) => value,
+      });
+      expect(
+        restored.closest(".relative")?.classList.contains("max-h-10"),
+      ).toBe(false);
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Show less" }),
+      );
+      expect(
+        restored.closest(".relative")?.classList.contains("max-h-10"),
+      ).toBe(true);
+    },
+  );
+
+  it("expands result fields independently and preserves them when switching windows", async () => {
+    const output = "读取资料完成\n测试执行完成\n发布记录完成";
+    const error = "附件读取失败\n保留当前正文\n可以重新读取";
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return [output, error].includes(this.textContent ?? "") ? 60 : 20;
+      },
+    );
+    vi.mocked(backend.agentHistoryWindows).mockResolvedValue(directory([2, 1]));
+    vi.mocked(backend.agentHistory).mockImplementation(
+      async (_agent, _before, _limit, _after, _windowsLimit, options) =>
+        page(
+          options?.window_number ?? 2,
+          options?.window_number === 1 ? [] : [4],
+        ),
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      command({ stdout: output, stderr: error, exit_code: 1 }),
+    );
+    mount();
+    const action = await testing.screen.findByRole("button", {
+      name: /Failed/,
+    });
+    testing.fireEvent.click(action);
+    const body = await testing.screen.findByText(output, {
+      selector: "pre",
+      normalizer: (value) => value,
+    });
+    const failed = testing.screen.getByText(error, {
+      selector: "pre",
+      normalizer: (value) => value,
+    });
+    const expanded = body.closest(".relative")?.parentElement;
+    if (!expanded) throw new Error("Output controls are unavailable");
+    testing.fireEvent.click(
+      testing.within(expanded).getByRole("button", { name: "Show more" }),
+    );
+    expect(failed.closest(".relative")?.classList.contains("max-h-10")).toBe(
+      true,
+    );
+    const picker = testing.screen.getByRole("combobox", {
+      name: "Context window",
+    });
+    await chooseWindow(picker, "1");
+    await testing.screen.findByText("No activity yet");
+    await chooseWindow(picker, "2");
+    await testing.screen.findByRole("button", { name: "Show less" });
+    expect(
+      testing.screen.getAllByRole("button", { name: "Show more" }),
+    ).toHaveLength(1);
+    expect(testing.screen.getByText("Exited with code 1")).toBeTruthy();
+  });
+
+  it("preserves paged result text while expanding and reopening its action", async () => {
+    const output = "读取资料完成\n测试执行完成\n发布记录完成";
+    const suffix = "\n附件核验完成";
+    const offset = new TextEncoder().encode(output).length;
+    const total = offset + new TextEncoder().encode(suffix).length;
+    const reference: HistoryText = {
+      kind: "text",
+      source: "related",
+      request_ordinal: 1,
+      message_index: 0,
+      path: ["parts", 0, "content"],
+      offset: 0,
+      next_offset: offset,
+      total_bytes: total,
+      value: output,
+      has_more: true,
+    };
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.querySelector("pre")?.textContent?.startsWith(output)
+          ? 80
+          : 20;
+      },
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(
+        4,
+        [
+          {
+            part_kind: "tool-call",
+            tool_name: "inspect_file",
+            tool_call_id: "inspect",
+            args: {},
+          },
+        ],
+        [
+          {
+            part_kind: "tool-return",
+            tool_name: "inspect_file",
+            tool_call_id: "inspect",
+            content: reference,
+          },
+        ],
+      ),
+    );
+    const continuation = vi
+      .spyOn(backend, "agentHistoryText")
+      .mockResolvedValue({
+        offset,
+        next_offset: total,
+        total_bytes: total,
+        value: suffix,
+        has_more: false,
+      });
+    mount();
+    const action = await testing.screen.findByRole("button", {
+      name: "inspect_file · Result saved",
+    });
+    testing.fireEvent.click(action);
+    const body = await testing.screen.findByText(output, {
+      selector: "pre",
+      normalizer: (value) => value,
+    });
+    expect(body.classList.contains("leading-5")).toBe(true);
+    expect(body.closest(".relative")?.classList.contains("max-h-10")).toBe(
+      true,
+    );
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Show more" }),
+    );
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Load more text" }),
+    );
+    await testing.screen.findByText(output + suffix, {
+      selector: "pre",
+      normalizer: (value) => value,
+    });
+    expect(continuation.mock.calls[0][2].offset).toBe(offset);
+    testing.fireEvent.click(action);
+    testing.fireEvent.click(action);
+    const restored = await testing.screen.findByText(output + suffix, {
+      selector: "pre",
+      normalizer: (value) => value,
+    });
+    expect(restored.closest(".relative")?.classList.contains("max-h-10")).toBe(
+      false,
+    );
+    expect(
+      testing.screen.queryByRole("button", { name: "Load more text" }),
+    ).toBeNull();
+    expect(continuation).toHaveBeenCalledOnce();
+  });
+
+  it("retains the 300px expansion threshold for command details", async () => {
+    const argv = ["printf", "较长的命令参数".repeat(80)];
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.textContent?.includes(argv[1]) ? 320 : 20;
+      },
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      command({ stdout: "命令执行完成", exit_code: 0 }, { argv }),
+    );
+    mount();
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", { name: /Result saved/ }),
+    );
+    await testing.screen.findByText("命令执行完成");
+    const body = testing.screen.getByText(`printf ${argv[1]}`, {
+      selector: "pre",
+    });
+    const frame = body.closest(".relative");
+    expect(frame?.classList.contains("max-h-[300px]")).toBe(true);
+    expect(frame?.querySelector(".from-surface-raised.h-12")).toBeTruthy();
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Show more" }),
+    );
+    expect(frame?.classList.contains("max-h-[300px]")).toBe(false);
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Show less" }),
+    );
+    expect(frame?.classList.contains("max-h-[300px]")).toBe(true);
+  });
+
   it.each([
     {
       argv: ["python", "-c", "print('library/core/example')"],

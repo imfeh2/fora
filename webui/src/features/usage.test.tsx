@@ -824,7 +824,7 @@ describe("Usage dashboard", () => {
       history.mock.calls[history.mock.calls.length - 1]?.slice(0, 3),
     ).toEqual([2, 4, 1]);
     expect(
-      testing.screen.getByRole("dialog", { name: "Turn #4" }),
+      testing.screen.getByRole("dialog", { name: "Activity #4" }),
     ).toBeTruthy();
     expect(
       testing.screen.queryByRole("dialog", { name: "Request details" }),
