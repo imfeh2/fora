@@ -1084,6 +1084,70 @@ describe("Member conversation", () => {
     );
   });
 
+  it.each([
+    ["view_image", { path: "library/社区网站/发布页面.png" }],
+    ["run", { argv: ["cat", "library/社区网站/新成员指南.md"] }],
+    ["custom_action_with_a_long_unbroken_saved_name", { path: "保存参数" }],
+  ])(
+    "bounds narrow %s actions and preserves expanded content",
+    async (tool, args) => {
+      const output = "完整保存的工具结果与第二级内容保持可读。";
+      vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+        read(
+          4,
+          [
+            {
+              part_kind: "tool-call",
+              tool_name: tool,
+              tool_call_id: "narrow",
+              args,
+            },
+          ],
+          [
+            {
+              part_kind: "tool-return",
+              tool_name: tool,
+              tool_call_id: "narrow",
+              content: output,
+            },
+          ],
+        ),
+      );
+      mount();
+      const toggle = await testing.screen.findByRole("button", {
+        name: /Result saved/,
+      });
+      const bubble = toggle.parentElement?.parentElement;
+      expect(bubble?.classList.contains("w-fit")).toBe(true);
+      expect(
+        bubble?.classList.contains("[@media(max-width:640px)]:max-w-full"),
+      ).toBe(true);
+      expect(
+        toggle.classList.contains("[@media(max-width:640px)]:max-w-full"),
+      ).toBe(true);
+      const title = toggle.querySelector("span.flex-1");
+      expect(title?.classList.contains("truncate")).toBe(true);
+      expect(
+        title?.classList.contains(
+          "[@media(max-width:640px)]:whitespace-normal",
+        ),
+      ).toBe(true);
+      expect(
+        title?.classList.contains("[@media(max-width:640px)]:wrap-anywhere"),
+      ).toBe(true);
+      testing.fireEvent.click(toggle);
+      await testing.screen.findByText(output);
+      const details = toggle.parentElement?.querySelector("div.mt-2");
+      expect(details?.classList.contains("overflow-x-auto")).toBe(true);
+      expect(details?.classList.contains("min-w-0")).toBe(true);
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      testing.fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      testing.fireEvent.click(toggle);
+      await testing.screen.findByText(output);
+      expect(toggle.parentElement?.parentElement).toBe(bubble);
+    },
+  );
   it("keeps the saved action node when an empty associated result becomes available", async () => {
     const initial = command("unused");
     if (!initial.request) throw new Error("Saved request is missing");

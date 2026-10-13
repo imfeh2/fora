@@ -599,7 +599,7 @@ function Bubble({
         </div>
         <div
           className={clsx(
-            "w-fit min-w-0 rounded-lg px-4 py-3 text-sm leading-body wrap-anywhere",
+            "w-fit min-w-0 rounded-lg px-4 py-3 text-sm leading-body wrap-anywhere [@media(max-width:640px)]:max-w-full",
             side === "trigger"
               ? "ml-auto bg-surface-hover"
               : "border border-line bg-surface-raised",
@@ -938,7 +938,7 @@ function ToolAction({
         aria-expanded={opened}
         aria-label={`${title} · ${status}`}
         onClick={() => setOpened((value) => !value)}
-        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-surface-hover"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-left text-xs hover:bg-surface-hover [@media(max-width:640px)]:max-w-full"
       >
         <Tooltip label={status}>
           <Icon
@@ -949,7 +949,9 @@ function ToolAction({
             aria-hidden="true"
           />
         </Tooltip>
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="min-w-0 flex-1 truncate [@media(max-width:640px)]:whitespace-normal [@media(max-width:640px)]:wrap-anywhere">
+          {title}
+        </span>
         <ChevronDown
           className="size-4 flex-none text-fg-muted"
           aria-hidden="true"
