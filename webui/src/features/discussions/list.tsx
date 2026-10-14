@@ -320,40 +320,39 @@ export function DiscussionsPage({
             />
           ) : narrow ? (
             <div
-              className="flex flex-col gap-3"
+              className="flex min-w-0 max-w-full flex-col gap-3"
               role="feed"
               aria-label="Search results"
             >
               {results.map((result) => (
                 <div
                   key={`${result.discussion_id}-${result.id}`}
-                  className="relative flex flex-col gap-2 p-3 border border-line rounded-md bg-surface hover:bg-surface-hover/50"
+                  className="relative flex min-w-0 max-w-full flex-col gap-2 p-3 border border-line rounded-md bg-surface hover:bg-surface-hover/50"
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:max-w-full [&>span]:h-auto [&>span]:min-h-5 [&>span]:whitespace-normal [&>span]:wrap-anywhere">
                     <Chip>{topicOf(result.discussion_id)}</Chip>
                     <span className="text-xs text-fg-muted">
                       {result.sender_name}
                     </span>
                   </div>
-                  <RowLink
-                    primary={
-                      <span className="block font-normal text-fg-muted [&_mark]:bg-blue-500/30 [&_mark]:rounded-xs [&_mark]:text-fg [&_mark]:font-medium">
-                        {segments(result.body, query).map((part) =>
-                          part.match ? (
-                            <mark key={part.id}>{part.text}</mark>
-                          ) : (
-                            <span key={part.id}>{part.text}</span>
-                          ),
-                        )}
-                      </span>
-                    }
-                    onSelect={() =>
+                  <button
+                    type="button"
+                    className="min-w-0 max-w-full min-h-11 p-0 border-0 rounded-xs bg-transparent text-left font-normal text-fg-muted whitespace-normal wrap-anywhere cursor-pointer [&_mark]:bg-blue-500/30 [&_mark]:rounded-xs [&_mark]:text-fg [&_mark]:font-medium"
+                    onClick={() =>
                       navigate({
                         name: "discussion",
                         id: result.discussion_id,
                       })
                     }
-                  />
+                  >
+                    {segments(result.body, query).map((part) =>
+                      part.match ? (
+                        <mark key={part.id}>{part.text}</mark>
+                      ) : (
+                        <span key={part.id}>{part.text}</span>
+                      ),
+                    )}
+                  </button>
                 </div>
               ))}
             </div>
@@ -396,27 +395,50 @@ export function DiscussionsPage({
           connectionError ||
           (archived ? archiveResource.error : discussionsError) ? null : (
             <LoadingSkeleton label="Loading Discussions">
-              <Table columns={LIST_COLUMNS} label="Discussions">
-                {["75%", "55%", "85%"].map((width) => (
-                  <tr key={width}>
-                    <td>
-                      <Skeleton style={{ width }} className="h-7" />
-                    </td>
-                    <td data-hide-below="md">
-                      <Skeleton className="w-24" />
-                    </td>
-                    <td>
-                      <Skeleton className="w-8" />
-                    </td>
-                    <td>
-                      <Skeleton className="w-20" />
-                    </td>
-                    <td>
-                      <Skeleton className="size-6" />
-                    </td>
-                  </tr>
-                ))}
-              </Table>
+              {narrow ? (
+                <div className="flex min-w-0 max-w-full flex-col gap-3">
+                  {["75%", "55%", "85%"].map((width) => (
+                    <div
+                      key={width}
+                      className="flex min-w-0 max-w-full flex-col gap-2 p-3 border border-line rounded-md bg-surface"
+                    >
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <Skeleton className="size-7 flex-none" />
+                        <div className="flex min-w-0 flex-1 items-center min-h-11">
+                          <Skeleton style={{ width }} className="h-5" />
+                        </div>
+                        <Skeleton className="size-11 flex-none" />
+                      </div>
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                        <Skeleton className="h-5 w-28 max-w-full" />
+                        <Skeleton className="h-5 w-20 max-w-full" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Table columns={LIST_COLUMNS} label="Discussions">
+                  {["75%", "55%", "85%"].map((width) => (
+                    <tr key={width}>
+                      <td>
+                        <Skeleton style={{ width }} className="h-7" />
+                      </td>
+                      <td data-hide-below="md">
+                        <Skeleton className="w-24" />
+                      </td>
+                      <td>
+                        <Skeleton className="w-8" />
+                      </td>
+                      <td>
+                        <Skeleton className="w-20" />
+                      </td>
+                      <td>
+                        <Skeleton className="size-6" />
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
             </LoadingSkeleton>
           )
         ) : list.length === 0 ? (
@@ -436,7 +458,7 @@ export function DiscussionsPage({
           />
         ) : narrow ? (
           <div
-            className="flex flex-col gap-3"
+            className="flex min-w-0 max-w-full flex-col gap-3"
             role="feed"
             aria-label="Discussions"
           >
@@ -506,19 +528,25 @@ export function DiscussionCard({
     <div
       data-highlight={item.unread > 0}
       className={clsx(
-        "relative flex flex-col gap-2 p-3 border border-line rounded-md bg-surface transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50",
+        "relative flex min-w-0 max-w-full flex-col gap-2 p-3 border border-line rounded-md bg-surface transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50",
         item.unread > 0 && "border-blue-500/40 bg-surface-raised",
       )}
     >
       <div className="flex items-start justify-between gap-2 min-w-0">
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <span
             className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-gray-800 text-fg-muted"
             aria-hidden="true"
           >
             <MessageSquare size={15} />
           </span>
-          <RowLink primary={item.topic} onSelect={onOpen} />
+          <button
+            type="button"
+            className="flex-1 min-w-0 max-w-full min-h-11 p-0 border-0 rounded-xs bg-transparent text-fg text-left font-semibold whitespace-normal wrap-anywhere cursor-pointer"
+            onClick={onOpen}
+          >
+            {item.topic}
+          </button>
         </div>
         <div className="relative z-10 flex items-center gap-1.5 flex-none">
           {item.unread > 0 ? <Badge tone="unread">{item.unread}</Badge> : null}
@@ -540,8 +568,8 @@ export function DiscussionCard({
           />
         </div>
       </div>
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <div className="flex flex-wrap gap-1">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex min-w-0 max-w-full flex-wrap gap-1 [&>span]:min-w-0 [&>span]:max-w-full [&>span]:h-auto [&>span]:min-h-5 [&>span]:whitespace-normal [&>span]:wrap-anywhere">
           {byId === null ? <Skeleton className="h-5 w-28" /> : null}
           {shown.map((member) => (
             <Chip
@@ -553,7 +581,7 @@ export function DiscussionCard({
           ))}
           {rest > 0 ? <Chip>+{rest}</Chip> : null}
         </div>
-        <div className="flex-none">
+        <div className="min-w-0 max-w-full [&>span]:max-w-full [&>span]:whitespace-normal [&>span]:wrap-anywhere">
           {item.archived ? (
             <StatusText dot={<Dot tone="grey" />}>
               <span className="text-fg-muted">Archived</span>
