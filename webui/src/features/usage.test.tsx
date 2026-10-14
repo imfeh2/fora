@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { TestWorkflow } from "@/features/members/conversation-test-workflow";
 import type {
   AgentHistoryRead,
   BackendEvent,
@@ -30,6 +31,22 @@ let listeners: Set<(event: BackendEvent) => void>;
 let queryMock: ReturnType<typeof vi.spyOn>;
 let readMock: ReturnType<typeof vi.spyOn>;
 let advanceMock: ReturnType<typeof vi.spyOn>;
+const workflows = new Set<TestWorkflow>();
+const mountedContainers = new Set<HTMLElement>();
+
+function workflow(work: (scope: TestWorkflow) => Promise<void>) {
+  return () => {
+    const scope = new TestWorkflow();
+    workflows.add(scope);
+    return scope.run(() => work(scope));
+  };
+}
+
+function ownedUsage(scope: TestWorkflow, value: UsageResult) {
+  const pending = deferred<UsageResult>();
+  scope.own(() => pending.resolve(value));
+  return pending;
+}
 
 const metrics: UsageMetrics = {
   records: 21,
@@ -266,12 +283,26 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  testing.cleanup();
-  vi.useRealTimers();
-  await testing.act(async () => {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  });
-  vi.restoreAllMocks();
+  try {
+    for (const scope of workflows) scope.stop();
+    testing.cleanup();
+    for (const scope of workflows) scope.release();
+    await Promise.all([...workflows].map((scope) => scope.wait()));
+    vi.useRealTimers();
+    await testing.act(async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    });
+    expect(listeners.size).toBe(0);
+    for (const container of mountedContainers) {
+      expect(container.isConnected).toBe(false);
+      expect(container.childElementCount).toBe(0);
+    }
+  } finally {
+    workflows.clear();
+    mountedContainers.clear();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  }
 });
 
 afterAll(() => {
@@ -281,13 +312,14 @@ afterAll(() => {
 
 async function mount() {
   await testing.act(async () => {
-    testing.render(
+    const rendered = testing.render(
       <StrictMode>
         <TooltipProvider>
           <usage.UsagePage />
         </TooltipProvider>
       </StrictMode>,
     );
+    mountedContainers.add(rendered.container);
   });
 }
 
@@ -329,11 +361,12 @@ async function mountApp() {
   });
   vi.spyOn(backendModule.backend, "discussions").mockResolvedValue([]);
   await testing.act(async () => {
-    testing.render(
+    const rendered = testing.render(
       <StrictMode>
         <App />
       </StrictMode>,
     );
+    mountedContainers.add(rendered.container);
   });
 }
 
@@ -351,60 +384,120 @@ describe("Usage dashboard", () => {
     expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
     expect(summaryText()).toContain("9,007,199,254,741,000");
   });
-  it("returns to the overview from model and Agent records through the primary entry while retaining the range", async () => {
-    await mountApp();
-    await click("Usage");
-    await click("Last 30 days");
-    const range = {
-      start_at: lastQuery().start_at,
-      end_at: lastQuery().end_at,
-    };
-    const rangeButton = testing.screen.getByRole("button", {
-      name: "Last 30 days",
-    });
-    const stale = deferred<UsageResult>();
-    queryMock.mockImplementationOnce(() => stale.promise);
-    await click("Saved model");
-    expect(lastQuery().model_key).toBe("saved-model");
-    expect(
-      testing.screen.getByRole("heading", { name: "Saved model" }),
-    ).toBeTruthy();
-    await click("Usage");
-    expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
-    expect(lastQuery()).toMatchObject(range);
-    expect(lastQuery().model_key).toBeUndefined();
-    expect(
-      testing.screen.getByRole("table", { name: "Usage groups" }),
-    ).toBeTruthy();
-    expect(testing.screen.getByRole("button", { name: "Last 30 days" })).toBe(
-      rangeButton,
-    );
-    await testing.act(async () =>
-      stale.resolve({
+  it(
+    "returns from model records through the primary entry and retains the range while ignoring a late response",
+    workflow(async (scope) => {
+      await scope.step(mountApp);
+      await scope.step(() => click("Usage"));
+      await scope.step(() => click("Last 30 days"));
+      const range = {
+        start_at: lastQuery().start_at,
+        end_at: lastQuery().end_at,
+      };
+      const rangeButton = testing.screen.getByRole("button", {
+        name: "Last 30 days",
+      });
+      const staleValue = {
         ...result({ model_key: "saved-model" }),
         summary: { ...metrics, total_tokens: "777" },
-      }),
-    );
-    expect(summaryText()).not.toContain("777");
-    await click("Agent");
-    await click("Researcher");
-    await click("Next");
-    expect(lastQuery().cursor).toBe("opaque-next");
-    await click("Usage");
-    expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
-    expect(lastQuery()).toMatchObject(range);
-    expect(lastQuery().agent_id).toBeUndefined();
-    expect(lastQuery().cursor).toBeUndefined();
-    expect(
-      testing.screen
-        .getByRole("button", { name: "Agent" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    const calls = queryMock.mock.calls.length;
-    await click("Usage");
-    expect(testing.screen.getByRole("heading", { name: "Usage" })).toBeTruthy();
-    expect(queryMock.mock.calls).toHaveLength(calls);
-  });
+      };
+      const stale = ownedUsage(scope, staleValue);
+      queryMock.mockImplementationOnce(() => stale.promise);
+      await scope.step(() => click("Saved model"));
+      expect(lastQuery().model_key).toBe("saved-model");
+      expect(
+        testing.screen.getByRole("heading", { name: "Saved model" }),
+      ).toBeTruthy();
+      await scope.step(() => click("Usage"));
+      expect(
+        testing.screen.getByRole("heading", { name: "Usage" }),
+      ).toBeTruthy();
+      expect(lastQuery()).toMatchObject(range);
+      expect(lastQuery().model_key).toBeUndefined();
+      expect(
+        testing.screen.getByRole("table", { name: "Usage groups" }),
+      ).toBeTruthy();
+      expect(testing.screen.getByRole("button", { name: "Last 30 days" })).toBe(
+        rangeButton,
+      );
+      const calls = queryMock.mock.calls.length;
+      await scope.step(() =>
+        testing.act(async () => stale.resolve(staleValue)),
+      );
+      expect(summaryText()).not.toContain("777");
+      expect(queryMock.mock.calls).toHaveLength(calls);
+    }),
+  );
+
+  it(
+    "returns from Agent pagination through the primary entry and clears its cursor while retaining the range and grouping",
+    workflow(async (scope) => {
+      await scope.step(mountApp);
+      await scope.step(() => click("Usage"));
+      await scope.step(() => click("Last 30 days"));
+      const range = {
+        start_at: lastQuery().start_at,
+        end_at: lastQuery().end_at,
+      };
+      await scope.step(() => click("Agent"));
+      await scope.step(() => click("Researcher"));
+      await scope.step(() => click("Next"));
+      expect(lastQuery()).toMatchObject({
+        ...range,
+        agent_id: 2,
+        cursor: "opaque-next",
+      });
+      await scope.step(() => click("Usage"));
+      expect(
+        testing.screen.getByRole("heading", { name: "Usage" }),
+      ).toBeTruthy();
+      expect(lastQuery()).toMatchObject(range);
+      expect(lastQuery().agent_id).toBeUndefined();
+      expect(lastQuery().cursor).toBeUndefined();
+      expect(
+        testing.screen
+          .getByRole("button", { name: "Agent" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      const calls = queryMock.mock.calls.length;
+      await scope.step(() => click("Usage"));
+      expect(
+        testing.screen.getByRole("heading", { name: "Usage" }),
+      ).toBeTruthy();
+      expect(queryMock.mock.calls).toHaveLength(calls);
+    }),
+  );
+
+  it(
+    "isolates a query completed after unmount from a newly mounted Usage page",
+    workflow(async (scope) => {
+      const lateValue = {
+        ...result(),
+        summary: { ...metrics, total_tokens: "777" },
+      };
+      const pending = ownedUsage(scope, lateValue);
+      queryMock.mockImplementationOnce(() => pending.promise);
+      await scope.step(mount);
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      testing.cleanup();
+      expect(listeners.size).toBe(0);
+      await scope.step(mount);
+      const calls = queryMock.mock.calls.length;
+      const totals = testing.screen.getByRole("region", {
+        name: "Usage totals",
+      });
+      await scope.step(() =>
+        testing.act(async () => pending.resolve(lateValue)),
+      );
+      expect(testing.screen.getByRole("region", { name: "Usage totals" })).toBe(
+        totals,
+      );
+      expect(summaryText()).toContain("9,007,199,254,741,000");
+      expect(summaryText()).not.toContain("777");
+      expect(queryMock.mock.calls).toHaveLength(calls);
+      expect(listeners.size).toBe(1);
+    }),
+  );
 
   it.each([
     [null, "Unavailable"],

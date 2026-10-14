@@ -1,6 +1,7 @@
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TestWorkflow } from "@/features/members/conversation-test-workflow";
 import type { WindowHistoryState } from "@/features/members/history-state";
 import { useConversationHistory } from "@/features/members/use-conversation-history";
 import {
@@ -19,6 +20,31 @@ import {
 const listeners = new Set<(event: BackendEvent) => void>();
 let disconnected = false;
 const date = "2026-10-08T09:15:00Z";
+const workflows = new Set<TestWorkflow>();
+
+function workflow<Args extends unknown[]>(
+  work: (scope: TestWorkflow, ...args: Args) => Promise<void>,
+) {
+  return (...args: Args) => {
+    const scope = new TestWorkflow();
+    workflows.add(scope);
+    return scope.run(() => work(scope, ...args));
+  };
+}
+
+function complete(scope: TestWorkflow, work: () => void | Promise<void>) {
+  return scope.step(() => act(work));
+}
+
+function ownedHistoryPage(scope: TestWorkflow, value: AgentHistoryPage) {
+  const pending = deferred<AgentHistoryPage>();
+  scope.own(() => pending.resolve(value));
+  return pending;
+}
+
+function sequences(upper: number, count: number) {
+  return Array.from({ length: count }, (_, index) => upper - index);
+}
 
 function run(
   sequence: number,
@@ -122,14 +148,210 @@ beforeEach(() => {
   vi.spyOn(backend, "agentHistory").mockResolvedValue(page([45, 16], true));
 });
 
-afterEach(() => {
-  cleanup();
-  expect(listeners.size).toBe(0);
-  expect(document.body.childElementCount).toBe(0);
-  vi.restoreAllMocks();
+afterEach(async () => {
+  try {
+    for (const scope of workflows) scope.stop();
+    cleanup();
+    for (const scope of workflows) scope.release();
+    await Promise.all([...workflows].map((scope) => scope.wait()));
+    if (workflows.size) await act(async () => {});
+    expect(listeners.size).toBe(0);
+    expect(document.body.childElementCount).toBe(0);
+  } finally {
+    workflows.clear();
+    vi.restoreAllMocks();
+  }
 });
 
 describe("useConversationHistory", () => {
+  it.each([0, 5, 30])(
+    "joins every saved history interval when a %i-record summary refreshes during an earlier read",
+    workflow<[number]>(async (scope, summaryCount) => {
+      const pending = ownedHistoryPage(scope, page(sequences(15, 15)));
+      let refreshed = false;
+      vi.mocked(backend.agentHistory).mockImplementation(
+        async (_agent, before) => {
+          if (before === 16) return pending.promise;
+          if (before === 51) return page(sequences(50, 30), true);
+          return page(sequences(refreshed ? 80 : 45, 30), true);
+        },
+      );
+      let hook!: ReturnType<typeof mount>;
+      await complete(scope, async () => {
+        hook = mount();
+      });
+      expect(
+        hook.result.current.history.runs.map((entry) => entry.sequence),
+      ).toEqual(sequences(45, 30));
+      expect(hook.result.current.history.ranges).toEqual([
+        { upper: 45, lower: 16 },
+      ]);
+      let older!: Promise<void>;
+      await complete(scope, async () => {
+        older = hook.result.current.loadOlder();
+        void hook.result.current.loadOlder();
+      });
+      expect(hook.result.current.olderLoading).toBe(true);
+      refreshed = true;
+      await complete(scope, async () => {
+        hook.rerender({
+          ...hook.props,
+          initialRuns: sequences(80, summaryCount).map((sequence) => ({
+            ...run(sequence),
+            effects: [],
+          })),
+        });
+      });
+      expect(
+        hook.result.current.history.runs.map((entry) => entry.sequence),
+      ).toEqual([...sequences(80, 30), ...sequences(45, 30)]);
+      expect(hook.result.current.history.ranges).toEqual([
+        { upper: 80, lower: 51 },
+        { upper: 45, lower: 16 },
+      ]);
+      expect(hook.result.current.olderLoading).toBe(true);
+      await complete(scope, async () => {
+        pending.resolve(page(sequences(15, 15)));
+        await older;
+      });
+      expect(
+        hook.result.current.history.runs.map((entry) => entry.sequence),
+      ).toEqual([...sequences(80, 30), ...sequences(45, 45)]);
+      expect(hook.result.current.history.ranges).toEqual([
+        { upper: 80, lower: 51 },
+        { upper: 45, lower: Number.NEGATIVE_INFINITY },
+      ]);
+      expect(hook.result.current.hasOlder).toBe(true);
+      expect(hook.result.current.olderLoading).toBe(false);
+      await complete(scope, async () => hook.result.current.loadOlder());
+      const saved = hook.result.current.history;
+      expect(saved.runs.map((entry) => entry.sequence)).toEqual(
+        sequences(80, 80),
+      );
+      expect(new Set(saved.runs.map((entry) => entry.sequence)).size).toBe(80);
+      expect(saved.ranges).toEqual([
+        { upper: 80, lower: Number.NEGATIVE_INFINITY },
+      ]);
+      expect(hook.result.current.hasOlder).toBe(false);
+      expect(hook.result.current.olderLoading).toBe(false);
+      expect(hook.result.current.latestLoading).toBe(false);
+      expect(hook.result.current.olderError).toBeNull();
+      expect(hook.result.current.latestError).toBeNull();
+      expect(hook.saved.values.get("history")).toBe(saved);
+      expect(hook.saved.values.get("history:interrupted")).toBeNull();
+      expect(hook.beforeOlder).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(backend.agentHistory).mock.calls).toEqual(
+        [undefined, 16, undefined, 51].map((before) => [
+          2,
+          before,
+          30,
+          undefined,
+          30,
+          { window_number: 1 },
+        ]),
+      );
+      await complete(scope, async () => hook.result.current.loadOlder());
+      expect(backend.agentHistory).toHaveBeenCalledTimes(4);
+    }),
+  );
+
+  it(
+    "isolates an unmounted earlier read from a new hook and its saved history",
+    workflow(async (scope) => {
+      const pending = ownedHistoryPage(scope, page([15, 1]));
+      let previous!: ReturnType<typeof mount>;
+      await complete(scope, async () => {
+        previous = mount();
+      });
+      vi.mocked(backend.agentHistory).mockReturnValueOnce(pending.promise);
+      let older!: Promise<void>;
+      await complete(scope, async () => {
+        older = previous.result.current.loadOlder();
+      });
+      const saved = previous.saved.values.get("history");
+      previous.unmount();
+      expect(listeners.size).toBe(0);
+      vi.mocked(backend.agentHistory).mockResolvedValueOnce(page([8, 7]));
+      let current!: ReturnType<typeof mount>;
+      await complete(scope, async () => {
+        current = mount();
+      });
+      const currentSaved = current.saved.values.get("history");
+      await complete(scope, async () => {
+        pending.resolve(page([15, 1]));
+        await older;
+      });
+      expect(previous.saved.values.get("history")).toBe(saved);
+      expect(current.saved.values.get("history")).toBe(currentSaved);
+      expect(
+        current.result.current.history.runs.map((entry) => entry.sequence),
+      ).toEqual([8, 7]);
+      expect(current.result.current.olderLoading).toBe(false);
+      expect(current.result.current.latestLoading).toBe(false);
+      expect(listeners.size).toBe(1);
+      expect(backend.agentHistory).toHaveBeenCalledTimes(3);
+      current.unmount();
+      expect(listeners.size).toBe(0);
+    }),
+  );
+
+  it("stops a pending workflow before its next action and isolates the following hook", async () => {
+    const previous = mount();
+    await act(async () => {});
+    const saved = previous.saved.values.get("history");
+    const pending = deferred<AgentHistoryPage>();
+    const entered = deferred<void>();
+    vi.mocked(backend.agentHistory).mockReturnValueOnce(pending.promise);
+    const nextAction = vi.fn();
+    const query = vi.fn(() => document.querySelector("button"));
+    const request = vi.fn(() => backend.agentHistory(2));
+    const scope = new TestWorkflow();
+    workflows.add(scope);
+    const completion = scope.run(async () => {
+      scope.own(() => pending.resolve(page([15, 1])));
+      await complete(scope, async () => {
+        entered.resolve();
+        await previous.result.current.loadOlder();
+      });
+      nextAction();
+      query();
+      await scope.step(request);
+    });
+    await entered.promise;
+    expect(scope.status).toBe("running");
+    expect(backend.agentHistory).toHaveBeenCalledTimes(2);
+    scope.stop();
+    expect(scope.status).toBe("stopping");
+    previous.unmount();
+    expect(listeners.size).toBe(0);
+    scope.release();
+    await completion;
+    expect(scope.status).toBe("stopped");
+    expect(nextAction).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(previous.saved.values.get("history")).toBe(saved);
+    vi.mocked(backend.agentHistory).mockResolvedValueOnce(page([8, 7]));
+    const current = mount();
+    await act(async () => {});
+    expect(
+      current.result.current.history.runs.map((entry) => entry.sequence),
+    ).toEqual([8, 7]);
+    expect(backend.agentHistory).toHaveBeenCalledTimes(3);
+    expect(listeners.size).toBe(1);
+    current.unmount();
+    expect(listeners.size).toBe(0);
+  });
+
+  it("preserves an assertion failure when a workflow ends", async () => {
+    const scope = new TestWorkflow();
+    const failure = scope.run(async () => {
+      expect("retained").toBe("expected");
+    });
+    await expect(failure).rejects.toThrow("expected");
+    expect(scope.status).toBe("failed");
+  });
+
   it("merges repeated refresh intentions into one subsequent latest read", async () => {
     const first = deferred<AgentHistoryPage>();
     const second = deferred<AgentHistoryPage>();
