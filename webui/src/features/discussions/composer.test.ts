@@ -92,6 +92,8 @@ describe("composer layout", () => {
     expect(composerHeight(true, 200)).toBe(248);
     expect(autoGrowHeight(248, 22, 28, 0, 8)).toBe(204);
     expect(composerHeight(true, 204)).toBe(252);
+    expect(composerHeight(true, 400)).toBe(252);
+    expect(composerHeight(false, 46, true)).toBe(52);
   });
 
   it("renders a compact input, measuring probe and voice input button", () => {
@@ -119,13 +121,13 @@ describe("composer layout", () => {
     expect(html).toContain('aria-label="Choose attachments"');
     expect(html).toContain("@[601px]:w-3/4");
     expect(html).not.toContain("max-width");
-    expect(html).toContain("--composer-card:oklch(20.5% 0 0)");
-    expect(html).toContain("--composer-primary:oklch(92.2% 0 0)");
+    expect(html).toContain("border-line bg-surface text-fg");
+    expect(html).toContain("bg-blue-500 text-gray-0");
     expect(html).toContain("M7 12V2M7 2L2.5 6.5M7 2L11.5 6.5");
     expect(html).toContain("M7 2.5V11.5M2.5 7H11.5");
     expect(html).toContain("opacity-0 scale-50 rotate-45 blur-[1px]");
     expect(html).toContain("opacity-0 blur-sm translate-y-2");
-    expect(html).toContain("from-(--composer-card)");
+    expect(html).toContain("from-surface via-surface/90 to-transparent");
     expect(html).not.toContain("lucide");
     expect(html).toContain(
       "shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)]",

@@ -47,7 +47,7 @@ export function DraftAttachments({
       {files.map((item) => (
         <li
           key={item.id}
-          className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-(--composer-border) p-2"
+          className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-line p-2"
         >
           <FilePreview file={item.file} />
           <div className="min-w-0 max-w-44">

@@ -1,6 +1,5 @@
 import { clsx } from "clsx";
 import {
-  type CSSProperties,
   Fragment,
   useCallback,
   useEffect,
@@ -31,17 +30,6 @@ import { backend, type Member } from "@/lib/backend";
 import { VoiceRecording, type VoiceState } from "@/lib/voice";
 
 const MENU_LIMIT = 8;
-const composerTheme = {
-  "--composer-background": "oklch(14.5% 0 0)",
-  "--composer-foreground": "oklch(98.5% 0 0)",
-  "--composer-card": "oklch(20.5% 0 0)",
-  "--composer-primary": "oklch(92.2% 0 0)",
-  "--composer-primary-foreground": "oklch(20.5% 0 0)",
-  "--composer-accent": "oklch(26.9% 0 0)",
-  "--composer-muted-foreground": "oklch(70.8% 0 0)",
-  "--composer-border": "rgb(255 255 255 / 0.1)",
-  "--composer-ring": "oklch(55.6% 0 0)",
-} as CSSProperties;
 
 function ArrowUpIcon() {
   return (
@@ -150,8 +138,16 @@ export function composerMultiline(
   );
 }
 
-export function composerHeight(expanded: boolean, inputHeight: number) {
-  return expanded ? Math.max(116, inputHeight + 48) : 48;
+export function composerHeight(
+  expanded: boolean,
+  inputHeight: number,
+  isTouchOrNarrow = false,
+) {
+  return expanded
+    ? Math.min(252, Math.max(116, inputHeight + 48))
+    : isTouchOrNarrow
+      ? 52
+      : 48;
 }
 
 export type ComposerKey = {
@@ -482,6 +478,7 @@ export function Composer({
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const card = useRef<HTMLFieldSetElement>(null);
   const probe = useRef<HTMLTextAreaElement>(null);
+  const compactContainer = useRef<HTMLDivElement>(null);
   const topFade = useRef<HTMLDivElement>(null);
   const bottomFade = useRef<HTMLDivElement>(null);
   const updateFades = useCallback(() => {
@@ -497,7 +494,6 @@ export function Composer({
     topFade.current.style.top = `${element.offsetTop}px`;
     bottomFade.current.style.top = `${element.offsetTop + element.offsetHeight - 32}px`;
   }, []);
-  const baseCompactHeight = isTouchOrNarrow ? 52 : 48;
   const compactPadding = isTouchOrNarrow ? 52 : 44;
   const [layout, setLayout] = useState({
     expanded: false,
@@ -508,14 +504,52 @@ export function Composer({
   useLayoutEffect(() => {
     const element = input.current;
     const measureInput = probe.current;
-    if (!element || !measureInput) return;
+    const compactElement = compactContainer.current;
+    if (!element || !measureInput || !compactElement) return;
     const measure = (typing = false) => {
+      const originalStyle = measureInput.style.cssText;
+      const sizing = getComputedStyle(element);
+      for (const property of [
+        "fontFamily",
+        "fontSize",
+        "fontWeight",
+        "fontStyle",
+        "fontStretch",
+        "fontVariant",
+        "fontFeatureSettings",
+        "fontVariationSettings",
+        "lineHeight",
+        "letterSpacing",
+        "wordSpacing",
+        "textIndent",
+        "textTransform",
+        "textRendering",
+        "direction",
+        "whiteSpace",
+        "wordBreak",
+        "overflowWrap",
+        "tabSize",
+        "boxSizing",
+        "paddingLeft",
+        "paddingRight",
+        "borderTopWidth",
+        "borderBottomWidth",
+        "borderLeftWidth",
+        "borderRightWidth",
+        "borderStyle",
+      ] as const) {
+        measureInput.style[property] = sizing[property];
+      }
+      measureInput.style.boxSizing = "border-box";
+      measureInput.style.width = `${compactElement.clientWidth}px`;
+      measureInput.style.paddingBlock = "12px";
+      measureInput.style.paddingLeft = `${compactPadding}px`;
+      measureInput.style.paddingRight = isTouchOrNarrow ? "52px" : "48px";
       const compactStyle = getComputedStyle(measureInput);
       const compactLine = Number.parseFloat(compactStyle.lineHeight);
       const compactPaddingValue =
         Number.parseFloat(compactStyle.paddingTop) +
         Number.parseFloat(compactStyle.paddingBottom);
-      measureInput.style.height = "auto";
       const expanded =
         files.length > 0 ||
         !!view?.draft.pending ||
@@ -526,27 +560,41 @@ export function Composer({
           compactLine,
           compactPaddingValue,
         );
+      const scrollTop = element.scrollTop;
       element.style.paddingBlock = expanded ? "14px" : "12px";
+      element.style.paddingLeft = `${expanded ? (isTouchOrNarrow ? 14 : 16) : compactPadding}px`;
+      element.style.paddingRight = isTouchOrNarrow ? "52px" : "48px";
       const style = getComputedStyle(element);
       const line = Number.parseFloat(style.lineHeight);
       const padding =
         Number.parseFloat(style.paddingTop) +
         Number.parseFloat(style.paddingBottom);
-      const scrollTop = element.scrollTop;
-      element.style.height = "auto";
+      const border =
+        Number.parseFloat(style.borderTopWidth) +
+        Number.parseFloat(style.borderBottomWidth);
+      const horizontalBorder =
+        Number.parseFloat(style.borderLeftWidth) +
+        Number.parseFloat(style.borderRightWidth);
+      const scrollbar = Math.max(
+        0,
+        element.offsetWidth - element.clientWidth - horizontalBorder,
+      );
+      measureInput.style.width = `${element.getBoundingClientRect().width - scrollbar}px`;
+      measureInput.style.paddingBlock = element.style.paddingBlock;
+      measureInput.style.paddingLeft = element.style.paddingLeft;
+      measureInput.style.paddingRight = element.style.paddingRight;
       const height = expanded
         ? Math.max(
             68,
-            autoGrowHeight(element.scrollHeight, line, padding, 0, 8),
+            autoGrowHeight(measureInput.scrollHeight, line, padding, border, 8),
           )
-        : line + padding;
-      element.style.height = `${height}px`;
+        : line + padding + border;
+      measureInput.style.cssText = originalStyle;
+      element.style.height = `${style.boxSizing === "content-box" ? height - padding - border : height}px`;
       element.scrollTop = scrollTop;
       updateFades();
       setLayout((previous) => {
-        const nextHeight = expanded
-          ? Math.min(300, Math.max(88, height + 48))
-          : baseCompactHeight;
+        const nextHeight = composerHeight(expanded, height, isTouchOrNarrow);
         const smooth =
           previous.expanded !== expanded
             ? false
@@ -562,17 +610,25 @@ export function Composer({
     };
     measure(true);
     let width = element.getBoundingClientRect().width;
-    let compactWidth = measureInput.getBoundingClientRect().width;
+    let contentWidth = element.clientWidth;
+    let compactWidth = compactElement.getBoundingClientRect().width;
     const observer = new ResizeObserver(() => {
       const nextWidth = element.getBoundingClientRect().width;
-      const nextCompactWidth = measureInput.getBoundingClientRect().width;
-      if (nextWidth === width && nextCompactWidth === compactWidth) return;
+      const nextContentWidth = element.clientWidth;
+      const nextCompactWidth = compactElement.getBoundingClientRect().width;
+      if (
+        nextWidth === width &&
+        nextContentWidth === contentWidth &&
+        nextCompactWidth === compactWidth
+      )
+        return;
       width = nextWidth;
+      contentWidth = nextContentWidth;
       compactWidth = nextCompactWidth;
       measure();
     });
     observer.observe(element);
-    observer.observe(measureInput);
+    observer.observe(compactElement);
     let mounted = true;
     void document.fonts.ready.then(() => {
       if (mounted) measure();
@@ -588,7 +644,8 @@ export function Composer({
     extraHeight,
     recordingActive,
     updateFades,
-    baseCompactHeight,
+    compactPadding,
+    isTouchOrNarrow,
   ]);
 
   useLayoutEffect(() => {
@@ -720,19 +777,26 @@ export function Composer({
     <div
       ref={wrapper}
       style={{
-        ...composerTheme,
         bottom: keyboardOffset,
       }}
       className="pointer-events-none absolute inset-x-4 flex justify-center pb-4 narrow:inset-x-2 narrow:pb-[calc(8px+env(safe-area-inset-bottom,0px))]"
     >
       <div
+        ref={compactContainer}
         className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
         aria-hidden="true"
       >
         <Textarea
           ref={probe}
           variant="composer"
-          style={{ paddingLeft: compactPadding }}
+          style={{
+            position: "absolute",
+            height: "auto",
+            minHeight: 0,
+            maxHeight: "none",
+            overflow: "hidden",
+            paddingLeft: compactPadding,
+          }}
           value={body}
           readOnly
           rows={1}
@@ -753,7 +817,7 @@ export function Composer({
         }}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh]",
+          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-line bg-surface text-fg shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-line-focus focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ring)_40%,transparent)] hover:border-line-interactive transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh] touch:max-h-[35dvh]",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
@@ -1089,13 +1153,13 @@ export function Composer({
         <div
           ref={topFade}
           aria-hidden="true"
-          className="pointer-events-none absolute left-4 right-12 top-0 z-[2] h-8 bg-gradient-to-b from-(--composer-card) via-(--composer-card)/90 to-transparent"
+          className="pointer-events-none absolute left-4 right-12 top-0 z-[2] h-8 bg-gradient-to-b from-surface via-surface/90 to-transparent"
           style={{ opacity: 0 }}
         />
         <div
           ref={bottomFade}
           aria-hidden="true"
-          className="pointer-events-none absolute left-4 right-12 z-[2] h-8 bg-gradient-to-t from-(--composer-card) via-(--composer-card)/90 to-transparent"
+          className="pointer-events-none absolute left-4 right-12 z-[2] h-8 bg-gradient-to-t from-surface via-surface/90 to-transparent"
           style={{ opacity: 0 }}
         />
         <div
@@ -1114,7 +1178,7 @@ export function Composer({
               aria-label="Start voice input"
               disabled={disabled}
               onClick={() => void startRecording()}
-              className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
+              className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full text-fg-muted hover:bg-surface-hover"
             >
               <MicIcon />
             </button>
@@ -1152,7 +1216,7 @@ export function Composer({
             onClick={() => fileInput.current?.click()}
             aria-label="Attach files"
             title="Attach files"
-            className="ml-auto flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
+            className="ml-auto flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 flex-none items-center justify-center rounded-full text-fg-muted hover:bg-surface-hover outline-none cursor-default disabled:opacity-40"
           >
             <PlusIcon />
           </button>
@@ -1164,14 +1228,14 @@ export function Composer({
             title="Attach files"
             disabled={!controller || !!view?.recovering || !!view?.moved}
             onClick={() => fileInput.current?.click()}
-            className="absolute left-2 bottom-2 narrow:left-1 narrow:bottom-1 touch:left-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full hover:bg-white/10"
+            className="absolute left-2 bottom-2 narrow:left-1 narrow:bottom-1 touch:left-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full text-fg-muted hover:bg-surface-hover"
           >
             <PlusIcon />
           </button>
         ) : null}
         <button
           type="button"
-          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 touch:right-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
+          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 touch:right-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full bg-blue-500 text-gray-0 transition-all duration-300 hover:enabled:bg-blue-300 active:enabled:bg-blue-700 outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-default motion-reduce:transition-none"
           aria-label={
             recordingActive
               ? "Stop recording"

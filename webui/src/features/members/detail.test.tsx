@@ -530,14 +530,16 @@ describe("Agent history request fields", () => {
     await waitFor(() =>
       expect(view.container.textContent).toContain("Not saved"),
     );
-    expect(backend.agentLiveRead).toHaveBeenCalledWith(
-      2,
-      4,
-      1,
-      0,
-      "epoch",
-      "response",
-      "response-v1",
+    await waitFor(() =>
+      expect(backend.agentLiveRead).toHaveBeenCalledWith(
+        2,
+        4,
+        1,
+        0,
+        "epoch",
+        "response",
+        "response-v1",
+      ),
     );
     updates.emit({ type: "turn.finished", agent_id: 2, sequence: 4 });
     await waitFor(() => expect(view.container.textContent).toBe(""));
