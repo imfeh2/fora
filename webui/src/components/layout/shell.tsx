@@ -93,7 +93,7 @@ export function Shell({
       navigation.trigger.current?.focus();
   }, [narrow, navigation]);
   return (
-    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-surface narrow:grid-cols-[minmax(0,1fr)]">
+    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-app narrow:grid-cols-[minmax(0,1fr)]">
       <div
         ref={navigation?.desktop}
         inert={narrow}
@@ -312,7 +312,7 @@ export function NavSubItem({
 
 export function Page({ children }: { children: ReactNode }) {
   return (
-    <main className="flex-1 flex flex-col min-w-0 min-h-0 bg-surface">
+    <main className="flex-1 flex flex-col min-w-0 min-h-0 bg-app">
       {children}
     </main>
   );

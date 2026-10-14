@@ -16,7 +16,7 @@ export function Segmented<T extends string>({
         <button
           key={option.value}
           type="button"
-          className="h-[26px] py-0 px-3 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:text-fg aria-pressed:bg-gray-700 aria-pressed:text-fg"
+          className="h-[26px] py-0 px-3 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:text-fg aria-pressed:bg-surface-selected aria-pressed:text-fg"
           aria-pressed={option.value === value}
           onClick={() => onChange(option.value)}
         >

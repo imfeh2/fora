@@ -95,7 +95,7 @@ export function Modal({
           ref={content}
           className={
             side === "left"
-              ? "fixed inset-y-0 left-0 z-(--layer-dialog) flex min-h-0 w-[280px] max-w-[85vw] flex-col border-r border-line bg-app shadow-dialog animate-fade-in"
+              ? "fixed inset-y-0 left-0 z-(--layer-dialog) flex min-h-0 w-[280px] max-w-[85vw] flex-col border-r border-line bg-surface-raised shadow-dialog animate-fade-in"
               : `fixed top-1/2 left-1/2 z-(--layer-dialog) flex min-h-0 max-h-[calc(100vh-32px)] flex-col gap-4 p-6 border border-line rounded-lg bg-surface-raised shadow-dialog [translate:-50%_-50%] origin-center animate-pop-in narrow:inset-x-0 narrow:bottom-0 narrow:top-auto narrow:translate-x-0 narrow:translate-y-0 narrow:w-full narrow:max-w-full narrow:rounded-t-lg narrow:rounded-b-none narrow:border-t narrow:border-x-0 narrow:border-b-0 ${maxDvhClass} narrow:p-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))] narrow:animate-slide-up ${wideWidth}`
           }
           onOpenAutoFocus={(event) => {

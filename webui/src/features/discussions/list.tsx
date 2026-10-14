@@ -327,7 +327,7 @@ export function DiscussionsPage({
               {results.map((result) => (
                 <div
                   key={`${result.discussion_id}-${result.id}`}
-                  className="relative flex flex-col gap-2 p-3 border border-line rounded-md bg-app hover:bg-surface-hover/50"
+                  className="relative flex flex-col gap-2 p-3 border border-line rounded-md bg-surface hover:bg-surface-hover/50"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <Chip>{topicOf(result.discussion_id)}</Chip>
@@ -506,7 +506,7 @@ export function DiscussionCard({
     <div
       data-highlight={item.unread > 0}
       className={clsx(
-        "relative flex flex-col gap-2 p-3 border border-line rounded-md bg-app transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50",
+        "relative flex flex-col gap-2 p-3 border border-line rounded-md bg-surface transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50",
         item.unread > 0 && "border-blue-500/40 bg-surface-raised",
       )}
     >

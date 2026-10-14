@@ -538,7 +538,7 @@ export function AvatarStack({
           className={clsx(
             avatarClasses,
             avatarSizes[size],
-            "bg-gray-700 text-fg-muted",
+            "bg-surface-raised text-fg-muted",
           )}
           aria-hidden="true"
         >
@@ -561,7 +561,7 @@ export function Meter({
   const ratio = max > 0 ? Math.min(1, value / max) : 0;
   const tone = ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "normal";
   return (
-    <div className="w-full h-1 rounded-full bg-gray-700 overflow-hidden">
+    <div className="w-full h-1 rounded-full bg-app overflow-hidden">
       <meter
         className="absolute size-px opacity-0 pointer-events-none"
         aria-label={label}
