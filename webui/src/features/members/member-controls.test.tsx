@@ -19,6 +19,7 @@ import {
 } from "@/lib/backend";
 
 let testing: typeof import("@testing-library/react");
+let userEvent: typeof import("@testing-library/user-event").default;
 let screen: typeof testing.screen;
 let fireEvent: typeof testing.fireEvent;
 let act: typeof testing.act;
@@ -27,6 +28,7 @@ let closeDom: () => void;
 let TooltipProvider: typeof import("@/components/ui/tooltip").TooltipProvider;
 let MemberPage: typeof import("@/features/members/detail").MemberPage;
 let MemberRow: typeof import("@/features/members/list").MemberRow;
+let MemberCard: typeof import("@/features/members/list").MemberCard;
 let MembersPage: typeof import("@/features/members/list").MembersPage;
 let Toaster: typeof import("@/components/ui/toast").Toaster;
 let clearToasts: typeof import("@/components/ui/toast").clearToasts;
@@ -72,11 +74,14 @@ beforeAll(async () => {
     },
   );
   testing = await import("@testing-library/react");
+  userEvent = (await import("@testing-library/user-event")).default;
   ({ screen, fireEvent, act, render } = testing);
   ({ TooltipProvider } = await import("@/components/ui/tooltip"));
   ({ Toaster, clearToasts } = await import("@/components/ui/toast"));
   ({ MemberPage } = await import("@/features/members/detail"));
-  ({ MemberRow, MembersPage } = await import("@/features/members/list"));
+  ({ MemberRow, MemberCard, MembersPage } = await import(
+    "@/features/members/list"
+  ));
   ({ AgentModelDialog } = await import("@/features/settings/model"));
 });
 
@@ -195,7 +200,7 @@ function mountRename(location: RenameLocation, refresh = async () => {}) {
     </TooltipProvider>,
   );
   const opener = screen.getByRole("button", {
-    name: location === "human" ? "Helper" : "Actions for Helper",
+    name: location === "human" ? "Rename" : "Actions for Helper",
   });
   opener.focus();
   fireEvent.click(opener);
@@ -234,6 +239,111 @@ function mountModel() {
 }
 
 describe("Member controls", () => {
+  it.each(["agent", "human"] as const)(
+    "keeps the %s card name and menu targets independent",
+    async (type) => {
+      const open = vi.fn();
+      const rename = vi.fn();
+      const toggle = vi.fn();
+      render(
+        <TooltipProvider>
+          <MemberCard
+            member={{ id: 2, name: "Helper", type, state: "paused" }}
+            tokenLimit={0}
+            onOpen={open}
+            onRename={rename}
+            onToggle={toggle}
+            onDelete={() => {}}
+          />
+        </TooltipProvider>,
+      );
+      const name = screen.getByText("Helper");
+      const card = name.closest(".relative");
+      if (!card) throw new Error("Member card is missing");
+      fireEvent.click(card);
+      expect(open).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+      const user = userEvent.setup({ document });
+      await user.tab();
+      if (type === "agent") {
+        const action = screen.getByRole("button", { name: "Helper" });
+        expect(action.className).not.toContain("after:");
+        expect(action.classList.contains("self-start")).toBe(true);
+        expect(document.activeElement).toBe(action);
+        await user.keyboard("{Enter}");
+        expect(open).toHaveBeenCalledOnce();
+        expect(rename).not.toHaveBeenCalled();
+        await user.tab();
+      } else {
+        expect(screen.queryByRole("button", { name: "Helper" })).toBeNull();
+        expect(name.tabIndex).toBe(-1);
+        fireEvent.click(name);
+        fireEvent.keyDown(name, { key: "Enter" });
+        expect(open).not.toHaveBeenCalled();
+        expect(rename).not.toHaveBeenCalled();
+      }
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Actions for Helper" }),
+      );
+      await user.keyboard("{Enter}");
+      await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
+      expect(rename).toHaveBeenCalledOnce();
+      expect(open).toHaveBeenCalledTimes(type === "agent" ? 1 : 0);
+      expect(toggle).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["agent", "human"] as const)(
+    "keeps the %s name and action keyboard targets independent",
+    async (type) => {
+      const open = vi.fn();
+      const rename = vi.fn();
+      render(
+        <TooltipProvider>
+          <ul>
+            <MemberRow
+              member={{ id: 2, name: "Helper", type, state: "paused" }}
+              tokenLimit={0}
+              onOpen={open}
+              onRename={rename}
+              onToggle={() => {}}
+              onDelete={() => {}}
+            />
+          </ul>
+        </TooltipProvider>,
+      );
+      const user = userEvent.setup({ document });
+      await user.tab();
+      if (type === "agent") {
+        expect(document.activeElement).toBe(
+          screen.getByRole("button", { name: "Helper" }),
+        );
+        await user.keyboard("{Enter}");
+        expect(open).toHaveBeenCalledOnce();
+        expect(rename).not.toHaveBeenCalled();
+        await user.tab();
+        expect(document.activeElement).toBe(
+          screen.getByRole("button", { name: "Resume" }),
+        );
+      } else {
+        expect(document.activeElement).toBe(
+          screen.getByRole("button", { name: "Rename" }),
+        );
+        await user.keyboard(" ");
+        expect(rename).toHaveBeenCalledOnce();
+        expect(open).not.toHaveBeenCalled();
+      }
+      await user.tab();
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Actions for Helper" }),
+      );
+      await user.keyboard("{Enter}");
+      await user.click(await screen.findByRole("menuitem", { name: "Rename" }));
+      expect(rename).toHaveBeenCalledTimes(type === "human" ? 2 : 1);
+      expect(open).toHaveBeenCalledTimes(type === "agent" ? 1 : 0);
+    },
+  );
+
   it.each(["human", "agent", "detail"] as const)(
     "protects %s rename drafts on all close paths and returns focus",
     async (location) => {
@@ -371,7 +481,7 @@ describe("Member controls", () => {
       await screen.findByRole("dialog", { name: "Discard unsaved changes?" }),
     ).toBeTruthy();
   });
-  it("keeps row actions independent from navigation and limits Human actions", () => {
+  it("keeps row actions independent from navigation and limits Human actions", async () => {
     const open = vi.fn();
     const rename = vi.fn();
     const toggle = vi.fn();
@@ -389,10 +499,15 @@ describe("Member controls", () => {
         </ul>
       </TooltipProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: "Pause" })),
+    );
     expect(toggle).toHaveBeenCalledOnce();
     expect(open).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Helper" }));
+    const agentName = screen.getByRole("button", { name: "Helper" });
+    fireEvent.click(agentName.closest("li") as HTMLElement);
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(agentName);
     expect(open).toHaveBeenCalledOnce();
     rerender(
       <TooltipProvider>
@@ -408,7 +523,16 @@ describe("Member controls", () => {
         </ul>
       </TooltipProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "You" }));
+    const humanName = screen.getByText("You");
+    expect(screen.queryByRole("button", { name: "You" })).toBeNull();
+    expect(humanName.tabIndex).toBe(-1);
+    fireEvent.click(humanName);
+    fireEvent.keyDown(humanName, { key: "Enter" });
+    fireEvent.keyDown(humanName, { key: " " });
+    fireEvent.click(humanName.closest("li") as HTMLElement);
+    expect(rename).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
     expect(rename).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });

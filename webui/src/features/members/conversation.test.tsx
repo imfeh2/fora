@@ -224,6 +224,74 @@ function message(id: number, senderId = 1, body = "请查看发布说明"): Mess
     attachments: [],
   } as Message;
 }
+function discussionRead(saved: Message): AgentHistoryRead {
+  return read(
+    4,
+    [
+      {
+        part_kind: "tool-call",
+        tool_name: "discussion",
+        tool_call_id: "messages",
+        args: { action: "read", discussion_id: 8 },
+      },
+    ],
+    [
+      {
+        part_kind: "tool-return",
+        tool_name: "discussion",
+        tool_call_id: "messages",
+        content: { id: 8, messages: [saved as unknown as HistoryValue] },
+      },
+    ],
+  );
+}
+function withReminder(
+  value: AgentHistoryRead,
+  content: string,
+): AgentHistoryRead {
+  if (!value.request) throw new Error("Saved request is missing");
+  value.run.reminded = [{ discussion_id: 8, message_id: 12 }];
+  value.request.input = {
+    ...empty,
+    total: 1,
+    messages: [
+      {
+        kind: "request",
+        run_id: null,
+        timestamp: date,
+        metadata: {
+          fora: {
+            context_sources: {
+              version: 1,
+              metadata_was_none: true,
+              fora_was_missing: true,
+              parts: [
+                {
+                  part_index: 0,
+                  kind: "reminder",
+                  source_id: `reminder-${value.run.sequence}`,
+                  agent_id: 2,
+                  sequence: value.run.sequence,
+                },
+              ],
+            },
+          },
+        },
+        parts: [{ part_kind: "user-prompt", content, timestamp: date }],
+      },
+    ],
+  };
+  value.request.response = value.request.response
+    ? {
+        ...value.request.response,
+        messages: value.request.response.messages.map((message) => ({
+          ...(message as Record<string, HistoryValue>),
+          run_id: "sdk-current",
+        })),
+      }
+    : null;
+  return value;
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
@@ -620,7 +688,8 @@ describe("Member conversation", () => {
       name: "Read file docs/发布说明.md · Completed",
     });
     testing.fireEvent.click(action);
-    expect(await testing.screen.findByText("Exited with code 1")).toBeTruthy();
+    expect(await testing.screen.findByText("exit_code")).toBeTruthy();
+    expect(testing.screen.getByText("1")).toBeTruthy();
     expect(testing.screen.getByText("Command output")).toBeTruthy();
   });
 
@@ -870,6 +939,91 @@ describe("Member conversation", () => {
     expect(testing.screen.getByText("Not saved")).toBeTruthy();
   });
 
+  it("keeps initial saved-content placeholders distinct from a retained-content refresh", async () => {
+    const initial = deferred<AgentHistoryRead>();
+    const refresh = deferred<AgentHistoryRead>();
+    vi.mocked(backend.agentHistoryRead)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(refresh.promise);
+    mount();
+    const reading = await testing.screen.findByLabelText(
+      "Reading saved activity",
+    );
+    const reminder = testing.screen.getByLabelText("Loading reminder");
+    expect(reading.getAttribute("aria-busy")).toBe("true");
+    expect(reminder.getAttribute("aria-busy")).toBe("true");
+    expect(reading.querySelector("button,input,select,[tabindex]")).toBeNull();
+    expect(reminder.querySelector("button,input,select,[tabindex]")).toBeNull();
+    expect(testing.screen.queryByText("No saved reminder")).toBeNull();
+    await testing.act(async () =>
+      initial.resolve(
+        read(4, [{ part_kind: "text", content: "已保存完整正文" }]),
+      ),
+    );
+    const body = await testing.screen.findByText("已保存完整正文");
+    const node = body.closest("article");
+    expect(
+      testing.screen.queryByLabelText("Reading saved activity"),
+    ).toBeNull();
+    expect(testing.screen.queryByLabelText("Loading reminder")).toBeNull();
+    await event({ type: "turn.progress", agent_id: 2, sequence: 4 });
+    await testing.screen.findByLabelText("Reading saved activity");
+    expect(testing.screen.getByText("已保存完整正文").closest("article")).toBe(
+      node,
+    );
+    expect(
+      testing.screen
+        .getByLabelText("Reading saved activity")
+        .getAttribute("aria-busy"),
+    ).toBeNull();
+    expect(testing.screen.queryByLabelText("Loading reminder")).toBeNull();
+    await testing.act(async () =>
+      refresh.resolve(
+        read(4, [{ part_kind: "text", content: "已保存完整正文" }]),
+      ),
+    );
+    expect(testing.screen.getByText("已保存完整正文").closest("article")).toBe(
+      node,
+    );
+    expect(
+      testing.screen.queryByLabelText("Reading saved activity"),
+    ).toBeNull();
+  });
+
+  it.each(["failure", "disconnect"] as const)(
+    "ends initial saved-content placeholders after %s",
+    async (outcome) => {
+      const pending = deferred<AgentHistoryRead>();
+      vi.mocked(backend.agentHistoryRead).mockReturnValue(pending.promise);
+      mount();
+      await testing.screen.findByLabelText("Loading reminder");
+      expect(
+        testing.screen.getByLabelText("Reading saved activity"),
+      ).toBeTruthy();
+      if (outcome === "failure") {
+        await testing.act(async () =>
+          pending.reject(
+            new BackendError("timeout", "Saved history timed out"),
+          ),
+        );
+        expect(
+          await testing.screen.findByText("Saved history timed out"),
+        ).toBeTruthy();
+        expect(
+          testing.screen.getByRole("button", { name: "Retry reminder" }),
+        ).toBeTruthy();
+      } else {
+        vi.spyOn(backend, "disconnected", "get").mockReturnValue(true);
+        await event({ type: "connection.closed" });
+      }
+      expect(testing.screen.queryByLabelText("Loading reminder")).toBeNull();
+      expect(
+        testing.screen.queryByLabelText("Reading saved activity"),
+      ).toBeNull();
+      expect(testing.screen.queryByText("No saved reminder")).toBeNull();
+    },
+  );
+
   it("keeps window and conversation reads distinct from confirmed empty history", async () => {
     const windows = deferred<AgentHistoryWindows>();
     const history = deferred<AgentHistoryPage>();
@@ -930,56 +1084,79 @@ describe("Member conversation", () => {
     );
   });
 
-  it("orders successful replies by the saved message time and preserves their nodes as bodies arrive", async () => {
-    const pending =
-      deferred<Awaited<ReturnType<typeof backend.discussionPage>>>();
+  it("keeps the saved action node when an empty associated result becomes available", async () => {
+    const initial = command("unused");
+    if (!initial.request) throw new Error("Saved request is missing");
+    initial.request.related = empty;
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(initial);
+    mount();
+    const toggle = await testing.screen.findByRole("button", {
+      name: /Read file docs/,
+    });
+    const node = toggle.closest("article");
+    const updated = command(
+      JSON.stringify({ stdout: "新增保存结果", stderr: "", exit_code: 0 }),
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(updated);
+    await event({
+      type: "turn.progress",
+      agent_id: 2,
+      sequence: 4,
+    } as BackendEvent);
+    const current = await testing.screen.findByRole("button", {
+      name: /Read file docs.*Result saved/,
+    });
+    expect(current.closest("article")).toBe(node);
+    testing.fireEvent.click(current);
+    expect(await testing.screen.findByText("新增保存结果")).toBeTruthy();
+    expect(testing.screen.queryByText(/Saved complete context/)).toBeNull();
+  });
+
+  it("orders successful replies by saved result positions and retains their nodes while new saved content arrives", async () => {
     const calls = [14, 15].map((id) => ({
       part_kind: "tool-call",
       tool_name: "discussion",
       tool_call_id: `send-${id}`,
-      args: { action: "send", discussion_id: 8 },
+      args: {
+        action: "send",
+        discussion_id: 8,
+        body: id === 15 ? "较早发送的回复" : "随后发送的回复",
+      },
     }));
     const receipts = [15, 14].map((id) => ({
       part_kind: "tool-return",
       tool_name: "discussion",
       tool_call_id: `send-${id}`,
-      content: { discussion_id: 8, id, created_at: date },
+      content: {
+        discussion_id: 8,
+        id,
+        created_at: id === 15 ? "2026-10-08T09:16:00Z" : "2026-10-08T09:17:00Z",
+      },
     }));
     vi.mocked(backend.agentHistoryRead).mockResolvedValue(
       read(4, calls, receipts),
     );
-    vi.spyOn(backend, "discussionPage").mockImplementation(
-      async (_id, options) =>
-        options?.after === 13
-          ? pending.promise
-          : ({
-              id: 8,
-              messages: [
-                {
-                  ...message(15, 2, "较早发送的回复"),
-                  created_at: "2026-10-08T09:16:00Z",
-                },
-              ],
-            } as never),
-    );
+    const current = vi.spyOn(backend, "discussionPage");
     mount();
     const earlier = await testing.screen.findByText("较早发送的回复");
     const node = earlier.closest("article");
-    await testing.act(async () =>
-      pending.resolve({
-        id: 8,
-        messages: [
-          {
-            ...message(14, 2, "随后发送的回复"),
-            created_at: "2026-10-08T09:17:00Z",
-          },
-        ],
-      } as never),
-    );
     await testing.screen.findByText("随后发送的回复");
-    const replies = testing.screen.getAllByRole("article", {
-      name: "Agent message",
-    });
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(
+        4,
+        [...calls, { part_kind: "text", content: "通知记录已经保存" }],
+        receipts,
+      ),
+    );
+    await event({
+      type: "turn.progress",
+      agent_id: 2,
+      sequence: 4,
+    } as BackendEvent);
+    await testing.screen.findByText("通知记录已经保存");
+    const replies = testing.screen
+      .getAllByRole("article", { name: "Agent message" })
+      .filter((reply) => reply.textContent?.includes("Sent to"));
     expect(replies.map((reply) => reply.textContent)).toEqual([
       expect.stringContaining("较早发送的回复"),
       expect.stringContaining("随后发送的回复"),
@@ -988,6 +1165,7 @@ describe("Member conversation", () => {
     expect(
       replies.map((reply) => reply.querySelector("time")?.dateTime),
     ).toEqual(["2026-10-08T09:16:00Z", "2026-10-08T09:17:00Z"]);
+    expect(current).not.toHaveBeenCalled();
     expect(
       testing.screen.queryByRole("button", { name: /Send to/ }),
     ).toBeNull();
@@ -1058,43 +1236,45 @@ describe("Member conversation", () => {
     },
   );
 
-  it("keeps a saved trigger while reconnecting and ignores its interrupted response", async () => {
-    const value = read(4, [{ part_kind: "text", content: "工作记录" }]);
-    value.run.reminded = [{ discussion_id: 8, message_id: 12 }];
-    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
-    const pending =
-      deferred<Awaited<ReturnType<typeof backend.discussionPage>>>();
+  it("keeps a saved Reminder while reconnecting and ignores its interrupted history response", async () => {
+    const reminder = "保存的提醒原文与消息清单";
+    const value = withReminder(
+      read(4, [{ part_kind: "text", content: "工作记录" }]),
+      reminder,
+    );
+    const pending = deferred<AgentHistoryRead>();
     const source = vi
-      .spyOn(backend, "discussionPage")
-      .mockResolvedValueOnce({ id: 8, messages: [message(12)] } as never)
+      .mocked(backend.agentHistoryRead)
+      .mockResolvedValueOnce(value)
       .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue({ id: 8, messages: [message(12)] } as never);
+      .mockResolvedValue(value);
+    const current = vi.spyOn(backend, "discussionPage");
     mount();
-    const body = await testing.screen.findByText("请查看发布说明");
+    const body = await testing.screen.findByText(reminder);
     const node = body.closest("article");
     await event({ type: "connection.closed" });
     await event({ type: "connection.restored" });
     await testing.waitFor(() => expect(source).toHaveBeenCalledTimes(2));
     await event({ type: "connection.closed" });
-    expect(testing.screen.getByText("请查看发布说明").closest("article")).toBe(
-      node,
-    );
+    expect(testing.screen.getByText(reminder).closest("article")).toBe(node);
     await event({ type: "connection.restored" });
     await testing.waitFor(() => expect(source).toHaveBeenCalledTimes(3));
     await testing.act(async () =>
-      pending.resolve({
-        id: 8,
-        messages: [message(12, 1, "过期来源正文")],
-      } as never),
+      pending.resolve(
+        withReminder(
+          read(4, [{ part_kind: "text", content: "过期的工作记录" }]),
+          "过期的提醒原文",
+        ),
+      ),
     );
-    expect(testing.screen.getByText("请查看发布说明").closest("article")).toBe(
-      node,
-    );
-    expect(testing.screen.queryByText("过期来源正文")).toBeNull();
+    expect(testing.screen.getByText(reminder).closest("article")).toBe(node);
+    expect(testing.screen.queryByText("过期的提醒原文")).toBeNull();
+    expect(testing.screen.queryByText("过期的工作记录")).toBeNull();
     expect(source.mock.calls[2]).toEqual(source.mock.calls[0]);
+    expect(current).not.toHaveBeenCalled();
   });
 
-  it("presents command details with readable paths and the saved output", async () => {
+  it("presents the complete saved command parameters and output", async () => {
     vi.mocked(backend.agentHistoryRead).mockResolvedValue(
       command(JSON.stringify({ exit_code: 0, stdout: "命令执行完成" }), {
         argv: [
@@ -1114,15 +1294,24 @@ describe("Member conversation", () => {
     ).toBeNull();
     testing.fireEvent.click(toggle);
     expect(
-      await testing.screen.findByText("python -c \"print('命令执行完成')\""),
+      await testing.screen.findByText("/project/fora/core/.venv/bin/python"),
+    ).toBeTruthy();
+    expect(
+      await testing.screen.findByText("print('命令执行完成')"),
+    ).toBeTruthy();
+    expect(
+      await testing.screen.findByText(
+        "/project/fora/.task-data/community-preview-data",
+      ),
     ).toBeTruthy();
     expect(await testing.screen.findByText("命令执行完成")).toBeTruthy();
-    expect(await testing.screen.findByText("Exited with code 0")).toBeTruthy();
+    expect(
+      testing.screen.getByText("exit_code").parentElement?.querySelector("pre")
+        ?.textContent,
+    ).toBe("0");
     const details = toggle.closest("article");
-    expect(details?.textContent).not.toContain("/project/");
-    expect(details?.textContent).not.toContain(".venv");
-    expect(details?.textContent).not.toContain("cwd");
-    expect(details?.textContent).not.toContain("argv 1");
+    expect(details?.textContent).toContain("cwd");
+    expect(details?.textContent).toContain("argv 1");
   });
 
   it.each([20, 40, 60])(
@@ -1150,10 +1339,10 @@ describe("Member conversation", () => {
       });
       const frame = body.closest(".relative");
       expect(body.classList.contains("leading-5")).toBe(true);
-      expect(frame?.contains(testing.screen.getByText("Output"))).toBe(false);
-      expect(
-        frame?.contains(testing.screen.getByText("Exited with code 0")),
-      ).toBe(false);
+      expect(frame?.contains(testing.screen.getByText("stdout"))).toBe(false);
+      expect(frame?.contains(testing.screen.getByText("exit_code"))).toBe(
+        false,
+      );
       expect(frame?.classList.contains("max-h-10")).toBe(height > 40);
       expect(frame?.querySelector(".bg-linear-to-t") !== null).toBe(
         height > 40,
@@ -1241,7 +1430,10 @@ describe("Member conversation", () => {
     expect(
       testing.screen.getAllByRole("button", { name: "Show more" }),
     ).toHaveLength(1);
-    expect(testing.screen.getByText("Exited with code 1")).toBeTruthy();
+    expect(
+      testing.screen.getByText("exit_code").parentElement?.querySelector("pre")
+        ?.textContent,
+    ).toBe("1");
   });
 
   it("preserves paged result text while expanding and reopening its action", async () => {
@@ -1352,7 +1544,7 @@ describe("Member conversation", () => {
       await testing.screen.findByRole("button", { name: /Result saved/ }),
     );
     await testing.screen.findByText("命令执行完成");
-    const body = testing.screen.getByText(`printf ${argv[1]}`, {
+    const body = testing.screen.getByText(argv[1], {
       selector: "pre",
     });
     const frame = body.closest(".relative");
@@ -1369,23 +1561,11 @@ describe("Member conversation", () => {
   });
 
   it.each([
-    {
-      argv: ["python", "-c", "print('library/core/example')"],
-      displayed: "python -c \"print('library/core/example')\"",
-    },
-    {
-      argv: ["printf", "%s", "category/tmp/example"],
-      displayed: 'printf "%s" category/tmp/example',
-    },
-    {
-      argv: ["curl", "https://example.com/library/core/tmp/example"],
-      displayed: "curl https://example.com/library/core/tmp/example",
-    },
-    {
-      argv: ["cat", "/project/fora/library/社区网站/交接记录.md"],
-      displayed: "cat library/社区网站/交接记录.md",
-    },
-  ])("preserves argument semantics for $argv", async ({ argv, displayed }) => {
+    { argv: ["python", "-c", "print('library/core/example')"] },
+    { argv: ["printf", "%s", "category/tmp/example"] },
+    { argv: ["curl", "https://example.com/library/core/tmp/example"] },
+    { argv: ["cat", "/project/fora/library/社区网站/交接记录.md"] },
+  ])("preserves every saved argument for $argv", async ({ argv }) => {
     const value = command({ exit_code: 0, stdout: "读取完成" }, { argv });
     const original = JSON.stringify(value);
     vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
@@ -1394,7 +1574,11 @@ describe("Member conversation", () => {
       name: /Result saved/,
     });
     testing.fireEvent.click(toggle);
-    expect(await testing.screen.findByText(displayed)).toBeTruthy();
+    for (const argument of argv)
+      expect(
+        (await testing.screen.findAllByText(argument, { selector: "pre" }))
+          .length,
+      ).toBeGreaterThan(0);
     expect(await testing.screen.findByText("读取完成")).toBeTruthy();
     expect(JSON.stringify(value)).toBe(original);
   });
@@ -1404,7 +1588,7 @@ describe("Member conversation", () => {
     "print('/project/fora/library/core/example')",
     "print('core/.venv/bin/python')",
   ])(
-    "shows an explicit command summary for resource-bearing code %s",
+    "preserves complete saved code parameters and a failed command result for %s",
     async (code) => {
       const argv = ["python", "-c", code];
       const value = command(
@@ -1416,19 +1600,15 @@ describe("Member conversation", () => {
       testing.fireEvent.click(
         await testing.screen.findByRole("button", { name: /Run python/ }),
       );
-      await testing.screen.findByText("Command summary");
       expect(
-        await testing.screen.findByText("Run python", { selector: "pre" }),
+        await testing.screen.findByText(code, { selector: "pre" }),
       ).toBeTruthy();
+      await testing.screen.findByText("exit_code");
       expect(
-        testing.screen.getByText(
-          "Open Inspect context for the complete command and arguments.",
-        ),
-      ).toBeTruthy();
-      expect(testing.screen.queryByText(code, { exact: false })).toBeNull();
-      expect(
-        await testing.screen.findByText("Exited with code 2"),
-      ).toBeTruthy();
+        testing.screen
+          .getByText("exit_code")
+          .parentElement?.querySelector("pre")?.textContent,
+      ).toBe("2");
       expect(await testing.screen.findByText("无法读取文件")).toBeTruthy();
       expect(
         await testing.screen.findByRole("button", {
@@ -1441,7 +1621,7 @@ describe("Member conversation", () => {
     },
   );
 
-  it("shows file changes and message attachments without resource paths", async () => {
+  it("shows complete saved file changes and message attachment fields", async () => {
     const path =
       "/project/fora/.task-data/community-preview-data/library/社区网站/交接记录.md";
     const value = read(
@@ -1504,8 +1684,12 @@ describe("Member conversation", () => {
     });
     testing.fireEvent.click(edit);
     await testing.screen.findByText("附件检查已经完成");
-    await testing.screen.findByText("File updated");
-    expect(edit.closest("article")?.textContent).not.toContain("/project/");
+    await testing.screen.findByText("created");
+    expect(
+      testing.screen.getByText("created").parentElement?.querySelector("pre")
+        ?.textContent,
+    ).toBe("false");
+    expect(edit.closest("article")?.textContent).toContain(path);
     testing.fireEvent.click(
       await testing.screen.findByRole("button", {
         name: "Read Discussion 8 · Result saved",
@@ -1513,8 +1697,8 @@ describe("Member conversation", () => {
     );
     await testing.screen.findByText("请查看配图");
     expect(await testing.screen.findByText("发布页面.png")).toBeTruthy();
-    expect(testing.screen.getByRole("feed").textContent).not.toContain(
-      "/project/",
+    expect(testing.screen.getByRole("feed").textContent).toContain(
+      "/project/fora/uploads/saved-image",
     );
     expect(JSON.stringify(value)).toContain(path);
   });
@@ -1813,17 +1997,14 @@ describe("Member conversation", () => {
       width: 1,
       height: 1,
     };
-    vi.spyOn(backend, "discussionPage").mockResolvedValue({
-      id: 8,
-      messages: [
-        {
-          ...message(12),
-          sender_id: 77,
-          sender_name: "陈沐",
-          attachments: [attachment],
-        },
-      ],
-    } as never);
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      discussionRead({
+        ...message(12),
+        sender_id: 77,
+        sender_name: "陈沐",
+        attachments: [attachment],
+      }),
+    );
     const file = vi
       .spyOn(backend, "attachmentFile")
       .mockRejectedValueOnce(new Error("Attachment interrupted"))
@@ -1833,6 +2014,11 @@ describe("Member conversation", () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:community-image");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     const mounted = mount();
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", {
+        name: "Read Discussion 8 · Result saved",
+      }),
+    );
     await testing.screen.findByText("Attachment interrupted");
     testing.fireEvent.click(
       testing.screen.getByRole("button", { name: "Retry preview" }),
@@ -1872,10 +2058,9 @@ describe("Member conversation", () => {
       width: 720,
       height: 360,
     };
-    vi.spyOn(backend, "discussionPage").mockResolvedValue({
-      id: 8,
-      messages: [{ ...message(12), attachments: [attachment] }],
-    } as never);
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      discussionRead({ ...message(12), attachments: [attachment] }),
+    );
     const pending = deferred<Blob>();
     const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
       type: "image/png",
@@ -1890,6 +2075,11 @@ describe("Member conversation", () => {
       .mockReturnValueOnce("blob:recovered");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
     mount();
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", {
+        name: "Read Discussion 8 · Result saved",
+      }),
+    );
     await testing.waitFor(() => expect(file).toHaveBeenCalledTimes(1));
     expect(
       testing.screen.getByRole("status", { name: "Loading image" }),
@@ -1926,7 +2116,7 @@ describe("Member conversation", () => {
       part_kind: "tool-call",
       tool_name: "discussion",
       tool_call_id: "send",
-      args: { action: "send", discussion_id: 8 },
+      args: { action: "send", discussion_id: 8, body: "保存的回复正文" },
     };
     const runCall = {
       part_kind: "tool-call",
@@ -2071,24 +2261,23 @@ describe("Member conversation", () => {
           },
         ]),
     );
+    let retryAllowed = false;
+    const growth =
+      deferred<Awaited<ReturnType<typeof backend.agentHistoryText>>>();
     const text = vi
       .spyOn(backend, "agentHistoryText")
-      .mockRejectedValueOnce(
-        new BackendError("timeout", "Text timed out", true),
-      )
-      .mockResolvedValueOnce({
-        offset: 6,
-        next_offset: 12,
-        total_bytes: 12,
-        value: "内容",
-        has_more: false,
-      })
-      .mockResolvedValueOnce({
-        offset: 12,
-        next_offset: 18,
-        total_bytes: 18,
-        value: "继续",
-        has_more: false,
+      .mockImplementation(async (_agent, _sequence, saved) => {
+        if (!retryAllowed)
+          throw new BackendError("timeout", "Text timed out", true);
+        return saved.offset === 6
+          ? {
+              offset: 6,
+              next_offset: 12,
+              total_bytes: reference.total_bytes,
+              value: "内容",
+              has_more: reference.total_bytes > 12,
+            }
+          : growth.promise;
       });
     mount();
     const body = await testing.screen.findByText("中文");
@@ -2104,52 +2293,72 @@ describe("Member conversation", () => {
     } as BackendEvent);
     await testing.screen.findByText(other);
     expect(testing.screen.getByText("中文")).toBe(body);
+    const failedReads = text.mock.calls.length;
+    expect(text.mock.calls.map((call) => call[2].offset)).toEqual(
+      Array.from({ length: failedReads }, () => 6),
+    );
+    retryAllowed = true;
     testing.fireEvent.click(
       testing.screen.getByRole("button", { name: "Retry text" }),
     );
     expect(await testing.screen.findByText("中文内容")).toBe(body);
-    expect(text.mock.calls[1][2].offset).toBe(6);
-    expect(testing.screen.queryByText("Text timed out")).toBeNull();
+    expect(text.mock.calls[failedReads][2].offset).toBe(6);
+    await event({ type: "turn.progress", agent_id: 2, sequence: 4 });
+    await testing.waitFor(() =>
+      expect(testing.screen.queryByText("Text timed out")).toBeNull(),
+    );
+    expect(testing.screen.getByText("中文内容")).toBe(body);
     reference = { ...reference, total_bytes: 18 };
-    await event({
-      type: "turn.progress",
-      agent_id: 2,
-      sequence: 4,
-    } as BackendEvent);
+    await event({ type: "turn.progress", agent_id: 2, sequence: 4 });
+    await testing.waitFor(() =>
+      expect(text.mock.lastCall?.[2].offset).toBe(12),
+    );
+    expect(testing.screen.getByText("中文内容")).toBe(body);
+    expect(
+      testing.screen.getByLabelText("Reading saved activity"),
+    ).toBeTruthy();
+    await testing.act(async () =>
+      growth.resolve({
+        offset: 12,
+        next_offset: 18,
+        total_bytes: 18,
+        value: "继续",
+        has_more: false,
+      }),
+    );
     testing.fireEvent.click(
       await testing.screen.findByRole("button", { name: "Load more text" }),
     );
     expect(await testing.screen.findByText("中文内容继续")).toBe(body);
-    expect(text.mock.calls.map((call) => call[2].offset)).toEqual([6, 6, 12]);
+    expect(text.mock.calls.map((call) => call[2].offset)).toEqual([
+      ...Array.from({ length: failedReads }, () => 6),
+      6,
+      6,
+      12,
+    ]);
     expect(
       testing.screen.queryByRole("button", { name: "Load more text" }),
     ).toBeNull();
   });
 
   it("updates an unchanged action as saving completes and the run ends", async () => {
-    const action: activityData.ActivityAction = {
-      key: "1:response:0:0",
-      ordinal: 1,
-      messageIndex: 0,
-      partIndex: 0,
-      timestamp: date,
-      value: { part_kind: "tool-call", tool_name: "run" },
-      args: { argv: ["cat", "资料.md"] },
-      results: [],
-      sent: null,
-    };
-    const data: activityData.ActivityData = {
-      run: { ...run(4), status: "running" },
-      requests: [],
-      contents: {},
-      legacy: [],
-      legacyStart: 0,
-      actions: [action],
-      notes: [],
-      final: [],
-      complete: false,
-      missing: [],
-    };
+    const snapshot = read(4, [
+      {
+        part_kind: "tool-call",
+        tool_name: "run",
+        tool_call_id: "read",
+        args: { argv: ["cat", "资料.md"] },
+      },
+    ]);
+    snapshot.run.status = "running";
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(snapshot);
+    const saved = await activityData.loadActivity(
+      2,
+      4,
+      new AbortController().signal,
+      () => {},
+    );
+    const data = { ...saved, complete: false };
     let publish!: (data: activityData.ActivityData) => void;
     const pending = deferred<activityData.ActivityData>();
     vi.spyOn(activityData, "loadActivity").mockImplementation(
@@ -2209,32 +2418,25 @@ describe("Member conversation", () => {
       <ConversationFeed agentId={2} runs={[initial]} loading={false} />
     );
     const rendered = testing.render(view([], false, false, feed));
-    const trigger = await testing.screen.findByLabelText(
-      "Loading trigger information",
-    );
+    const trigger = await testing.screen.findByLabelText("Loading reminder");
     const article = trigger.closest("article");
     expect(
       testing.screen.getByLabelText("Reading saved activity"),
     ).toBeTruthy();
     disconnected = true;
     await event({ type: "connection.closed" } as BackendEvent);
-    expect(
-      testing.screen.queryByLabelText("Loading trigger information"),
-    ).toBeNull();
+    expect(testing.screen.queryByLabelText("Loading reminder")).toBeNull();
     expect(
       testing.screen.queryByLabelText("Reading saved activity"),
     ).toBeNull();
-    expect(
-      testing.screen
-        .getByText("Loading trigger information")
-        .closest("article"),
-    ).toBe(article);
+    expect(testing.screen.getByRole("article", { name: "Reminder" })).toBe(
+      article,
+    );
+    expect(testing.screen.queryByText("No saved reminder")).toBeNull();
     disconnected = false;
     await event({ type: "connection.restored" } as BackendEvent);
     expect(
-      testing.screen
-        .getByLabelText("Loading trigger information")
-        .closest("article"),
+      testing.screen.getByLabelText("Loading reminder").closest("article"),
     ).toBe(article);
     expect(
       testing.screen.getByLabelText("Reading saved activity"),
@@ -2260,7 +2462,11 @@ describe("Member conversation", () => {
     };
     const feed = (cache: WindowCache) => (
       <WindowContext.Provider value={cache}>
-        <ConversationFeed agentId={2} runs={[run(4)]} loading={false} />
+        <ConversationFeed
+          agentId={2}
+          runs={[{ ...run(4), request_count: 0, legacy: true }]}
+          loading={false}
+        />
       </WindowContext.Provider>
     );
     const rendered = testing.render(view([], false, false, feed(firstCache)));
@@ -2288,32 +2494,30 @@ describe("Member conversation", () => {
   });
 
   it("updates adjacent grouping and Member identity through the entry boundary", async () => {
-    const first: activityData.ActivityPart = {
-      key: "1:response:0:0",
-      ordinal: 1,
-      messageIndex: 0,
-      partIndex: 0,
-      timestamp: date,
-      value: { part_kind: "text", content: "第一段正文" },
-    };
+    const first = { part_kind: "text", content: "第一段正文", timestamp: date };
     const second = {
-      ...first,
-      key: "1:response:0:1",
-      partIndex: 1,
-      value: { part_kind: "text", content: "第二段正文" },
+      part_kind: "text",
+      content: "第二段正文",
+      timestamp: date,
     };
-    const data: activityData.ActivityData = {
-      run: run(4),
-      requests: [],
-      contents: {},
-      legacy: [],
-      legacyStart: 0,
-      actions: [],
-      notes: [first, second],
-      final: [],
-      complete: true,
-      missing: [],
-    };
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(4, [first, second]),
+    );
+    const data = await activityData.loadActivity(
+      2,
+      4,
+      new AbortController().signal,
+      () => {},
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(4, [first, { ...second, timestamp: "2026-10-08T09:25:00Z" }]),
+    );
+    const updated = await activityData.loadActivity(
+      2,
+      4,
+      new AbortController().signal,
+      () => {},
+    );
     let publish!: (data: activityData.ActivityData) => void;
     vi.spyOn(activityData, "loadActivity").mockImplementation(
       async (_agent, _sequence, _signal, callback) => {
@@ -2329,12 +2533,7 @@ describe("Member conversation", () => {
     const body = await testing.screen.findByText("第二段正文");
     const article = body.closest("article");
     expect(article?.classList.contains("mt-1")).toBe(true);
-    await testing.act(async () =>
-      publish({
-        ...data,
-        notes: [first, { ...second, timestamp: "2026-10-08T09:25:00Z" }],
-      }),
-    );
+    await testing.act(async () => publish(updated));
     expect(body.closest("article")).toBe(article);
     expect(article?.classList.contains("mt-4")).toBe(true);
     rendered.rerender(view([], false, false, feed, "资料助手"));
@@ -2364,32 +2563,69 @@ describe("Member conversation", () => {
     expect(testing.screen.getByText("较长的已保存正文")).toBe(body);
   });
 
-  it("reads sender identity and the actual message time without a read or ack mutation", async () => {
-    const value = read(4, [{ part_kind: "text", content: "完成记录" }]);
-    value.run.reminded = [
-      { discussion_id: 8, message_id: 12 },
-      { discussion_id: 8, message_id: 12 },
-    ];
+  it("preserves fully read source-unknown text with an explicit missing-source description", async () => {
+    const value = withReminder(
+      read(4, [{ part_kind: "text", content: "完成记录" }]),
+      "来源未保存的原文",
+    );
+    if (!value.request) throw new Error("Saved request is missing");
+    value.request.input.messages[0] = {
+      kind: "request",
+      parts: [{ part_kind: "user-prompt", content: "来源未保存的原文" }],
+    };
     vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
-    const source = vi.spyOn(backend, "discussionPage").mockResolvedValue({
-      id: 8,
-      messages: [message(12)],
-      metadata: { topic: "秋季发布" },
-    } as never);
+    mount();
+    expect(await testing.screen.findByText("来源未保存的原文")).toBeTruthy();
+    expect(
+      await testing.screen.findByText(
+        /The saved context source could not be confirmed/,
+      ),
+    ).toBeTruthy();
+    expect(testing.screen.queryByText("No saved reminder")).toBeNull();
+    expect(testing.screen.queryByText("Loading reminder")).toBeNull();
+    expect(
+      testing.screen.queryByRole("article", { name: "Reminder" }),
+    ).toBeNull();
+  });
+
+  it("shows a fully read empty Reminder at the original activity start time", async () => {
+    const value = withReminder(
+      read(4, [{ part_kind: "text", content: "完成记录" }]),
+      "",
+    );
+    value.run.reminded = [];
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+    mount();
+    expect(
+      (await testing.screen.findByText("No saved reminder"))
+        .closest("article")
+        ?.querySelector("time")?.dateTime,
+    ).toBe(date);
+    expect(testing.screen.queryByText("Loading reminder")).toBeNull();
+  });
+
+  it("shows the complete saved Reminder at the activity start time without reading current discussion messages", async () => {
+    const reminder =
+      "You are 文档助手 (Member 2). These Messages mention you and are waiting for you:\n\n- [previously reminded] Discussion 8 (网站说明), Message 12 from 林小雨\n\nUse discussion action=read to see what they say and the surrounding context, then decide what to do.";
+    const value = withReminder(
+      read(4, [{ part_kind: "text", content: "完成记录" }]),
+      reminder,
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+    const source = vi.spyOn(backend, "discussionPage");
     const markRead = vi.spyOn(backend, "markRead");
     const ack = vi.spyOn(backend, "ack");
     mount();
-    const body = await testing.screen.findByText("请查看发布说明");
+    const body = await testing.screen.findByText(reminder, {
+      selector: "pre",
+      normalizer: (value) => value,
+    });
     const bubble = body.closest("article");
-    expect(bubble?.getAttribute("aria-label")).toBe("Trigger message");
-    expect(bubble?.querySelector("time")?.dateTime).toBe(
-      "2026-10-07T18:00:00Z",
-    );
-    expect(bubble?.textContent).toContain("林小雨");
-    expect(bubble?.querySelectorAll("svg rect").length).toBeGreaterThan(0);
-    expect(source.mock.calls).toEqual([
-      [8, { after: 11, before: 13, limit: 1, metadata: true }],
-    ]);
+    expect(bubble?.getAttribute("aria-label")).toBe("Reminder");
+    expect(bubble?.querySelector("time")?.dateTime).toBe(date);
+    expect(bubble?.querySelectorAll("svg rect")).toHaveLength(0);
+    expect(bubble?.querySelectorAll("a")).toHaveLength(0);
+    expect(source).not.toHaveBeenCalled();
     expect(markRead).not.toHaveBeenCalled();
     expect(ack).not.toHaveBeenCalled();
     expect(await testing.screen.findByText("完成记录")).toBeTruthy();
@@ -2427,7 +2663,9 @@ describe("Member conversation", () => {
     testing.fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(
-      await testing.screen.findByText("cat docs/发布说明.md"),
+      await testing.screen.findByText("/project/fora/docs/发布说明.md", {
+        selector: "pre",
+      }),
     ).toBeTruthy();
     expect(
       await testing.screen.findByText("发布步骤已经核对", { exact: false }),
@@ -2440,76 +2678,99 @@ describe("Member conversation", () => {
       testing.screen.queryByText("/project/fora/docs/发布说明.md"),
     ).toBeNull();
   });
-  it.each([
-    ["not_found", "Trigger message not found"],
-    ["not_a_member", "Access denied to trigger message"],
-  ])(
-    "keeps %s local and retries the saved trigger identity",
-    async (code, label) => {
-      const value = read(4, [{ part_kind: "text", content: "仍可阅读的记录" }]);
-      value.run.reminded = [{ discussion_id: 8, message_id: 12 }];
-      vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+  it.each(["not_found", "not_a_member"])(
+    "keeps a %s history read failure in the Reminder and retries the same saved identity",
+    async (code) => {
+      const value = withReminder(
+        read(4, [{ part_kind: "text", content: "恢复后的工作记录" }]),
+        "本次提醒原文",
+      );
       const source = vi
-        .spyOn(backend, "discussionPage")
+        .mocked(backend.agentHistoryRead)
         .mockRejectedValueOnce(new BackendError(code, "Unavailable"))
-        .mockResolvedValue({ id: 8, messages: [message(12)] } as never);
+        .mockResolvedValue(value);
+      const current = vi.spyOn(backend, "discussionPage");
       mount();
-      const failure = await testing.screen.findByText(label);
+      const failure = await testing.screen.findByText("Unavailable");
       expect(failure.closest("article")?.querySelector("time")?.dateTime).toBe(
         date,
       );
-      expect(await testing.screen.findByText("仍可阅读的记录")).toBeTruthy();
+      expect(testing.screen.queryByText("No saved reminder")).toBeNull();
       testing.fireEvent.click(
-        testing.screen.getByRole("button", { name: "Retry message" }),
+        testing.screen.getByRole("button", { name: "Retry reminder" }),
       );
-      await testing.screen.findByText("请查看发布说明");
+      await testing.screen.findByText("本次提醒原文");
+      await testing.screen.findByText("恢复后的工作记录");
       expect(source.mock.calls[1]).toEqual(source.mock.calls[0]);
+      expect(current).not.toHaveBeenCalled();
     },
   );
-  it("uses successful send identities once and keeps model ending text in inspection", async () => {
-    const value = read(
-      4,
-      [
+  it.each([false, true])(
+    "preserves a successful saved send and its ending text when their complete content matches %s",
+    async (same) => {
+      const value = read(
+        4,
+        [
+          {
+            part_kind: "tool-call",
+            tool_name: "discussion",
+            tool_call_id: "send",
+            args: { action: "send", discussion_id: 8, body: "通知已经发送" },
+          },
+        ],
+        [
+          {
+            part_kind: "tool-return",
+            tool_name: "discussion",
+            tool_call_id: "send",
+            content: { discussion_id: 8, id: 14, created_at: date },
+          },
+        ],
+      );
+      const next = read(4, [
         {
-          part_kind: "tool-call",
-          tool_name: "discussion",
-          tool_call_id: "send",
-          args: { action: "send", discussion_id: 8 },
+          part_kind: "text",
+          content: same ? "通知已经发送" : "工作记录已经保存",
         },
-      ],
-      [
-        {
-          part_kind: "tool-return",
-          tool_name: "discussion",
-          tool_call_id: "send",
-          content: { discussion_id: 8, id: 14, created_at: date },
-        },
-        {
-          part_kind: "tool-return",
-          tool_name: "discussion",
-          tool_call_id: "send",
-          content: { discussion_id: 8, id: 14, created_at: date },
-        },
-      ],
-    );
-    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
-    vi.spyOn(backend, "discussionPage").mockResolvedValue({
-      id: 8,
-      messages: [message(14, 2, "通知已发送")],
-      metadata: { topic: "秋季发布" },
-    } as never);
-    mount();
-    expect(await testing.screen.findByText("通知已发送")).toBeTruthy();
-    expect(testing.screen.getAllByText("通知已发送")).toHaveLength(1);
-    expect(testing.screen.getByText("Sent to 秋季发布")).toBeTruthy();
-    expect(
-      testing.screen.queryByRole("button", { name: /Send to/ }),
-    ).toBeNull();
-    expect(
-      testing.screen.queryByRole("article", { name: "Agent work record" }),
-    ).toBeNull();
-  });
-  it("retries an activity read while preserving the conversation and uses real empty-trigger state", async () => {
+      ]);
+      if (!value.request || !next.request)
+        throw new Error("Saved request is missing");
+      const second = { ...next.requests[0], ordinal: 2 };
+      value.run = { ...value.run, request_count: 2 };
+      value.requests = [value.requests[0], second];
+      next.run = value.run;
+      next.requests = value.requests;
+      next.request.summary = second;
+      next.request.input = {
+        ...empty,
+        total: 2,
+        messages: [
+          ...(value.request.response?.messages ?? []),
+          ...value.request.related.messages,
+        ],
+      };
+      vi.mocked(backend.agentHistoryRead).mockImplementation(
+        async (_agent, _sequence, ordinal) => (ordinal === 2 ? next : value),
+      );
+      const current = vi.spyOn(backend, "discussionPage");
+      mount();
+      expect(await testing.screen.findByText("通知已经发送")).toBeTruthy();
+      await testing.waitFor(() =>
+        expect(testing.screen.getByText("Sent to Discussion 8")).toBeTruthy(),
+      );
+      if (!same) await testing.screen.findByText("工作记录已经保存");
+      expect(testing.screen.getAllByText("通知已经发送")).toHaveLength(1);
+      expect(
+        testing.screen.getAllByRole("button", { name: /Message details/ }),
+      ).toHaveLength(1);
+      expect(
+        testing.screen.queryByRole("article", { name: "Agent work record" }) !==
+          null,
+      ).toBe(!same);
+      expect(current).not.toHaveBeenCalled();
+    },
+  );
+  it("distinguishes a history read failure from a fully read empty Reminder", async () => {
     vi.mocked(backend.agentHistoryRead)
       .mockRejectedValueOnce(
         new BackendError("timeout", "Reading timed out", true),
@@ -2519,20 +2780,19 @@ describe("Member conversation", () => {
       );
     mount();
     await testing.screen.findByText("Reading timed out");
-    const trigger = testing.screen
-      .getByText("No saved trigger information")
+    const reminder = testing.screen
+      .getByText("Reading timed out")
       .closest("article");
-    expect(trigger?.querySelector("time")?.dateTime).toBe(date);
-    expect(trigger?.querySelectorAll("svg rect")).toHaveLength(0);
+    expect(reminder?.querySelector("time")?.dateTime).toBe(date);
+    expect(reminder?.querySelectorAll("svg rect")).toHaveLength(0);
+    expect(testing.screen.queryByText("No saved reminder")).toBeNull();
     testing.fireEvent.click(
-      testing.screen.getByRole("button", { name: "Retry activity" }),
+      testing.screen.getByRole("button", { name: "Retry reminder" }),
     );
     await testing.screen.findByText("读取恢复完成");
     expect(
-      testing.screen
-        .getByText("No saved trigger information")
-        .closest("article"),
-    ).toBe(trigger);
+      (await testing.screen.findByText("No saved reminder")).closest("article"),
+    ).toBe(reminder);
   });
   it("keeps the empty current window selected and exposes migrated records through the missing-window entry", async () => {
     vi.mocked(backend.agentHistoryWindows).mockResolvedValue({
@@ -2661,7 +2921,7 @@ describe("Member conversation", () => {
     expect(continuation.mock.calls[0][2].offset).toBe(6);
     expect(continuation).toHaveBeenCalledOnce();
   });
-  it("keeps a structured output continuation when its action is closed", async () => {
+  it("shares the saved structured output read while its action is closed", async () => {
     const reference: HistoryText = {
       kind: "text",
       source: "related",
@@ -2706,14 +2966,14 @@ describe("Member conversation", () => {
         offset: 10,
         next_offset: 34,
         total_bytes: 34,
-        value: '"迟到","exit_code":0}',
+        value: '"结果","exit_code":0}',
         has_more: false,
       }),
     );
     testing.fireEvent.click(toggle);
     await testing.screen.findByText("结果");
-    expect(testing.screen.queryByText("迟到")).toBeNull();
-    expect(text.mock.calls[1][2].offset).toBe(10);
+    expect(text).toHaveBeenCalledOnce();
+    expect(text.mock.calls[0][2].offset).toBe(10);
   });
   it("loads images within the expanded action and retries the original saved position", async () => {
     const binary = {

@@ -17,7 +17,6 @@ import {
   Page,
   PageBody,
   PageHeader,
-  RowLink,
   useNarrowViewport,
 } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
@@ -308,7 +307,13 @@ export function MemberCard({
           <Avatar memberId={member.id} />
           <div className="flex min-w-0 flex-col gap-0.5">
             {agent ? (
-              <RowLink primary={member.name} onSelect={onOpen} />
+              <button
+                type="button"
+                className="min-w-0 max-w-full self-start text-left font-semibold wrap-anywhere cursor-pointer"
+                onClick={onOpen}
+              >
+                {member.name}
+              </button>
             ) : (
               <span className="min-w-0 truncate font-semibold">
                 {member.name}
@@ -430,13 +435,19 @@ export function MemberRow({
     <li className="relative flex min-w-0 min-h-12 flex-wrap items-center gap-3 px-4 py-2 hover:bg-surface-hover [@media(max-width:640px)]:grid [@media(max-width:640px)]:grid-cols-[auto_minmax(0,1fr)]">
       <Avatar memberId={member.id} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <button
-          type="button"
-          className="min-w-0 text-left font-semibold wrap-anywhere cursor-pointer after:absolute after:inset-0"
-          onClick={agent ? onOpen : onRename}
-        >
-          {member.name}
-        </button>
+        {agent ? (
+          <button
+            type="button"
+            className="min-w-0 max-w-full self-start text-left font-semibold wrap-anywhere cursor-pointer"
+            onClick={onOpen}
+          >
+            {member.name}
+          </button>
+        ) : (
+          <span className="min-w-0 font-semibold wrap-anywhere">
+            {member.name}
+          </span>
+        )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           <Chip tone={agent ? "blue" : "neutral"}>
             {agent ? <Bot size={12} /> : <User size={12} />}

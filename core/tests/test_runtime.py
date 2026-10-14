@@ -11,6 +11,7 @@ import pytest
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
+from fora.adapters.model.context_sources import ContextSources
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.errors import DomainError
@@ -1666,7 +1667,8 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
         key = saved[0].metadata.pop("fora")["cache_key"]
         assert len(key) == 32
         assert saved[: len(prior)] == prior
-        assert saved[-2].metadata == {
+        restored = ContextSources(MAIN, record.sequence).restore([saved[-2]])
+        assert restored[0].metadata == {
             "fora": {
                 "block": "durable",
                 "environment": scheduler.environment_facts(MAIN),

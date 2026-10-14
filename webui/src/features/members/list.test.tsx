@@ -121,19 +121,41 @@ describe("member row", () => {
     expect(render({ ...human, id: 2 })).not.toContain(avatar);
   });
 
-  it("links an agent to its page by name alone", () => {
-    const html = render(agent("idle"));
-    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
-    const nameAction = buttons.find((button) => button.includes(">Helper<"));
-    expect(nameAction).toBeDefined();
-    expect(nameAction?.replace(/<[^>]*>/g, "")).toBe("Helper");
+  it("links an agent to its page by name alone", async () => {
+    const packageName = "jsdom";
+    const { JSDOM } = await import(packageName);
+    const dom = new JSDOM(render(agent("idle")));
+    try {
+      const buttons = [...dom.window.document.querySelectorAll("button")];
+      const nameAction = buttons.find(
+        (button) => button.textContent === "Helper",
+      );
+      expect(nameAction).toBeDefined();
+      expect(nameAction?.textContent).toBe("Helper");
+    } finally {
+      dom.window.close();
+    }
   });
 
-  it("offers a human name action and Rename", () => {
-    const html = render(human);
-    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
-    expect(buttons.join("")).toContain(">You<");
-    expect(buttons.join("")).toContain("Rename");
+  it("offers Human rename controls and noninteractive name text", async () => {
+    const packageName = "jsdom";
+    const { JSDOM } = await import(packageName);
+    const dom = new JSDOM(render(human));
+    try {
+      const buttons = [...dom.window.document.querySelectorAll("button")];
+      expect(buttons.some((button) => button.textContent === "You")).toBe(
+        false,
+      );
+      expect(buttons.some((button) => button.textContent === "Rename")).toBe(
+        true,
+      );
+      const name = [...dom.window.document.querySelectorAll("span")].find(
+        (element) => element.textContent === "You",
+      );
+      expect(name?.tabIndex).toBe(-1);
+    } finally {
+      dom.window.close();
+    }
   });
 
   it("reports the backend state in the State column", () => {

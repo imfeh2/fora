@@ -7,10 +7,13 @@ import {
   Terminal,
 } from "lucide-react";
 import {
+  createContext,
   memo,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -29,8 +32,14 @@ import { StatePanel } from "@/components/ui/state-panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MessageAttachment } from "@/features/discussions/attachments";
 import {
+  type ContextEntry,
+  composeContext,
+  contextImageKey,
+} from "@/features/members/activity-context";
+import {
   type ActivityAction,
   type ActivityData,
+  activityBinary,
   activityParts,
   activityRecord,
   activityText,
@@ -38,18 +47,21 @@ import {
   loadActivity,
   mergeActivityData,
   readableResult,
+  readTextPage,
+  savedTextKey,
+  type TextReads,
 } from "@/features/members/activity-data";
 import { useLiveTool } from "@/features/members/live-tool";
 import { useWindowState } from "@/features/members/window-cache";
 import {
   type AgentHistoryRun,
+  type Attachment,
   BackendError,
   backend,
   type HistoryBinary,
-  type HistoryReminder,
+  type HistoryImage,
   type HistoryText,
   type HistoryValue,
-  type Message,
 } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
 
@@ -58,22 +70,13 @@ type ReadState = {
   loading: boolean;
   error: BackendError | null;
 };
-type SavedMessage = { message: Message; topic: string | null };
-type ConversationUnit = {
-  key: string;
-  sequence: number;
-  timestamp: string;
-  side: "trigger" | "agent";
-  senderId?: number;
-  source?: HistoryReminder;
-  action?: ActivityAction;
-  text?: HistoryValue;
-  saved?: boolean;
-  state?: ReadState;
-  notice?: string;
-  workRecord?: boolean;
-  order?: number[];
-};
+const TextReadContext = createContext<
+  Record<number, { values: Record<string, HistoryText>; reads: TextReads }>
+>({});
+const ImageReadContext = createContext<
+  | ((sequence: number, reference: HistoryBinary, image: HistoryImage) => void)
+  | null
+>(null);
 
 function problem(value: unknown): BackendError {
   return value instanceof BackendError
@@ -82,10 +85,6 @@ function problem(value: unknown): BackendError {
         "history_invalid",
         value instanceof Error ? value.message : String(value),
       );
-}
-
-function messageKey(identity: HistoryReminder) {
-  return `${identity.discussion_id}:${identity.message_id}`;
 }
 
 function ActivityReader({
@@ -99,6 +98,14 @@ function ActivityReader({
   onChange: (sequence: number, update: (saved: ReadState) => ReadState) => void;
   register: (sequence: number, retry: (() => void) | null) => void;
 }) {
+  const [textValues] = useWindowState<Record<string, HistoryText>>(
+    `reader texts:${run.sequence}`,
+    {},
+  );
+  const [textReads] = useWindowState<TextReads>(
+    `reader text requests:${run.sequence}`,
+    () => new Map(),
+  );
   const request = useRef<AbortController | null>(null);
   const pending = useRef<Promise<void> | null>(null);
   const dirty = useRef(false);
@@ -130,27 +137,35 @@ function ActivityReader({
       try {
         for (;;) {
           try {
-            await loadActivity(agentId, run.sequence, abort.signal, (data) => {
-              if (abort.signal.aborted || current !== generation.current)
-                return;
-              const version = data.usageVersion;
-              const revision = version?.live_versions?.find(
-                ([id, sequence]) => id === agentId && sequence === run.sequence,
-              )?.[2];
-              if (
-                version?.runtime_epoch === confirmed.current.epoch &&
-                revision !== undefined &&
-                revision < confirmed.current.revision
-              ) {
-                dirty.current = true;
-                return;
-              }
-              onChange(run.sequence, (saved) => ({
-                ...saved,
-                data: mergeActivityData(saved.data, data),
-                error: null,
-              }));
-            });
+            await loadActivity(
+              agentId,
+              run.sequence,
+              abort.signal,
+              (data) => {
+                if (abort.signal.aborted || current !== generation.current)
+                  return;
+                const version = data.usageVersion;
+                const revision = version?.live_versions?.find(
+                  ([id, sequence]) =>
+                    id === agentId && sequence === run.sequence,
+                )?.[2];
+                if (
+                  version?.runtime_epoch === confirmed.current.epoch &&
+                  revision !== undefined &&
+                  revision < confirmed.current.revision
+                ) {
+                  dirty.current = true;
+                  return;
+                }
+                onChange(run.sequence, (saved) => ({
+                  ...saved,
+                  data: mergeActivityData(saved.data, data),
+                  error: null,
+                }));
+              },
+              textValues,
+              textReads,
+            );
             if (abort.signal.aborted || current !== generation.current) return;
             onChange(run.sequence, (saved) => ({ ...saved, error: null }));
           } catch (error) {
@@ -181,7 +196,7 @@ function ActivityReader({
     });
     pending.current = operation;
     return operation;
-  }, [agentId, clearTimer, run.sequence, onChange]);
+  }, [agentId, clearTimer, run.sequence, onChange, textValues, textReads]);
   useEffect(() => {
     connected.current = true;
     const schedule = (immediate = false) => {
@@ -198,6 +213,7 @@ function ActivityReader({
         connected.current = false;
         generation.current += 1;
         request.current?.abort();
+        textReads.clear();
         pending.current = null;
         dirty.current = false;
         clearTimer();
@@ -246,10 +262,11 @@ function ActivityReader({
       request.current?.abort();
       pending.current = null;
       dirty.current = false;
+      textReads.clear();
       clearTimer();
       off();
     };
-  }, [agentId, clearTimer, run.sequence, load, onChange]);
+  }, [agentId, clearTimer, run.sequence, load, onChange, textReads]);
   useEffect(() => {
     void load();
   }, [run.status, run.last_saved_at, run.request_count, load]);
@@ -277,9 +294,22 @@ export function ConversationFeed({
     "conversation:reads",
     {},
   );
-  const [messages, setMessages] = useWindowState<Record<string, SavedMessage>>(
-    "conversation:messages",
+  const [images, setImages] = useWindowState<Record<string, HistoryImage>>(
+    "conversation:images",
     {},
+  );
+  const [identities] = useWindowState(
+    "conversation:identities",
+    () => new Map<string, string>(),
+  );
+  const onImage = useCallback(
+    (sequence: number, reference: HistoryBinary, image: HistoryImage) => {
+      setImages((saved) => ({
+        ...saved,
+        [contextImageKey(sequence, reference)]: image,
+      }));
+    },
+    [setImages],
   );
   const onChange = useCallback(
     (sequence: number, update: (saved: ReadState) => ReadState) => {
@@ -292,12 +322,7 @@ export function ConversationFeed({
     },
     [setReads],
   );
-  const onMessage = useCallback(
-    (identity: string, message: SavedMessage) => {
-      setMessages((saved) => ({ ...saved, [identity]: message }));
-    },
-    [setMessages],
-  );
+
   const retries = useRef(new Map<number, () => void>());
   const register = useCallback(
     (sequence: number, retry: (() => void) | null) => {
@@ -312,122 +337,176 @@ export function ConversationFeed({
     retry();
   }, []);
   const disconnected = backend.disconnected;
-  const units: ConversationUnit[] = [];
+  const textCaches = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(reads).flatMap(([sequence, state]) =>
+          state.data
+            ? [
+                [
+                  sequence,
+                  {
+                    values: state.data.textValues,
+                    reads: state.data.textReads,
+                  },
+                ],
+              ]
+            : [],
+        ),
+      ),
+    [reads],
+  );
+  const composition = composeContext(
+    agentId,
+    runs.flatMap((run) =>
+      reads[run.sequence]?.data
+        ? [reads[run.sequence].data as ActivityData]
+        : [],
+    ),
+    images,
+    identities,
+  );
+  const presentation: ReactNode[] = [];
   for (const run of runs) {
     const state = reads[run.sequence];
     const data = state?.data;
-    const base = { sequence: run.sequence, timestamp: run.started_at };
-    const identities = data?.run.reminded ?? run.reminded;
-    if (identities === undefined) {
-      units.push({
-        ...base,
-        key: `${run.sequence}:trigger`,
-        side: "trigger",
-        notice: "Loading trigger information",
-      });
-    } else if (!identities.length) {
-      units.push({
-        ...base,
-        key: `${run.sequence}:trigger`,
-        side: "trigger",
-        notice: "No saved trigger information",
-      });
-    } else {
-      const seen = new Set<string>();
-      for (const source of identities) {
-        const id = messageKey(source);
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const saved = messages[id];
-        units.push({
-          ...base,
-          key: `${run.sequence}:trigger:${id}`,
-          side: "trigger",
-          source,
-          timestamp: saved?.message.created_at ?? run.started_at,
-          senderId: saved?.message.sender_id,
-        });
-      }
-    }
-    const agentUnits: ConversationUnit[] = [];
-    const replies = new Set<string>();
-    for (const action of data?.actions ?? []) {
-      const sent = action.sent;
-      const id = sent ? messageKey(sent) : action.key;
-      if (sent && replies.has(id)) continue;
-      if (sent) replies.add(id);
-      agentUnits.push({
-        ...base,
-        key: `${run.sequence}:${sent ? "reply" : "action"}:${id}`,
-        side: "agent",
-        senderId: agentId,
-        timestamp:
-          (sent ? messages[id]?.message.created_at : undefined) ??
-          sent?.created_at ??
-          action.timestamp ??
-          data?.contents[action.ordinal]?.summary.started_at ??
-          run.started_at,
-        source: sent ?? undefined,
-        action: sent ? undefined : action,
-        order: [action.ordinal, action.messageIndex, action.partIndex],
-      });
-    }
-    for (const part of data?.notes ?? []) {
-      if (part.value.part_kind !== "text") continue;
-      agentUnits.push({
-        ...base,
-        key: `${run.sequence}:text:${part.key}`,
-        side: "agent",
-        senderId: agentId,
-        timestamp: part.timestamp ?? run.started_at,
-        text: part.value.content,
-        saved: part.saved,
-        order: [part.ordinal, part.messageIndex, part.partIndex],
-      });
-    }
-    agentUnits.sort(
-      (left, right) =>
-        Date.parse(left.timestamp) - Date.parse(right.timestamp) ||
-        (left.order?.[0] ?? 0) - (right.order?.[0] ?? 0) ||
-        (left.order?.[1] ?? 0) - (right.order?.[1] ?? 0) ||
-        (left.order?.[2] ?? 0) - (right.order?.[2] ?? 0),
+    const content = composition.entries.filter(
+      (entry) => entry.sequence === run.sequence,
     );
-    units.push(...agentUnits);
-    for (const part of data?.final ?? [])
-      units.push({
-        ...base,
-        key: `${run.sequence}:record:${part.key}`,
-        side: "agent",
-        senderId: agentId,
-        timestamp: part.timestamp ?? run.completed_at ?? run.started_at,
-        text: part.value.content,
-        workRecord: true,
-      });
-    const notice =
-      data?.run.error ??
-      (data?.missing.length
-        ? `Historical content is incomplete: ${data.missing.join(", ")}`
-        : data?.complete && !agentUnits.length && !data.final.length
-          ? data.run.status === "running"
-            ? "Waiting for saved content"
-            : "No saved content"
-          : undefined);
-    if (
-      notice ||
-      state?.error ||
-      state?.loading ||
-      !state ||
-      data?.run.status === "running"
-    ) {
-      units.push({
-        ...base,
-        key: `${run.sequence}:state`,
-        side: "agent",
-        senderId: agentId,
-        state,
-        notice,
-      });
+    const reminder = content.some((entry) => entry.reminder);
+    const empty =
+      data?.complete &&
+      data.requests.length > 0 &&
+      !data.missing.length &&
+      data.requests.every(
+        (request) => data.contents[request.ordinal]?.request.input.total === 0,
+      );
+    const needsReminder =
+      !reminder && ((run.request_count > 0 && !data?.complete) || empty);
+    const status = needsReminder ? (
+      <Bubble
+        key={`${run.sequence}:reminder`}
+        identity={`${run.sequence}:reminder`}
+        side="trigger"
+        timestamp={run.started_at}
+        grouped={false}
+        label="Reminder"
+      >
+        {empty ? (
+          <p className="m-0">No saved reminder</p>
+        ) : state?.error ? (
+          <Retry
+            error={state.error.message}
+            loading={state.loading}
+            label="Retry reminder"
+            onRetry={() => onRetry(run.sequence)}
+          />
+        ) : !disconnected ? (
+          <LoadingSkeleton label="Loading reminder">
+            <Skeleton className="w-48 max-w-full" />
+            <Skeleton className="w-32 max-w-full" />
+          </LoadingSkeleton>
+        ) : null}
+      </Bubble>
+    ) : null;
+    let placed = false;
+    for (const [index, entry] of content.entries()) {
+      if (
+        !placed &&
+        !["Instructions", "Session context"].includes(entry.title ?? "")
+      ) {
+        if (status) presentation.push(status);
+        placed = true;
+      }
+      presentation.push(
+        <ConversationEntry
+          key={entry.key}
+          identity={entry.key}
+          sequence={entry.sequence}
+          timestamp={entry.action?.sent?.created_at ?? entry.timestamp ?? ""}
+          kind={entry.value.part_kind}
+          value={
+            ["text", "thinking", "user-prompt", "system-prompt"].includes(
+              String(entry.value.part_kind),
+            ) && entry.value.content !== undefined
+              ? entry.value.content
+              : entry.value
+          }
+          title={entry.title}
+          reminder={entry.reminder}
+          action={entry.action}
+          reply={entry.reply}
+          workRecord={entry.workRecord}
+          diagnostic={entry.diagnostic}
+          emptyReminder={entry.reminder && entry.resolved.content === ""}
+          saved={entry.saved}
+          agentId={agentId}
+          name={name}
+          grouped={
+            content[index - 1]?.reminder === entry.reminder &&
+            !entry.title &&
+            Math.abs(
+              Date.parse(
+                entry.action?.sent?.created_at ?? entry.timestamp ?? "",
+              ) -
+                Date.parse(
+                  content[index - 1]?.action?.sent?.created_at ??
+                    content[index - 1]?.timestamp ??
+                    "",
+                ),
+            ) < 300_000
+          }
+          complete={data?.complete ?? false}
+          running={data?.run.status === "running"}
+        />,
+      );
     }
+    if (!placed && status) presentation.push(status);
+    if (state?.error && !needsReminder)
+      presentation.push(
+        <Retry
+          key={`${run.sequence}:error`}
+          error={state.error.message}
+          loading={state.loading}
+          label="Retry activity"
+          onRetry={() => onRetry(run.sequence)}
+        />,
+      );
+    if (data?.run.error)
+      presentation.push(
+        <p
+          key={`${run.sequence}:model error`}
+          role="alert"
+          className="text-sm text-danger wrap-anywhere"
+        >
+          {data.run.error}
+        </p>,
+      );
+    if (!data && !state?.error && !disconnected)
+      presentation.push(
+        <LoadingSkeleton
+          key={`${run.sequence}:loading`}
+          label="Reading saved activity"
+        >
+          <Skeleton className="w-48 max-w-full" />
+          <Skeleton className="w-32 max-w-full" />
+        </LoadingSkeleton>,
+      );
+    else if (data && (state?.loading || data.run.status === "running"))
+      presentation.push(
+        <Spinner
+          key={`${run.sequence}:loading`}
+          label="Reading saved activity"
+        />,
+      );
+    if (data?.complete && data.run.request_count === 0 && !data.legacy.length)
+      presentation.push(
+        <p key={`${run.sequence}:empty`} className="text-sm text-fg-muted">
+          {data.run.status === "running"
+            ? "Waiting for saved content"
+            : "No saved content"}
+        </p>,
+      );
   }
   return (
     <div
@@ -452,146 +531,19 @@ export function ConversationFeed({
           description="This Agent's activity will appear here."
         />
       ) : null}
-      {units.map((unit, index) => {
-        const previous = units[index - 1];
-        const grouped =
-          previous?.side === unit.side &&
-          unit.senderId !== undefined &&
-          previous.senderId === unit.senderId &&
-          Math.abs(
-            Date.parse(unit.timestamp) - Date.parse(previous.timestamp),
-          ) < 300_000;
-        return (
-          <ConversationEntry
-            key={unit.key}
-            identity={unit.key}
-            sequence={unit.sequence}
-            timestamp={unit.timestamp}
-            side={unit.side}
-            senderId={unit.senderId}
-            source={unit.source}
-            action={unit.action}
-            text={unit.text}
-            state={unit.state}
-            notice={unit.notice}
-            workRecord={unit.workRecord}
-            grouped={grouped}
-            saved={unit.saved}
-            agentId={agentId}
-            name={unit.side === "agent" ? name : undefined}
-            complete={reads[unit.sequence]?.data?.complete ?? false}
-            running={reads[unit.sequence]?.data?.run.status === "running"}
-            disconnected={disconnected}
-            onMessage={onMessage}
-            onRetry={onRetry}
-          />
-        );
-      })}
+      <TextReadContext.Provider value={textCaches}>
+        <ImageReadContext.Provider value={onImage}>
+          {presentation}
+        </ImageReadContext.Provider>
+      </TextReadContext.Provider>
+      {composition.missing.length ? (
+        <p role="alert" className="text-sm text-warning wrap-anywhere">
+          Historical content is incomplete: {composition.missing.join(", ")}
+        </p>
+      ) : null}
     </div>
   );
 }
-
-const ConversationEntry = memo(function ConversationEntry({
-  identity,
-  sequence,
-  timestamp,
-  side,
-  senderId,
-  source,
-  action,
-  text,
-  saved,
-  state,
-  notice,
-  workRecord,
-  grouped,
-  agentId,
-  name,
-  complete,
-  running,
-  disconnected,
-  onMessage,
-  onRetry,
-}: Omit<ConversationUnit, "key" | "order"> & {
-  identity: string;
-  grouped: boolean;
-  agentId: number;
-  name?: string;
-  complete: boolean;
-  running: boolean;
-  disconnected: boolean;
-  onMessage: (identity: string, saved: SavedMessage) => void;
-  onRetry: (sequence: number) => void;
-}) {
-  return source ? (
-    <MessageBubble
-      unit={{ key: identity, sequence, timestamp, side, senderId, source }}
-      agentId={agentId}
-      grouped={grouped}
-      disconnected={disconnected}
-      onMessage={onMessage}
-    />
-  ) : (
-    <Bubble
-      identity={identity}
-      side={side}
-      senderId={senderId}
-      name={name}
-      timestamp={timestamp}
-      grouped={grouped}
-      label={workRecord ? "Agent work record" : undefined}
-    >
-      {action ? (
-        <ToolAction
-          agentId={agentId}
-          sequence={sequence}
-          action={action}
-          complete={complete}
-          running={running}
-        />
-      ) : null}
-      {saved === false ? (
-        <p className="m-0 text-xs text-danger">Not saved</p>
-      ) : null}
-      {text !== undefined ? (
-        <Content
-          agentId={agentId}
-          sequence={sequence}
-          identity={identity}
-          value={text}
-          markdown
-        />
-      ) : null}
-      {notice === "Loading trigger information" && !disconnected ? (
-        <LoadingSkeleton label={notice}>
-          <Skeleton className="w-48 max-w-full" />
-          <Skeleton className="w-32 max-w-full" />
-        </LoadingSkeleton>
-      ) : notice ? (
-        <p className="m-0 wrap-anywhere">{notice}</p>
-      ) : null}
-      {state?.error ? (
-        <Retry
-          error={state.error.message}
-          loading={state.loading}
-          label="Retry activity"
-          onRetry={() => onRetry(sequence)}
-        />
-      ) : null}
-      {identity.endsWith(":state") &&
-      !state?.data &&
-      !state?.error &&
-      !disconnected ? (
-        <LoadingSkeleton label="Reading saved activity">
-          <Skeleton className="w-48 max-w-full" />
-          <Skeleton className="w-32 max-w-full" />
-        </LoadingSkeleton>
-      ) : state?.data && (state.loading || running) ? (
-        <Spinner label="Reading saved activity" />
-      ) : null}
-    </Bubble>
-  );
-});
 
 function Bubble({
   identity,
@@ -618,9 +570,7 @@ function Bubble({
     senderId === undefined ? null : <Avatar memberId={senderId} size="md" />;
   return (
     <article
-      aria-label={
-        label ?? (side === "trigger" ? "Trigger message" : "Agent message")
-      }
+      aria-label={label ?? (side === "trigger" ? "Reminder" : "Agent message")}
       data-activity-anchor={identity}
       className={clsx(
         "flex w-full min-w-0 items-end gap-2",
@@ -637,9 +587,13 @@ function Bubble({
           )}
         >
           {name ? <span className="font-semibold">{name}</span> : null}
-          <Tooltip label={formatTime(timestamp)}>
-            <time dateTime={timestamp}>{relativeTime(timestamp)}</time>
-          </Tooltip>
+          {timestamp ? (
+            <Tooltip label={formatTime(timestamp)}>
+              <time dateTime={timestamp}>{relativeTime(timestamp)}</time>
+            </Tooltip>
+          ) : (
+            <span>Start time unavailable</span>
+          )}
           {target ? <span className="wrap-anywhere">{target}</span> : null}
           {label ? <span>{label}</span> : null}
         </div>
@@ -654,7 +608,6 @@ function Bubble({
           {children}
         </div>
       </div>
-      {side === "trigger" ? avatar : null}
     </article>
   );
 }
@@ -683,139 +636,123 @@ function Retry({
   );
 }
 
-function MessageBubble({
-  unit,
+const ConversationEntry = memo(function ConversationEntry({
+  identity,
+  sequence,
+  timestamp,
+  kind,
+  value,
+  title,
+  reminder,
+  action,
+  reply,
+  workRecord,
+  diagnostic,
+  emptyReminder,
+  saved,
   agentId,
+  name,
   grouped,
-  disconnected,
-  onMessage,
-}: {
-  unit: ConversationUnit;
+  complete,
+  running,
+}: Pick<
+  ContextEntry,
+  | "sequence"
+  | "title"
+  | "reminder"
+  | "action"
+  | "reply"
+  | "workRecord"
+  | "diagnostic"
+  | "saved"
+> & {
+  identity: string;
+  timestamp: string;
+  kind: HistoryValue | undefined;
+  value: HistoryValue;
+  emptyReminder: boolean;
   agentId: number;
+  name: string;
   grouped: boolean;
-  disconnected: boolean;
-  onMessage: (identity: string, saved: SavedMessage) => void;
+  complete: boolean;
+  running: boolean;
 }) {
-  const identity = unit.source;
-  if (!identity) throw new Error("Saved message identity is missing");
-  const id = messageKey(identity);
-  const [saved, setSaved] = useWindowState<SavedMessage | null>(
-    `message:${id}`,
-    null,
+  const body = (
+    <>
+      {saved === false ? (
+        <p className="m-0 text-xs text-danger">Not saved</p>
+      ) : null}
+      {reply !== undefined ? (
+        <LongContent identity={`${identity}:reply`}>
+          <Prose>{reply}</Prose>
+        </LongContent>
+      ) : null}
+      {action ? (
+        <ToolAction
+          agentId={agentId}
+          sequence={sequence}
+          action={action}
+          complete={complete}
+          running={running}
+          replyDetails={reply !== undefined}
+        />
+      ) : reminder && complete && emptyReminder ? (
+        <p className="m-0">No saved reminder</p>
+      ) : (
+        <Content
+          agentId={agentId}
+          sequence={sequence}
+          identity={identity}
+          value={value}
+          markdown={kind === "text"}
+          preview={title !== null}
+        />
+      )}
+      {diagnostic ? (
+        <p role="alert" className="text-sm text-danger wrap-anywhere">
+          {diagnostic}
+        </p>
+      ) : null}
+    </>
   );
-  const [error, setError] = useState<BackendError | null>(null);
-  const [loading, setLoading] = useState(false);
-  const generation = useRef(0);
-  const isReply = unit.side === "agent";
-  const load = useCallback(async () => {
-    const current = ++generation.current;
-    setLoading(true);
-    try {
-      const page = await backend.discussionPage(identity.discussion_id, {
-        after: identity.message_id - 1,
-        before: identity.message_id + 1,
-        limit: 1,
-        metadata: true,
-      });
-      if (current !== generation.current) return;
-      if (page.id !== identity.discussion_id)
-        throw new Error("Saved message discussion does not match");
-      const message = page.messages.find(
-        (message) => message.id === identity.message_id,
-      );
-      if (!message) throw new BackendError("not_found", "Message not found");
-      if (isReply && message.sender_id !== agentId)
-        throw new Error("Saved reply sender does not match this Agent");
-      const next = { message, topic: page.metadata?.topic ?? null };
-      setSaved(next);
-      onMessage(id, next);
-      setError(null);
-    } catch (error) {
-      if (current === generation.current) setError(problem(error));
-    } finally {
-      if (current === generation.current) setLoading(false);
-    }
-  }, [
-    identity.discussion_id,
-    identity.message_id,
-    id,
-    agentId,
-    isReply,
-    setSaved,
-    onMessage,
-  ]);
-  useEffect(() => {
-    void load();
-    const off = backend.onEvent((event) => {
-      if (event.type === "connection.closed") {
-        generation.current += 1;
-        setLoading(false);
-      }
-      if (event.type === "connection.restored") void load();
-    });
-    return () => {
-      generation.current += 1;
-      off();
-    };
-  }, [load]);
-  const label = isReply ? "Agent reply" : "Trigger message";
-  const errorLabel =
-    error?.code === "not_found"
-      ? `${label} not found`
-      : ["not_a_member", "not_permitted", "permission_denied"].includes(
-            error?.code ?? "",
-          )
-        ? `Access denied to ${label.toLowerCase()}`
-        : error?.message;
+  if (title && !reminder)
+    return (
+      <article
+        aria-label={title}
+        data-activity-anchor={identity}
+        className="mt-4 w-full min-w-0 rounded-sm border border-line bg-surface-raised px-4 py-3"
+      >
+        <div className="mb-1 text-xs text-fg-muted">{title}</div>
+        {body}
+      </article>
+    );
   return (
     <Bubble
-      identity={unit.key}
-      side={unit.side}
-      senderId={saved?.message.sender_id}
-      name={saved?.message.sender_name}
-      timestamp={saved?.message.created_at ?? unit.timestamp}
+      identity={identity}
+      side={reminder ? "trigger" : "agent"}
+      senderId={reminder ? undefined : agentId}
+      name={reminder ? undefined : name}
+      timestamp={timestamp}
       grouped={grouped}
+      label={
+        reminder
+          ? "Reminder"
+          : workRecord
+            ? "Agent work record"
+            : kind === "thinking"
+              ? "Thinking"
+              : undefined
+      }
       target={
-        isReply
-          ? `Sent to ${saved?.topic ?? `Discussion ${identity.discussion_id}`}`
+        action?.sent
+          ? `Sent to Discussion ${action.sent.discussion_id}`
           : undefined
       }
     >
-      {saved ? (
-        <>
-          <LongContent identity={unit.key}>
-            <Prose>{saved.message.body}</Prose>
-          </LongContent>
-          {saved.message.attachments.map((attachment) => (
-            <MessageAttachment
-              key={attachment.id}
-              discussionId={identity.discussion_id}
-              messageId={identity.message_id}
-              attachment={attachment}
-              thumbnail
-            />
-          ))}
-        </>
-      ) : null}
-      {!saved && !error && !disconnected ? (
-        <LoadingSkeleton label={`Loading ${label.toLowerCase()}`}>
-          <Skeleton className="w-48 max-w-full" />
-          <Skeleton className="w-32 max-w-full" />
-        </LoadingSkeleton>
-      ) : saved && loading ? (
-        <Spinner label={`Loading ${label.toLowerCase()}`} />
-      ) : null}
-      {errorLabel ? (
-        <Retry
-          error={errorLabel}
-          label="Retry message"
-          loading={loading}
-          onRetry={() => void load()}
-        />
-      ) : null}
+      {body}
     </Bubble>
   );
-}
+});
 
 function displayPath(value: string): string {
   const absolute = value.startsWith("/") || /^[a-z]:[\\/]/i.test(value);
@@ -841,136 +778,6 @@ function displayPath(value: string): string {
   )
     return parts[parts.length - 1] ?? value;
   return value;
-}
-
-function toolDisplay(
-  tool: string,
-  value: HistoryValue,
-  parameters = false,
-): HistoryValue {
-  if (
-    ![
-      "run",
-      "edit",
-      "discussion",
-      "organization",
-      "history",
-      "web_search",
-      "view_image",
-      "view_attachment",
-    ].includes(tool) ||
-    activityText(value)
-  )
-    return value;
-  if (Array.isArray(value)) {
-    const images = value.filter(
-      (item) => activityRecord(item) && item.kind === "binary",
-    );
-    if (tool.startsWith("view_") && images.length) return images;
-    return value.map((item) => toolDisplay(tool, item));
-  }
-  if (!activityRecord(value)) return value;
-  if (value.kind === "binary") return value;
-  if (tool === "run") {
-    if (parameters) {
-      const argv = Array.isArray(value.argv) ? value.argv.map(String) : [];
-      const executable = (argv[0] ?? "command").split(/[\\/]/);
-      const program = executable[executable.length - 1];
-      const argumentsToDisplay = argv.map((argument, index) =>
-        index === 0 ||
-        (["cat", "head", "tail"].includes(program) &&
-          index === argv.length - 1 &&
-          !argument.startsWith("-"))
-          ? displayPath(argument)
-          : argument,
-      );
-      if (
-        argumentsToDisplay.some(
-          (argument) =>
-            !URL.canParse(argument) &&
-            /(^|[\s"'=(])\/(?:project|tmp|root|mnt|var\/tmp)(?:\/|$)|(^|[\\/])(?:\.venv|venv|\.task-data|\.cache)[\\/]/.test(
-              argument,
-            ),
-        )
-      )
-        return {
-          "Command summary": `Run ${program}`,
-          Details:
-            "Open Inspect context for the complete command and arguments.",
-        };
-      const command = argumentsToDisplay
-        .map((argument) =>
-          /^[\p{L}\p{N}_./:=+-]+$/u.test(argument)
-            ? argument
-            : JSON.stringify(argument),
-        )
-        .join(" ");
-      return { Command: command };
-    }
-    return {
-      ...(value.stdout ? { Output: value.stdout } : {}),
-      ...(value.stderr ? { "Error output": value.stderr } : {}),
-      ...(value.error ? { Error: value.error } : {}),
-      ...(typeof value.exit_code === "number"
-        ? { Status: `Exited with code ${value.exit_code}` }
-        : {}),
-      ...(value.truncated ? { Notice: "Output was truncated" } : {}),
-    };
-  }
-  if (tool === "edit") {
-    if (parameters)
-      return {
-        File: displayPath(String(value.path ?? "")),
-        Changes: Array.isArray(value.edits)
-          ? value.edits.map((edit) => {
-              if (!activityRecord(edit)) return edit;
-              return {
-                "Original text": edit.old_text ?? "",
-                "Updated text": edit.new_text ?? "",
-              };
-            })
-          : [],
-      };
-    return {
-      File: displayPath(String(value.path ?? "")),
-      ...(value.error ? { Error: value.error } : {}),
-      ...(typeof value.created === "boolean" && !value.error
-        ? { Status: value.created ? "File created" : "File updated" }
-        : {}),
-      ...(typeof value.replacements === "number"
-        ? { Changes: `${value.replacements} replacements` }
-        : {}),
-    };
-  }
-  if (tool === "discussion" && Array.isArray(value.messages))
-    return {
-      Messages: value.messages.map((message) => {
-        if (!activityRecord(message)) return message;
-        return {
-          Sender: message.sender_name ?? message.sender_id ?? "",
-          Message: message.body ?? "",
-          ...(Array.isArray(message.attachments) && message.attachments.length
-            ? {
-                Attachments: message.attachments.map((attachment) =>
-                  activityRecord(attachment)
-                    ? (attachment.name ?? "Saved attachment")
-                    : attachment,
-                ),
-              }
-            : {}),
-        };
-      }),
-    };
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => key !== "cwd")
-      .map(([key, item]) => [
-        key,
-        typeof item === "string" && ["path", "directory", "file"].includes(key)
-          ? displayPath(item)
-          : toolDisplay(tool, item),
-      ]),
-  );
 }
 
 export function actionSummary(
@@ -1050,21 +857,24 @@ function ToolAction({
   action,
   complete,
   running,
+  replyDetails = false,
 }: {
   agentId: number;
   sequence: number;
   action: ActivityAction;
   complete: boolean;
   running: boolean;
+  replyDetails?: boolean;
 }) {
   const { members, discussions } = useOrganization();
-  const title = actionSummary(
+  const summary = actionSummary(
     action,
     new Map(
       discussions?.map((discussion) => [discussion.id, discussion.topic]),
     ),
     new Map(members?.map((member) => [member.id, member.name])),
   );
+  const title = replyDetails ? "Message details" : summary;
   const [opened, setOpened] = useWindowState(
     `action:${sequence}:${action.key}`,
     false,
@@ -1151,7 +961,16 @@ function ToolAction({
             agentId={agentId}
             sequence={sequence}
             identity={`${action.key}:parameters`}
-            value={toolDisplay(tool, action.args, true)}
+            value={action.args}
+            references={action.args === action.value.args}
+          />
+          <Content
+            agentId={agentId}
+            sequence={sequence}
+            identity={`${action.key}:call`}
+            value={Object.fromEntries(
+              Object.entries(action.value).filter(([key]) => key !== "args"),
+            )}
           />
           {(lifecycle?.has_result && lifecycle.saved === false) ||
           action.saved === false ? (
@@ -1183,18 +1002,14 @@ function ToolAction({
               identity={result.key}
               tool={tool}
               value={result.value.content}
+              metadata={Object.fromEntries(
+                Object.entries(result.value).filter(
+                  ([key]) => key !== "content",
+                ),
+              )}
               structured={
-                result.value.part_kind === "tool-return" &&
-                [
-                  "run",
-                  "edit",
-                  "discussion",
-                  "organization",
-                  "history",
-                  "web_search",
-                  "view_image",
-                  "view_attachment",
-                ].includes(tool)
+                result.value.part_kind === "tool-return" ||
+                result.value.part_kind === "retry-prompt"
               }
             />
           ))}
@@ -1218,6 +1033,7 @@ function ToolResult({
   identity,
   tool,
   value,
+  metadata,
   structured,
 }: {
   agentId: number;
@@ -1225,8 +1041,12 @@ function ToolResult({
   identity: string;
   tool: string;
   value: HistoryValue;
+  metadata: HistoryValue;
   structured: boolean;
 }) {
+  const textCache = useContext(TextReadContext)[sequence];
+  const textValues = textCache?.values;
+  const textReads = textCache?.reads;
   const signature = JSON.stringify(value);
   const [saved, setSaved] = useWindowState<ResultState>(
     `result:${sequence}:${identity}`,
@@ -1236,8 +1056,13 @@ function ToolResult({
   const [error, setError] = useState<BackendError | null>(null);
   const [loading, setLoading] = useState(false);
   const operation = useRef<AbortController | null>(null);
+  const previewText =
+    typeof value === "string" ? value : activityText(value)?.value;
   const read =
-    structured && (typeof value === "string" || activityText(value) !== null);
+    structured &&
+    previewText !== undefined &&
+    (previewText.trimStart().startsWith("{") ||
+      previewText.trimStart().startsWith("["));
   const ready = saved.signature === signature && saved.parsed !== undefined;
   const load = useCallback(async () => {
     if (!read || ready) return;
@@ -1258,6 +1083,8 @@ function ToolResult({
           current.current = { signature, reading };
           setSaved(current.current);
         },
+        textValues,
+        textReads,
       );
       if (abort.signal.aborted) return;
       current.current = { signature, reading: current.current.reading, parsed };
@@ -1268,7 +1095,18 @@ function ToolResult({
     } finally {
       if (!abort.signal.aborted) setLoading(false);
     }
-  }, [agentId, sequence, signature, value, read, ready, setSaved, identity]);
+  }, [
+    agentId,
+    sequence,
+    signature,
+    value,
+    read,
+    ready,
+    setSaved,
+    identity,
+    textValues,
+    textReads,
+  ]);
   useEffect(() => {
     void load();
     const off = backend.onEvent((event) => {
@@ -1285,6 +1123,13 @@ function ToolResult({
   }, [load]);
   return (
     <div className="min-w-0">
+      <Content
+        agentId={agentId}
+        sequence={sequence}
+        identity={`${identity}:metadata`}
+        value={metadata}
+        preview
+      />
       {loading ? <Spinner label="Loading result" /> : null}
       {error ? (
         <Retry
@@ -1294,17 +1139,67 @@ function ToolResult({
           onRetry={() => void load()}
         />
       ) : null}
-      {!read || ready ? (
+      {error ? (
         <Content
           agentId={agentId}
           sequence={sequence}
-          identity={`${identity}:result`}
-          value={toolDisplay(tool, read ? (saved.parsed ?? null) : value)}
+          identity={`${identity}:unparsed`}
+          value={saved.reading}
           preview
         />
       ) : null}
+      {!read || ready ? (
+        <>
+          <Content
+            agentId={agentId}
+            sequence={sequence}
+            identity={`${identity}:result`}
+            value={read ? (saved.parsed ?? null) : value}
+            references={!read}
+            preview
+          />
+          {tool === "discussion" ? (
+            <SavedAttachments value={read ? (saved.parsed ?? null) : value} />
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
+}
+
+function SavedAttachments({ value }: { value: HistoryValue }) {
+  if (!activityRecord(value) || !Array.isArray(value.messages)) return null;
+  const discussionId = value.id ?? value.discussion_id;
+  if (typeof discussionId !== "number") return null;
+  return value.messages.flatMap((message) => {
+    if (
+      !activityRecord(message) ||
+      typeof message.id !== "number" ||
+      !Array.isArray(message.attachments)
+    )
+      return [];
+    const messageId = message.id;
+    return message.attachments.flatMap((attachment) => {
+      if (
+        !activityRecord(attachment) ||
+        typeof attachment.id !== "string" ||
+        typeof attachment.name !== "string" ||
+        typeof attachment.size !== "number" ||
+        typeof attachment.media_type !== "string" ||
+        typeof attachment.sha256 !== "string"
+      )
+        return [];
+      return (
+        <MessageAttachment
+          key={`${message.id}:${attachment.id}`}
+          discussionId={discussionId}
+          messageId={messageId}
+          attachment={attachment as unknown as Attachment}
+          thumbnail
+        />
+      );
+    });
+  });
 }
 
 function Prose({ children }: { children: string }) {
@@ -1373,17 +1268,26 @@ function LongContent({
 function contentLeaves(
   value: HistoryValue,
   label = "",
+  references = true,
 ): { label: string; value: HistoryValue }[] {
-  if (activityText(value) || (activityRecord(value) && value.kind === "binary"))
+  if (references && (activityText(value) || activityBinary(value)))
     return [{ label, value }];
   if (Array.isArray(value))
-    return value.flatMap((item, index) =>
-      contentLeaves(item, `${label} ${index + 1}`.trim()),
-    );
+    return value.length
+      ? value.flatMap((item, index) =>
+          contentLeaves(item, `${label} ${index + 1}`.trim(), references),
+        )
+      : [{ label, value }];
   if (activityRecord(value))
-    return Object.entries(value).flatMap(([key, item]) =>
-      contentLeaves(item, [label, key].filter(Boolean).join(" · ")),
-    );
+    return Object.keys(value).length
+      ? Object.entries(value).flatMap(([key, item]) =>
+          contentLeaves(
+            item,
+            [label, key].filter(Boolean).join(" · "),
+            references,
+          ),
+        )
+      : [{ label, value }];
   return [{ label, value }];
 }
 
@@ -1394,6 +1298,7 @@ const Content = memo(function Content({
   value,
   markdown = false,
   preview = false,
+  references = true,
 }: {
   agentId: number;
   sequence: number;
@@ -1401,16 +1306,17 @@ const Content = memo(function Content({
   value: HistoryValue;
   markdown?: boolean;
   preview?: boolean;
+  references?: boolean;
 }) {
-  const leaves = contentLeaves(value);
+  const leaves = contentLeaves(value, "", references);
   const hasImage = leaves.some(
-    (leaf) => activityRecord(leaf.value) && leaf.value.kind === "binary",
+    (leaf) => references && activityBinary(leaf.value) !== null,
   );
   const previewText = preview && !hasImage;
   const content = (
     <div className="flex min-w-0 flex-col gap-2">
       {leaves.map((leaf, index) => {
-        const text = activityText(leaf.value);
+        const text = references ? activityText(leaf.value) : null;
         const key = `${identity}:${leaf.label || index}`;
         if (text) {
           const textKey = `${text.source}:${text.request_ordinal}:${text.message_index}:${JSON.stringify(text.path)}`;
@@ -1423,20 +1329,26 @@ const Content = memo(function Content({
               markdown={markdown}
             />
           );
-          return previewText ? (
-            <LongContent
-              key={textKey}
-              identity={`${sequence}:${key}:${textKey}`}
-              preview
-            >
-              {body}
-            </LongContent>
-          ) : (
-            body
+          return (
+            <div key={textKey} className="min-w-0">
+              {leaf.label ? (
+                <div className="text-xs text-fg-muted wrap-anywhere">
+                  {leaf.label}
+                </div>
+              ) : null}
+              {previewText ? (
+                <LongContent identity={`${sequence}:${key}:${textKey}`} preview>
+                  {body}
+                </LongContent>
+              ) : (
+                body
+              )}
+            </div>
           );
         }
-        if (activityRecord(leaf.value) && leaf.value.kind === "binary") {
-          const reference = leaf.value as unknown as HistoryBinary;
+        const binary = references ? activityBinary(leaf.value) : null;
+        if (binary) {
+          const reference = binary;
           return (
             <ImageContent
               key={`${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`}
@@ -1450,8 +1362,23 @@ const Content = memo(function Content({
           markdown && typeof leaf.value === "string" ? (
             <Prose>{leaf.value}</Prose>
           ) : (
-            <pre className="m-0 min-w-0 max-w-full overflow-x-auto font-mono text-xs leading-5 whitespace-pre-wrap wrap-anywhere">
-              {leaf.value === null ? "null" : String(leaf.value)}
+            <pre
+              data-value-type={
+                leaf.value === null
+                  ? "null"
+                  : Array.isArray(leaf.value)
+                    ? "array"
+                    : typeof leaf.value
+              }
+              className="m-0 min-w-0 max-w-full overflow-x-auto font-mono text-xs leading-5 whitespace-pre-wrap wrap-anywhere"
+            >
+              {leaf.value === null
+                ? "null"
+                : Array.isArray(leaf.value)
+                  ? "[]"
+                  : activityRecord(leaf.value)
+                    ? "{}"
+                    : String(leaf.value)}
             </pre>
           );
         return (
@@ -1502,6 +1429,9 @@ function TextContent({
   reference: HistoryText;
   markdown: boolean;
 }) {
+  const textCache = useContext(TextReadContext)[sequence];
+  const textValues = textCache?.values;
+  const textReads = textCache?.reads;
   const key = `text:${sequence}:${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`;
   const [saved, setSaved] = useWindowState(key, reference);
   const signature = liveSignature(reference);
@@ -1524,10 +1454,24 @@ function TextContent({
       const token = ++generation.current;
       setLoading(true);
       try {
-        const page = await backend.agentHistoryText(agentId, sequence, {
-          ...current.current,
-          offset,
-        });
+        const cached = textValues?.[savedTextKey(sequence, current.current)];
+        const page =
+          cached &&
+          cached.total_bytes === current.current.total_bytes &&
+          cached.value.startsWith(current.current.value) &&
+          !cached.has_more
+            ? {
+                ...cached,
+                offset,
+                value: cached.value.slice(current.current.value.length),
+              }
+            : await readTextPage(
+                agentId,
+                sequence,
+                current.current,
+                offset,
+                textReads,
+              );
         if (token !== generation.current) return;
         if (page.offset !== offset || page.next_offset <= offset)
           throw new Error("Saved text did not advance");
@@ -1540,6 +1484,8 @@ function TextContent({
           has_more: page.next_offset < total,
         };
         setSaved(current.current);
+        if (textValues && !current.current.has_more)
+          textValues[savedTextKey(sequence, reference)] = current.current;
         interrupted.current = null;
         setError(null);
       } catch (error) {
@@ -1551,7 +1497,7 @@ function TextContent({
         }
       }
     },
-    [agentId, sequence, setSaved],
+    [agentId, sequence, setSaved, textValues, textReads, reference],
   );
   useEffect(() => {
     const previous = current.current;
@@ -1628,6 +1574,7 @@ function ImageContent({
   sequence: number;
   reference: HistoryBinary;
 }) {
+  const onImage = useContext(ImageReadContext);
   const key = `image:${sequence}:${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`;
   const [url, setUrl] = useWindowState<string | null>(key, null);
   const signature = liveSignature(reference);
@@ -1654,13 +1601,14 @@ function ImageContent({
       if (token !== generation.current) return;
       setUrl(`data:${image.media_type};base64,${image.data}`);
       setSavedSignature(signature);
+      onImage?.(sequence, address.current, image);
       setError(null);
     } catch (error) {
       if (token === generation.current) setError(problem(error));
     } finally {
       if (token === generation.current) setLoading(false);
     }
-  }, [agentId, sequence, key, signature, setUrl, setSavedSignature]);
+  }, [agentId, sequence, key, signature, setUrl, setSavedSignature, onImage]);
   useEffect(() => {
     if (!visibleUrl) void load();
     const off = backend.onEvent((event) => {

@@ -45,6 +45,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RequestUsage
 
 from fora.adapters.model.config import ModelConfig, thinking_settings
+from fora.adapters.model.context_sources import ContextSources
 from fora.adapters.model.observability import ObservabilityConfig
 from fora.adapters.model.prompt import SYSTEM_PROMPT
 from fora.adapters.model.runner import (
@@ -363,7 +364,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     assert second[: len(first) - 1] == first[:-1]
     assert "without a confirmed result" not in persisted[-1]
     assert second[-1] == responses[1]
-    assert second[-2].metadata == {
+    assert ContextSources(2, 1).restore([second[-2]])[0].metadata == {
         "fora": {"block": "durable", "environment": "environment B"}
     }
     assert second[-3].parts == [
@@ -375,7 +376,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
         )
     ]
     assert first[0].parts[0].content == original.resident
-    assert first[0].metadata == {
+    assert ContextSources(2, 1).restore([first[0]])[0].metadata == {
         "fora": {
             "block": "resident",
             "agents_instructions": None,
@@ -731,7 +732,7 @@ def test_resident_is_inserted_only_for_empty_history(settings) -> None:
     messages = ModelMessagesTypeAdapter.validate_json(first.messages_json)
     assert len(messages) == 3
     assert messages[0].parts[0].content == original.resident
-    assert messages[0].metadata == {
+    assert ContextSources(2, 1).restore([messages[0]])[0].metadata == {
         "fora": {
             "block": "resident",
             "agents_instructions": None,
@@ -809,7 +810,7 @@ def test_durable_changes_are_persisted_once_and_survive_runner_restarts(
     outcome = runner.run(original, Tools())
     assert (outcome.error is not None) == fail
     saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
-    assert saved[0].metadata == {
+    assert ContextSources(2, 1).restore([saved[0]])[0].metadata == {
         "fora": {
             "block": "resident",
             "agents_instructions": None,
@@ -828,7 +829,7 @@ def test_durable_changes_are_persisted_once_and_survive_runner_restarts(
         durable[0].parts[0].content
         == "The execution environment changed.\nenvironment B"
     )
-    assert durable[0].metadata == {
+    assert ContextSources(2, 1).restore([durable[0]])[0].metadata == {
         "fora": {"block": "durable", "environment": "environment B"}
     }
     assert [

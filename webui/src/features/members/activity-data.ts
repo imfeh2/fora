@@ -3,6 +3,7 @@ import {
   type AgentHistoryRequestSummary,
   type AgentHistoryRun,
   backend,
+  type HistoryBinary,
   type HistoryMessages,
   type HistoryReminder,
   type HistoryText,
@@ -12,6 +13,8 @@ import {
 } from "@/lib/backend";
 
 type Part = { [key: string]: HistoryValue };
+export type TextPage = Awaited<ReturnType<typeof backend.agentHistoryText>>;
+export type TextReads = Map<string, Promise<TextPage>>;
 export type ActivityPart = {
   key: string;
   ordinal: number;
@@ -41,15 +44,23 @@ export type ActivityAction = ActivityPart & {
     | "content_version"
   >;
 };
+export type ActivityRequestSnapshot = {
+  readId: AbortSignal;
+  request: NonNullable<AgentHistoryRead["request"]>;
+  parameters: HistoryValue;
+  values: Partial<Record<"input" | "response" | "related", HistoryValue[]>>;
+  complete: boolean;
+};
 export type ActivityData = {
+  agentId: number;
   run: AgentHistoryRun;
   requests: AgentHistoryRequestSummary[];
-  contents: Record<number, NonNullable<AgentHistoryRead["request"]>>;
+  contents: Record<number, ActivityRequestSnapshot>;
   legacy: HistoryValue[];
-  legacyStart: number;
-  actions: ActivityAction[];
-  notes: ActivityPart[];
-  final: ActivityPart[];
+  legacyBoundary: number | null;
+  pending: number[];
+  textValues: Record<string, HistoryText>;
+  textReads: TextReads;
   complete: boolean;
   missing: string[];
   usageVersion?: UsageVersion;
@@ -60,60 +71,71 @@ export function clearLiveActivity(data: ActivityData): ActivityData {
   return {
     ...data,
     contents: Object.fromEntries(
-      Object.entries(data.contents).map(([ordinal, request]) => [
-        ordinal,
-        {
-          ...request,
-          observation: undefined,
-          response: request.response_saved === false ? null : request.response,
-        },
-      ]),
+      Object.entries(data.contents).map(([ordinal, snapshot]) => {
+        const { request, values } = snapshot;
+        const temporary = request.response_saved === false;
+        return [
+          ordinal,
+          {
+            ...snapshot,
+            request: {
+              ...request,
+              observation: undefined,
+              response: temporary ? null : request.response,
+            },
+            values: temporary ? { ...values, response: undefined } : values,
+          },
+        ];
+      }),
     ),
-    actions: data.actions
-      .filter((part) => part.saved !== false)
-      .map((part) => ({ ...part, observation: undefined })),
-    notes: data.notes.filter((part) => part.saved !== false),
-    final: data.final.filter((part) => part.saved !== false),
   };
 }
 
 export function mergeActivityData(
   previous: ActivityData | null,
-  data: ActivityData,
+  incoming: ActivityData,
 ): ActivityData {
-  if (!previous || data.complete) return data;
-  const saved =
-    previous.usageVersion?.runtime_epoch !== data.usageVersion?.runtime_epoch
+  if (!previous) return incoming;
+  if (
+    previous.agentId !== incoming.agentId ||
+    previous.run.sequence !== incoming.run.sequence ||
+    previous.run.window_number !== incoming.run.window_number
+  )
+    throw new Error("Saved activity snapshots do not share an identity");
+  if (incoming.complete) return incoming;
+  const retained =
+    previous.usageVersion?.runtime_epoch !==
+    incoming.usageVersion?.runtime_epoch
       ? clearLiveActivity(previous)
       : previous;
-  const ready = new Set(Object.keys(data.contents).map(Number));
-  const requests = new Map(
-    (data.requestsComplete ? [] : saved.requests).map((request) => [
-      request.ordinal,
-      request,
-    ]),
-  );
-  for (const request of data.requests) requests.set(request.ordinal, request);
-  const keep = (part: ActivityPart) =>
-    (part.ordinal === 0 || requests.has(part.ordinal)) &&
-    !ready.has(part.ordinal);
+  const requests = [
+    ...new Map(
+      [...retained.requests, ...incoming.requests].map((request) => [
+        request.ordinal,
+        request,
+      ]),
+    ).values(),
+  ]
+    .filter((request) => request.ordinal <= incoming.run.request_count)
+    .sort((left, right) => left.ordinal - right.ordinal);
+  const contents: Record<number, ActivityRequestSnapshot> = {};
+  const pending: number[] = [];
+  for (const summary of requests) {
+    const saved = retained.contents[summary.ordinal];
+    const current = incoming.contents[summary.ordinal];
+    if (!current?.complete) pending.push(summary.ordinal);
+    const selected = saved && !current?.complete ? saved : current;
+    if (selected) contents[summary.ordinal] = selected;
+  }
   return {
-    ...data,
-    requests: [...requests.values()].sort(
-      (left, right) => left.ordinal - right.ordinal,
-    ),
-    contents: {
-      ...Object.fromEntries(
-        Object.entries(saved.contents).filter(
-          ([ordinal]) =>
-            requests.has(Number(ordinal)) && !ready.has(Number(ordinal)),
-        ),
-      ),
-      ...data.contents,
-    },
-    actions: [...saved.actions.filter(keep), ...data.actions],
-    notes: [...saved.notes.filter(keep), ...data.notes],
-    final: [...saved.final.filter(keep), ...data.final],
+    ...incoming,
+    requests,
+    contents,
+    pending,
+    legacy:
+      incoming.run.request_count === 0 && !incoming.complete
+        ? retained.legacy
+        : incoming.legacy,
   };
 }
 
@@ -122,7 +144,44 @@ export function activityRecord(value: HistoryValue): value is Part {
 }
 
 export function activityText(value: HistoryValue): HistoryText | null {
-  if (!activityRecord(value) || value.kind !== "text") return null;
+  if (
+    !activityRecord(value) ||
+    value.kind !== "text" ||
+    typeof value.source !== "string" ||
+    ![
+      "history",
+      "run",
+      "input",
+      "response",
+      "related",
+      "parameters",
+      "settings",
+      "model",
+      "live",
+    ].includes(value.source) ||
+    !Array.isArray(value.path) ||
+    typeof value.message_index !== "number" ||
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "kind",
+          "source",
+          "request_ordinal",
+          "message_index",
+          "path",
+          "offset",
+          "next_offset",
+          "total_bytes",
+          "value",
+          "has_more",
+          "runtime_epoch",
+          "part_index",
+          "content_source",
+          "content_version",
+        ].includes(key),
+    )
+  )
+    return null;
   if (
     typeof value.value !== "string" ||
     typeof value.source !== "string" ||
@@ -137,24 +196,107 @@ export function activityText(value: HistoryValue): HistoryText | null {
   return value as unknown as HistoryText;
 }
 
-async function completeText(
+export function activityBinary(value: HistoryValue): HistoryBinary | null {
+  if (
+    !activityRecord(value) ||
+    value.kind !== "binary" ||
+    typeof value.source !== "string" ||
+    !["run", "input", "response", "related", "live"].includes(value.source) ||
+    !Array.isArray(value.path) ||
+    typeof value.message_index !== "number" ||
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "kind",
+          "source",
+          "request_ordinal",
+          "message_index",
+          "path",
+          "media_type",
+          "size",
+          "identifier",
+          "runtime_epoch",
+          "part_index",
+          "content_source",
+          "content_version",
+        ].includes(key),
+    )
+  )
+    return null;
+  if (typeof value.media_type !== "string" || typeof value.size !== "number")
+    throw new Error("Saved binary location is invalid");
+  return value as unknown as HistoryBinary;
+}
+
+export function savedTextKey(sequence: number, reference: HistoryText): string {
+  return JSON.stringify([
+    sequence,
+    reference.source,
+    reference.request_ordinal ?? 0,
+    reference.message_index,
+    reference.path,
+    reference.runtime_epoch,
+    reference.part_index,
+    reference.content_source,
+    reference.content_version,
+  ]);
+}
+
+export async function readTextPage(
+  agentId: number,
+  sequence: number,
+  reference: HistoryText,
+  offset: number,
+  reads?: TextReads,
+): Promise<TextPage> {
+  const key = JSON.stringify([
+    savedTextKey(sequence, reference),
+    offset,
+    reference.total_bytes,
+  ]);
+  const pending =
+    reads?.get(key) ??
+    backend.agentHistoryText(agentId, sequence, { ...reference, offset });
+  reads?.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (reads?.get(key) === pending) reads.delete(key);
+  }
+}
+
+export async function completeText(
   agentId: number,
   sequence: number,
   value: HistoryValue,
   signal: AbortSignal,
   onText?: (text: HistoryText) => void,
+  cache?: Record<string, HistoryText>,
+  reads?: TextReads,
 ): Promise<HistoryValue> {
   const reference = activityText(value);
   if (!reference) return value;
+  const key = savedTextKey(sequence, reference);
+  const saved = cache?.[key];
+  if (
+    saved &&
+    saved.total_bytes === reference.total_bytes &&
+    saved.value.startsWith(reference.value) &&
+    !saved.has_more
+  )
+    return saved.value;
   let text = reference.value;
   let offset = reference.next_offset;
   let more = reference.has_more;
   while (more) {
     signal.throwIfAborted();
-    const page = await backend.agentHistoryText(agentId, sequence, {
-      ...reference,
+    const page = await readTextPage(
+      agentId,
+      sequence,
+      reference,
       offset,
-    });
+      reads,
+    );
     signal.throwIfAborted();
     if (page.offset !== offset || page.next_offset <= offset)
       throw new Error("Saved text did not advance");
@@ -169,7 +311,57 @@ async function completeText(
       has_more: more,
     });
   }
+  if (cache)
+    cache[key] = {
+      ...reference,
+      value: text,
+      next_offset: offset,
+      has_more: false,
+    };
   return text;
+}
+
+async function completeValue(
+  agentId: number,
+  sequence: number,
+  value: HistoryValue,
+  signal: AbortSignal,
+  cache: Record<string, HistoryText>,
+  reads: TextReads,
+): Promise<HistoryValue> {
+  signal.throwIfAborted();
+  const text = activityText(value);
+  if (text?.source === "live") return value;
+  if (text)
+    return completeText(
+      agentId,
+      sequence,
+      value,
+      signal,
+      undefined,
+      cache,
+      reads,
+    );
+  if (Array.isArray(value)) {
+    const children: HistoryValue[] = [];
+    for (const child of value)
+      children.push(
+        await completeValue(agentId, sequence, child, signal, cache, reads),
+      );
+    return children;
+  }
+  if (!activityRecord(value) || activityBinary(value)) return value;
+  const result: Record<string, HistoryValue> = {};
+  for (const [key, child] of Object.entries(value))
+    result[key] = await completeValue(
+      agentId,
+      sequence,
+      child,
+      signal,
+      cache,
+      reads,
+    );
+  return result;
 }
 
 export async function structuredValue(
@@ -178,10 +370,33 @@ export async function structuredValue(
   value: HistoryValue,
   signal: AbortSignal,
   onText?: (text: HistoryText) => void,
+  cache?: Record<string, HistoryText>,
+  reads?: TextReads,
 ): Promise<HistoryValue> {
-  const complete = await completeText(agentId, sequence, value, signal, onText);
-  if (typeof complete !== "string") return complete;
-  return JSON.parse(complete) as HistoryValue;
+  const complete = await completeText(
+    agentId,
+    sequence,
+    value,
+    signal,
+    onText,
+    cache,
+    reads,
+  );
+  if (typeof complete !== "string")
+    return completeValue(
+      agentId,
+      sequence,
+      complete,
+      signal,
+      cache ?? {},
+      reads ?? new Map(),
+    );
+  try {
+    return JSON.parse(complete) as HistoryValue;
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return complete;
+  }
 }
 
 export async function readableResult(
@@ -190,8 +405,18 @@ export async function readableResult(
   value: HistoryValue,
   signal: AbortSignal,
   onText?: (text: HistoryText) => void,
+  cache?: Record<string, HistoryText>,
+  reads?: TextReads,
 ): Promise<HistoryValue> {
-  const complete = await completeText(agentId, sequence, value, signal, onText);
+  const complete = await completeText(
+    agentId,
+    sequence,
+    value,
+    signal,
+    onText,
+    cache,
+    reads,
+  );
   if (typeof complete !== "string") return complete;
   const content = complete.trimStart();
   if (content.startsWith("{") || content.startsWith("["))
@@ -316,329 +541,32 @@ function legacyValue(
   );
 }
 
-async function collectActivity(
-  agentId: number,
-  data: ActivityData,
-  signal: AbortSignal,
-  parsed: Map<string, HistoryValue>,
-): Promise<ActivityData> {
-  const actions: ActivityAction[] = [];
-  const notes: ActivityPart[] = [];
-  const responses: ActivityPart[][] = [];
-  const groups: {
-    parts: ActivityPart[];
-    results: ActivityPart[];
-    content?: NonNullable<AgentHistoryRead["request"]>;
-    observations?: HistoryValue[];
-  }[] = data.requests.length
-    ? data.requests.map((summary) => {
-        const content = data.contents[summary.ordinal];
-        return {
-          parts: content?.response
-            ? activityParts(content.response, summary.ordinal, "response")
-            : [],
-          results: content
-            ? activityParts(content.related, summary.ordinal, "related")
-            : [],
-          content,
-          observations:
-            content?.related.messages.flatMap((message) => {
-              if (!activityRecord(message) || !activityRecord(message.metadata))
-                return [];
-              const fora = message.metadata.fora;
-              if (
-                !activityRecord(fora) ||
-                !Array.isArray(fora.tool_observations)
-              )
-                return [];
-              if (
-                fora.request_ordinal !== summary.ordinal ||
-                fora.request_id !== summary.request_id
-              )
-                throw new Error(
-                  "Saved tool observation request does not match",
-                );
-              return fora.tool_observations;
-            }) ?? [],
-        };
-      })
-    : [
-        {
-          parts: activityParts(
-            {
-              messages: data.legacy.slice(data.legacyStart),
-              offset: data.legacyStart,
-              total: data.legacy.length,
-              has_more: false,
-            },
-            0,
-            "run",
-          ),
-          results: activityParts(
-            {
-              messages: data.legacy.slice(data.legacyStart),
-              offset: data.legacyStart,
-              total: data.legacy.length,
-              has_more: false,
-            },
-            0,
-            "run",
-          ),
-        },
-      ];
-  for (const group of groups) {
-    const texts = group.parts.filter((part) => part.value.part_kind === "text");
-    if (texts.length) responses.push(texts);
-    for (const part of group.parts) {
-      const value = part.value;
-      if (value.part_kind === "thinking") notes.push(part);
-      if (value.part_kind !== "tool-call") continue;
-      let args = parsed.get(`${part.key}:args`);
-      if (args === undefined) {
-        args = await structuredValue(
-          agentId,
-          data.run.sequence,
-          value.args,
-          signal,
-        );
-        parsed.set(`${part.key}:args`, args);
-      }
-      const nextCall =
-        part.ordinal === 0
-          ? group.parts.find(
-              (candidate) =>
-                candidate.messageIndex > part.messageIndex &&
-                candidate.value.part_kind === "tool-call" &&
-                candidate.value.tool_call_id === value.tool_call_id,
-            )
-          : undefined;
-      let results = group.results.filter(
-        (result) =>
-          (result.value.part_kind === "tool-return" ||
-            result.value.part_kind === "retry-prompt") &&
-          typeof value.tool_call_id === "string" &&
-          result.value.tool_call_id === value.tool_call_id &&
-          (part.ordinal !== 0 ||
-            (result.messageIndex > part.messageIndex &&
-              (!nextCall || result.messageIndex < nextCall.messageIndex))),
-      );
-      let lifecycle: ActivityAction["lifecycle"];
-      const observation = group.observations?.find(
-        (item) => activityRecord(item) && item.part_index === part.partIndex,
-      );
-      if (observation !== undefined) {
-        if (
-          !activityRecord(observation) ||
-          observation.request_ordinal !== part.ordinal ||
-          observation.tool_call_id !== value.tool_call_id ||
-          observation.tool_name !== value.tool_name ||
-          !["queued", "running", "completed", "failed", "cancelled"].includes(
-            String(observation.status),
-          ) ||
-          !(
-            observation.started_at === null ||
-            typeof observation.started_at === "string"
-          ) ||
-          !(
-            observation.completed_at === null ||
-            typeof observation.completed_at === "string"
-          )
-        )
-          throw new Error("Saved tool observation identity is invalid");
-        if (Array.isArray(observation.result_positions)) {
-          results = observation.result_positions.map((position) => {
-            if (
-              !Array.isArray(position) ||
-              position.length !== 2 ||
-              !position.every(
-                (number) =>
-                  typeof number === "number" &&
-                  Number.isSafeInteger(number) &&
-                  number >= 0,
-              )
-            )
-              throw new Error("Saved result position is invalid");
-            const result = group.results.find(
-              (result) =>
-                result.messageIndex === position[0] &&
-                result.partIndex === position[1],
-            );
-            if (!result)
-              throw new Error("Saved result position is unavailable");
-            return result;
-          });
-        }
-        if (observation.has_result === false) results = [];
-        lifecycle = {
-          status: observation.status as LiveTool["status"],
-          started_at: observation.started_at,
-          completed_at: observation.completed_at,
-          saved: true,
-          has_result:
-            typeof observation.has_result === "boolean"
-              ? observation.has_result
-              : results.length > 0,
-          content_version:
-            typeof observation.content_version === "string"
-              ? observation.content_version
-              : null,
-        };
-      } else {
-        const result = results.find((result) =>
-          ["tool-return", "retry-prompt"].includes(
-            String(result.value.part_kind),
-          ),
-        );
-        const outcome = result?.value.outcome;
-        const status: LiveTool["status"] | undefined =
-          result?.value.part_kind === "retry-prompt" ||
-          outcome === "failed" ||
-          outcome === "denied"
-            ? "failed"
-            : outcome === "interrupted"
-              ? "cancelled"
-              : outcome === "success"
-                ? "completed"
-                : undefined;
-        if (status !== undefined)
-          lifecycle = {
-            status,
-            started_at: null,
-            completed_at: null,
-            saved: results.every((result) => result.saved !== false),
-            has_result: true,
-          };
-      }
-      let sent: ActivityAction["sent"] = null;
-      if (
-        value.tool_name === "discussion" &&
-        activityRecord(args) &&
-        args.action === "send"
-      ) {
-        for (const result of results) {
-          if (result.value.part_kind !== "tool-return") continue;
-          let content = parsed.get(`${result.key}:content`);
-          if (content === undefined) {
-            content = await structuredValue(
-              agentId,
-              data.run.sequence,
-              result.value.content,
-              signal,
-            );
-            parsed.set(`${result.key}:content`, content);
-          }
-          if (
-            activityRecord(content) &&
-            content.error === undefined &&
-            typeof content.discussion_id === "number" &&
-            Number.isSafeInteger(content.discussion_id) &&
-            content.discussion_id > 0 &&
-            typeof content.id === "number" &&
-            Number.isSafeInteger(content.id) &&
-            content.id > 0 &&
-            typeof content.created_at === "string"
-          ) {
-            sent = {
-              discussion_id: content.discussion_id,
-              message_id: content.id,
-              created_at: content.created_at,
-            };
-          }
-        }
-      }
-      actions.push({
-        ...part,
-        args,
-        results,
-        sent,
-        lifecycle,
-        requestId: group.content?.summary.request_id,
-        observation: group.content?.observation,
-      });
-    }
-    const linked = new Set(
-      actions.flatMap((action) => action.results.map((result) => result.key)),
-    );
-    for (const result of group.results) {
-      if (
-        (result.value.part_kind === "tool-return" ||
-          result.value.part_kind === "retry-prompt") &&
-        !linked.has(result.key) &&
-        !(
-          result.value.outcome === "interrupted" &&
-          group.observations?.some(
-            (observation) =>
-              activityRecord(observation) &&
-              observation.has_result === false &&
-              observation.tool_call_id === result.value.tool_call_id,
-          )
-        )
-      ) {
-        actions.push({ ...result, args: null, results: [result], sent: null });
-        data.missing = [
-          ...new Set([
-            ...data.missing,
-            "A saved tool result has no matching action",
-          ]),
-        ];
-      }
-    }
-  }
-  const sent = actions.some((action) => action.sent !== null);
-  const lastGroup = groups[groups.length - 1];
-  const modelParts =
-    lastGroup?.parts.filter((part) =>
-      ["text", "thinking", "tool-call"].includes(String(part.value.part_kind)),
-    ) ?? [];
-  const lastMessage = modelParts[modelParts.length - 1]?.messageIndex;
-  const ending =
-    lastGroup &&
-    !modelParts.some(
-      (part) =>
-        part.messageIndex === lastMessage &&
-        part.value.part_kind === "tool-call",
-    )
-      ? modelParts.filter(
-          (part) =>
-            part.messageIndex === lastMessage &&
-            part.value.part_kind === "text",
-        )
-      : [];
-  const final =
-    data.complete &&
-    !sent &&
-    !data.missing.length &&
-    data.run.status === "completed"
-      ? ending
-      : [];
-  const excluded = new Set((sent ? ending : final).map((part) => part.key));
-  for (const parts of responses)
-    for (const part of parts) if (!excluded.has(part.key)) notes.push(part);
-  return { ...data, actions, notes, final };
-}
-
 export async function loadActivity(
   agentId: number,
   sequence: number,
   signal: AbortSignal,
   publish: (data: ActivityData) => void,
+  textValues: Record<string, HistoryText> = {},
+  textReads: TextReads = new Map(),
 ): Promise<ActivityData> {
-  const parsed = new Map<string, HistoryValue>();
-  const first = await backend.agentHistoryRead(agentId, sequence);
+  const first = structuredClone(
+    await backend.agentHistoryRead(agentId, sequence),
+  );
   signal.throwIfAborted();
   if (first.agent_id !== agentId || first.run.sequence !== sequence)
     throw new Error("Saved activity identity does not match");
-  if (first.run.reminded === undefined)
-    throw new Error("Saved trigger information is unavailable");
   const data: ActivityData = {
+    agentId,
     run: first.run,
     requests: [...first.requests],
     contents: {},
     legacy: [],
-    legacyStart: 0,
-    actions: [],
-    notes: [],
-    final: [],
+    legacyBoundary:
+      first.windows.find((window) => window.number === first.run.window_number)
+        ?.since_sequence ?? (sequence === 1 ? 1 : null),
+    pending: first.requests.map((request) => request.ordinal),
+    textValues,
+    textReads,
     complete: false,
     missing: [...first.missing],
     usageVersion: first.usage_version,
@@ -647,60 +575,13 @@ export async function loadActivity(
   publish({ ...data });
   if (data.run.request_count === 0) {
     data.legacy = await readLegacy(agentId, sequence, first, signal);
-    if (
-      data.run.window_number !== null &&
-      data.run.window_number > 0 &&
-      data.legacy.length
-    ) {
-      const prior = await backend.agentHistory(agentId, sequence, 1);
-      signal.throwIfAborted();
-      const previous = prior.runs[0];
-      const window = first.windows.find(
-        (event) => event.number === data.run.window_number,
-      );
-      if (
-        !previous &&
-        sequence > 1 &&
-        (!window || window.since_sequence < sequence)
-      )
-        throw new Error("The preceding saved history is unavailable");
-      if (previous && previous.window_number === data.run.window_number) {
-        if (previous.sequence + 1 !== sequence)
-          throw new Error("The adjacent saved history is unavailable");
-        if (previous.request_count !== 0)
-          throw new Error(
-            "Saved legacy history has no comparable preceding snapshot",
-          );
-        const previousRead = await backend.agentHistoryRead(
-          agentId,
-          previous.sequence,
-        );
-        signal.throwIfAborted();
-        const messages = await readLegacy(
-          agentId,
-          previous.sequence,
-          previousRead,
-          signal,
-        );
-        if (previousRead.missing.length || messages.length > data.legacy.length)
-          throw new Error("Saved legacy history is incomplete");
-        for (const [index, message] of messages.entries()) {
-          if (JSON.stringify(message) !== JSON.stringify(data.legacy[index]))
-            throw new Error(
-              "Saved legacy history has no matching preceding prefix",
-            );
-        }
-        data.legacyStart = messages.length;
-      }
-    }
     data.legacy = data.legacy.map((message, index) =>
       legacyValue(message, index, []),
     );
     data.complete = true;
-    const result = await collectActivity(agentId, data, signal, parsed);
     signal.throwIfAborted();
-    publish(result);
-    return result;
+    publish({ ...data });
+    return data;
   }
   let page = first;
   while (page.requests_has_more) {
@@ -724,11 +605,13 @@ export async function loadActivity(
     );
     if (!additional.length)
       throw new Error("Saved request list did not advance");
-    data.requests.push(...additional);
-    data.missing.push(...page.missing);
+    data.requests = [...data.requests, ...additional];
+    data.missing = [...data.missing, ...page.missing];
   }
   data.requestsComplete = true;
-  data.requests.sort((left, right) => left.ordinal - right.ordinal);
+  data.requests = [...data.requests].sort(
+    (left, right) => left.ordinal - right.ordinal,
+  );
   if (data.requests.length !== data.run.request_count)
     throw new Error("Saved request list is incomplete");
   for (const summary of data.requests) {
@@ -739,9 +622,9 @@ export async function loadActivity(
     signal.throwIfAborted();
     if (!read.request || read.request.summary.ordinal !== summary.ordinal)
       throw new Error("Saved request content is missing");
-    let request = read.request;
-    data.missing.push(...read.missing);
-    for (const source of ["response", "related"] as const) {
+    let request = structuredClone(read.request);
+    data.missing = [...data.missing, ...read.missing];
+    for (const source of ["input", "response", "related"] as const) {
       let content = request[source];
       while (content?.has_more) {
         const offset =
@@ -753,7 +636,7 @@ export async function loadActivity(
           sequence,
           summary.ordinal,
           0,
-          0,
+          source === "input" ? offset : 0,
           source === "response" ? offset : 0,
           source === "related" ? offset : 0,
         );
@@ -767,18 +650,62 @@ export async function loadActivity(
           throw new Error("Saved message page is missing");
         content = mergeMessages(content, incoming);
         request = { ...request, [source]: content };
-        data.missing.push(...next.missing);
+        data.missing = [...data.missing, ...next.missing];
       }
     }
-    data.contents = { ...data.contents, [summary.ordinal]: request };
-    const progress = await collectActivity(agentId, data, signal, parsed);
+    const parameters = await structuredValue(
+      agentId,
+      sequence,
+      request.parameters as unknown as HistoryValue,
+      signal,
+      undefined,
+      data.textValues,
+      data.textReads,
+    );
     signal.throwIfAborted();
-    publish(progress);
+    let snapshot: ActivityRequestSnapshot = {
+      readId: signal,
+      request,
+      parameters,
+      values: {},
+      complete: false,
+    };
+    data.contents = { ...data.contents, [summary.ordinal]: snapshot };
+    data.pending = data.requests
+      .filter((item) => !data.contents[item.ordinal]?.complete)
+      .map((item) => item.ordinal);
+    publish({ ...data });
+    for (const source of ["input", "response", "related"] as const) {
+      const content = request[source];
+      if (!content) continue;
+      const values: HistoryValue[] = [];
+      for (const message of content.messages) {
+        values.push(
+          await completeValue(
+            agentId,
+            sequence,
+            message,
+            signal,
+            data.textValues,
+            data.textReads,
+          ),
+        );
+      }
+      snapshot = {
+        ...snapshot,
+        values: { ...snapshot.values, [source]: values },
+      };
+    }
+    snapshot = { ...snapshot, complete: true };
+    data.contents = { ...data.contents, [summary.ordinal]: snapshot };
+    data.pending = data.requests
+      .filter((item) => !data.contents[item.ordinal]?.complete)
+      .map((item) => item.ordinal);
+    publish({ ...data });
   }
   data.complete = true;
   data.missing = [...new Set(data.missing)];
-  const result = await collectActivity(agentId, data, signal, parsed);
   signal.throwIfAborted();
-  publish(result);
-  return result;
+  publish({ ...data });
+  return data;
 }

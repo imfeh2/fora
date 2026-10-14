@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { composeContext } from "@/features/members/activity-context";
 import {
   type ActivityData,
   loadActivity,
@@ -106,6 +107,11 @@ function read(
 }
 const load = (publish: (value: ActivityData) => void = () => {}) =>
   loadActivity(2, 4, new AbortController().signal, publish);
+const view = (data: ActivityData) => composeContext(2, [data]);
+const actions = (data: ActivityData) =>
+  view(data).entries.flatMap((entry) => (entry.action ? [entry.action] : []));
+const ending = (data: ActivityData) =>
+  view(data).entries.filter((entry) => entry.workRecord);
 
 describe("activity data", () => {
   it.each(["missing", "gap", "prefix", "incomplete"])(
@@ -151,14 +157,28 @@ describe("activity data", () => {
           };
         },
       );
-      await expect(load()).rejects.toThrow(
+      const current = await load();
+      const prior =
         condition === "missing"
-          ? "The preceding saved history is unavailable"
-          : condition === "gap"
-            ? "The adjacent saved history is unavailable"
-            : condition === "prefix"
-              ? "Saved legacy history has no matching preceding prefix"
-              : "Saved legacy history is incomplete",
+          ? []
+          : [
+              await loadActivity(
+                2,
+                previous.sequence,
+                new AbortController().signal,
+                () => {},
+              ),
+            ];
+      const context = composeContext(2, [...prior, current]);
+      expect(
+        context.entries.some((entry) => entry.resolved.content === "ending"),
+      ).toBe(true);
+      expect(context.missing).toContain(
+        condition === "prefix"
+          ? "Saved legacy history has no matching preceding prefix"
+          : condition === "incomplete"
+            ? "messages"
+            : "The preceding saved history has not been loaded",
       );
     },
   );
@@ -193,7 +213,7 @@ describe("activity data", () => {
       windows_has_more: false,
       windows_next_after: null,
     });
-    expect((await load()).final[0].value.content).toBe("New context ending");
+    expect(ending(await load())[0].value.content).toBe("New context ending");
   });
 
   it("retains an unmatched saved result with an explicit incomplete-history state", async () => {
@@ -201,11 +221,13 @@ describe("activity data", () => {
     value.request.response = messages([text("Ending")]);
     vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
     const data = await load();
-    expect(data.actions[0].results[0].value.content).toBe("result-1");
-    expect(data.missing).toContain(
+    expect(
+      view(data).entries.some((entry) => entry.value.content === "result-1"),
+    ).toBe(true);
+    expect(view(data).missing).toContain(
       "A saved tool result has no matching action",
     );
-    expect(data.final).toEqual([]);
+    expect(ending(data).map((part) => part.value.content)).toEqual(["Ending"]);
   });
 
   it("preserves the original location of an image in a complete legacy snapshot", async () => {
@@ -232,7 +254,7 @@ describe("activity data", () => {
     };
     vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
     const data = await load();
-    expect(data.actions[0].results[0].value.content).toEqual({
+    expect(actions(data)[0].results[0].value.content).toEqual({
       kind: "binary",
       source: "run",
       message_index: 1,
@@ -241,10 +263,10 @@ describe("activity data", () => {
       size: 3,
       identifier: "a9993e",
     });
-    expect(data.final[0].value.content).toBe("Ending");
+    expect(ending(data)[0].value.content).toBe("Ending");
   });
 
-  it("reads every summary and both message channels while retaining request ownership", async () => {
+  it("reads every summary and all three message channels while retaining request ownership", async () => {
     const all = Array.from(
       { length: 32 },
       (_, index) => read(index + 1).requests[0],
@@ -256,7 +278,7 @@ describe("activity data", () => {
         _sequence,
         ordinal,
         _offset,
-        _input,
+        inputOffset,
         responseOffset,
         relatedOffset,
         options,
@@ -268,6 +290,19 @@ describe("activity data", () => {
         value.requests_has_more = options?.requestAfter !== 30;
         value.requests_next_after = value.requests_has_more ? 30 : null;
         if (ordinal === 32) {
+          value.request.input = messages(
+            Array.from({ length: inputOffset ? 1 : 100 }, (_, index) => ({
+              kind: "request",
+              parts: [
+                {
+                  part_kind: "user-prompt",
+                  content: `input-${(inputOffset ?? 0) + index}`,
+                },
+              ],
+            })),
+            inputOffset ?? 0,
+            101,
+          );
           value.request.response = messages(
             Array.from({ length: responseOffset ? 1 : 100 }, (_, index) =>
               (responseOffset ?? 0) + index === 0
@@ -292,15 +327,23 @@ describe("activity data", () => {
     const data = await load((value) => progress.push(value));
     expect(data.complete).toBe(true);
     expect(data.requests).toHaveLength(32);
-    expect(data.contents[32].response?.messages).toHaveLength(101);
-    expect(data.contents[32].related.messages).toHaveLength(101);
-    expect(data.actions).toHaveLength(32);
-    expect(data.actions[0].results[0].value.content).toBe("result-1");
-    expect(data.actions[1].results[0].value.content).toBe("result-2");
-    expect(data.final[data.final.length - 1]?.value.content).toBe("text-100");
+    expect(data.contents[32].request.input.messages).toHaveLength(101);
+    expect(data.contents[32].values.input).toHaveLength(101);
+    expect(data.contents[32].request.response?.messages).toHaveLength(101);
+    expect(data.contents[32].request.related.messages).toHaveLength(101);
+    expect(actions(data)).toHaveLength(32);
+    expect(actions(data)[0].results[0].value.content).toBe("result-1");
+    expect(actions(data)[1].results[0].value.content).toBe("result-2");
+    expect(ending(data)[ending(data).length - 1]?.value.content).toBe(
+      "text-100",
+    );
     expect(
-      progress.slice(0, -1).every((value) => value.final.length === 0),
+      progress.every((value) => {
+        composeContext(2, [value]);
+        return true;
+      }),
     ).toBe(true);
+    expect(readCalls.mock.calls.some((args) => args[4] === 100)).toBe(true);
     expect(readCalls.mock.calls.some((args) => args[5] === 100)).toBe(true);
     expect(readCalls.mock.calls.some((args) => args[6] === 100)).toBe(true);
   });
@@ -315,7 +358,7 @@ describe("activity data", () => {
     vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
     const data = await load();
     expect(
-      data.actions.map(({ timestamp, ordinal, messageIndex, partIndex }) => ({
+      actions(data).map(({ timestamp, ordinal, messageIndex, partIndex }) => ({
         timestamp,
         ordinal,
         messageIndex,
@@ -328,7 +371,7 @@ describe("activity data", () => {
         messageIndex: 0,
         partIndex: 0,
       },
-      { timestamp: null, ordinal: 1, messageIndex: 1, partIndex: 0 },
+      { timestamp: run.started_at, ordinal: 1, messageIndex: 1, partIndex: 0 },
     ]);
   });
 
@@ -370,17 +413,17 @@ describe("activity data", () => {
       },
     );
     const data = await load();
-    expect(data.actions[0].sent).toEqual({
+    expect(actions(data)[0].sent).toEqual({
       discussion_id: 8,
       message_id: 9,
       created_at: run.started_at,
     });
-    expect(data.actions[1].sent).toBeNull();
-    expect(data.actions[1].results[0].value.part_kind).toBe("retry-prompt");
-    expect(data.final).toEqual([]);
-    expect(data.notes.some((part) => part.value.content === "ending")).toBe(
-      false,
-    );
+    expect(actions(data)[1].sent).toBeNull();
+    expect(actions(data)[1].results[0].value.part_kind).toBe("retry-prompt");
+    expect(ending(data).map((part) => part.value.content)).toEqual(["ending"]);
+    expect(
+      view(data).entries.filter((entry) => entry.resolved.content === "ending"),
+    ).toHaveLength(1);
   });
 
   it("completes paged JSON arguments before deciding send identity", async () => {
@@ -411,8 +454,8 @@ describe("activity data", () => {
       has_more: false,
     });
     const data = await load();
-    expect(data.actions[0].args).toEqual({ action: "send" });
-    expect(data.actions[0].sent?.message_id).toBe(9);
+    expect(actions(data)[0].args).toEqual({ action: "send" });
+    expect(actions(data)[0].sent).toBeNull();
     expect(textRead).toHaveBeenCalledOnce();
     expect(textRead.mock.calls[0][2].offset).toBe(10);
   });
@@ -433,19 +476,27 @@ describe("activity data", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("retains final model text only after a completed full read without successful sends", async () => {
+  it("retains saved final model text with running, failed and incomplete records", async () => {
     const value = read();
     value.request.response = messages([text("work record")]);
     value.request.related = messages([]);
     vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
-    expect((await load()).final[0].value.content).toBe("work record");
+    expect(ending(await load())[0].value.content).toBe("work record");
     value.run = { ...run, status: "running" };
-    expect((await load()).final).toEqual([]);
+    expect(ending(await load()).map((part) => part.value.content)).toEqual([
+      "work record",
+    ]);
     value.run = { ...run, status: "failed" };
-    expect((await load()).final).toEqual([]);
+    expect(ending(await load()).map((part) => part.value.content)).toEqual([
+      "work record",
+    ]);
     value.run = run;
     value.missing = ["response"];
-    expect((await load()).final).toEqual([]);
+    const incomplete = await load();
+    expect(ending(incomplete).map((part) => part.value.content)).toEqual([
+      "work record",
+    ]);
+    expect(incomplete.missing).toContain("response");
   });
 
   it("reads complete legacy pages and removes a saved preceding common prefix", async () => {
@@ -491,19 +542,35 @@ describe("activity data", () => {
       windows_next_after: null,
     });
     const data = await load();
-    expect(data.legacyStart).toBe(1);
-    expect(data.notes.some((part) => part.value.content === "earlier")).toBe(
-      false,
+    const previous = await loadActivity(
+      2,
+      3,
+      new AbortController().signal,
+      () => {},
     );
-    expect(data.final[0].value.content).toBe("中文 ending");
+    const context = composeContext(2, [previous, data]);
+    expect(
+      context.entries.filter((entry) => entry.resolved.content === "earlier"),
+    ).toHaveLength(1);
+    expect(
+      context.entries.some((entry) => entry.resolved.content === "中文 ending"),
+    ).toBe(true);
   });
 
-  it.each(["arguments", "summary", "message"])(
+  it("preserves malformed saved arguments as their complete original text", async () => {
+    const value = read();
+    value.request.response = messages([call("run", "{invalid")]);
+    vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
+    const data = await load();
+    expect(data.complete).toBe(true);
+    expect(actions(data)[0].args).toBe("{invalid");
+    expect(actions(data)[0].sent).toBeNull();
+  });
+
+  it.each(["summary", "message"])(
     "reports invalid %s without producing fabricated content",
     async (source) => {
       const value = read();
-      if (source === "arguments")
-        value.request.response = messages([call("run", "{invalid")]);
       if (source === "summary") {
         value.requests_has_more = true;
         value.requests_next_after = null;

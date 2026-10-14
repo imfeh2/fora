@@ -95,6 +95,7 @@ from fora.adapters.model.config import (
     ModelConfig,
     model_settings,
 )
+from fora.adapters.model.context_sources import ContextSources
 from fora.adapters.model.observability import (
     Observability,
     ObservabilityConfig,
@@ -439,6 +440,7 @@ class LiveModel(WrapperModel):
         request_recorder: ModelRequestRecorder | None = None,
         model_snapshot: dict[str, Any] | None = None,
         live_observer: LiveTurnObserver | None = None,
+        context_sources: ContextSources | None = None,
     ) -> None:
         self._resolve = resolve
         self._ephemeral = ephemeral
@@ -449,6 +451,7 @@ class LiveModel(WrapperModel):
         self._live_observer = live_observer
         self._tools: dict[int, LiveTool] = {}
         self._response_version: str | None = None
+        self._context_sources = context_sources
         self._last_request_handle: ModelRequestHandle | None = None
         self._last_response: ModelResponse | None = None
         self.current_request_handle: ModelRequestHandle | None = None
@@ -476,9 +479,12 @@ class LiveModel(WrapperModel):
             return messages
         last = messages[-1]
         assert isinstance(last, ModelRequest)
+        part = UserPromptPart(text)
+        if self._context_sources is not None:
+            self._context_sources.mark(part, "ephemeral")
         return [
             *messages[:-1],
-            replace(last, parts=[*last.parts, UserPromptPart(text)]),
+            replace(last, parts=[*last.parts, part]),
         ]
 
     def _request_content(
@@ -611,7 +617,11 @@ class LiveModel(WrapperModel):
         try:
             self._request_recorder.related(
                 handle,
-                _encode_messages(related),
+                _encode_messages(
+                    self._context_sources.snapshot(related)
+                    if self._context_sources is not None
+                    else related
+                ),
             )
         except HistoryPersistenceError:
             raise
@@ -707,7 +717,11 @@ class LiveModel(WrapperModel):
         try:
             model_json = _encode_json(model_snapshot)
             handle = self._request_recorder.start(
-                _encode_messages(messages),
+                _encode_messages(
+                    self._context_sources.snapshot(messages)
+                    if self._context_sources is not None
+                    else messages
+                ),
                 _encode_request_parameters(parameters),
                 _encode_json(model_settings or {}),
                 model_json,
@@ -1298,12 +1312,17 @@ class PydanticModelRunner:
                 if previous is not None:
                     previous.shutdown()
             observability = self._observability
-        history = _settle_tool_calls(_decode_history(request.history_json))
+        context_sources = ContextSources(request.agent_id, request.sequence)
+        history = _settle_tool_calls(
+            context_sources.restore(_decode_history(request.history_json))
+        )
         new_window = not history
         if new_window:
+            resident = UserPromptPart(request.resident)
+            context_sources.mark(resident, "session_context")
             history.append(
                 ModelRequest(
-                    parts=[UserPromptPart(request.resident)],
+                    parts=[resident],
                     metadata={
                         "fora": {
                             "block": "resident",
@@ -1364,6 +1383,16 @@ class PydanticModelRunner:
                     ),
                 )
             if ctx.run_step == 1:
+                prompt_parts = [
+                    part
+                    for part in request_context.messages[-1].parts
+                    if isinstance(part, UserPromptPart)
+                ]
+                if len(prompt_parts) == 1:
+                    context_sources.mark(
+                        prompt_parts[0],
+                        "reminder" if request.reminder is not None else "preparation",
+                    )
                 request_context = replace(
                     request_context,
                     messages=[*history, request_context.messages[-1]],
@@ -1383,16 +1412,16 @@ class PydanticModelRunner:
             )
             if previous == current:
                 return request_context
+            environment_part = UserPromptPart(
+                "The execution environment changed.\n" + current
+            )
+            context_sources.mark(environment_part, "environment")
             return replace(
                 request_context,
                 messages=[
                     *request_context.messages,
                     ModelRequest(
-                        parts=[
-                            UserPromptPart(
-                                "The execution environment changed.\n" + current
-                            )
-                        ],
+                        parts=[environment_part],
                         metadata={"fora": {"block": "durable", "environment": current}},
                     ),
                 ],
@@ -1407,7 +1436,9 @@ class PydanticModelRunner:
         ) -> ModelResponse:
             if live_model is not None:
                 live_model.observe_response(response)
-            _persist_history(request, _settle_tool_calls([*ctx.messages, response]))
+            _persist_history(
+                request, _settle_tool_calls([*ctx.messages, response]), context_sources
+            )
             if live_model is not None:
                 live_model.response_checkpoint(response)
             return response
@@ -1513,6 +1544,7 @@ class PydanticModelRunner:
                         "thinking_budget_tokens": config.thinking_budget_tokens,
                     },
                     request.live_observer,
+                    context_sources,
                 )
                 live_model = wrapper
 
@@ -1544,9 +1576,9 @@ class PydanticModelRunner:
         context_exceeded = False
         overflow_context = None
         snapshot = (
-            _persist_history(request, history)
+            _persist_history(request, history, context_sources)
             if new_window
-            else _encode_history(history)
+            else _encode_history(context_sources.snapshot(history, persistent=True))
         )
         with capture_run_messages() as captured, active_trace(trace):
             try:
@@ -1566,7 +1598,9 @@ class PydanticModelRunner:
                     final_messages = _settle_tool_calls(captured)
                     if live_model is not None:
                         live_model.finalize(final_messages)
-                    messages = _encode_history(final_messages)
+                    messages = _encode_history(
+                        context_sources.snapshot(final_messages, persistent=True)
+                    )
                 new_messages = captured[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
                 error = f"{type(failure).__name__}: {failure}"
@@ -1591,7 +1625,9 @@ class PydanticModelRunner:
                 final_messages = _settle_tool_calls(result.all_messages())
                 assert live_model is not None
                 live_model.finalize(final_messages)
-                messages = _encode_history(final_messages)
+                messages = _encode_history(
+                    context_sources.snapshot(final_messages, persistent=True)
+                )
                 new_messages = result.new_messages()
                 input_tokens = _last_input_tokens(new_messages)
 
@@ -1801,8 +1837,16 @@ def _encode_history(messages: Sequence[ModelMessage]) -> str:
         raise HistoryPersistenceError("Could not serialize model history") from error
 
 
-def _persist_history(request: TurnRequest, messages: list[ModelMessage]) -> str:
-    raw = _encode_history(messages)
+def _persist_history(
+    request: TurnRequest,
+    messages: list[ModelMessage],
+    context_sources: ContextSources | None = None,
+) -> str:
+    raw = _encode_history(
+        context_sources.snapshot(messages, persistent=True)
+        if context_sources is not None
+        else messages
+    )
     try:
         request.persist(raw)
     except Exception as error:
