@@ -311,7 +311,7 @@ export function WindowHistory({
   }
   const window = windows.find((window) => window.number === selected);
   return (
-    <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4 bg-app px-3 py-4">
+    <div className="mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4 px-3 py-4">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         {selected !== undefined ? (
           <WindowPicker

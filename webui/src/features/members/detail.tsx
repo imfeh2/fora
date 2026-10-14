@@ -133,7 +133,7 @@ export function MemberPage({ id }: { id: number }) {
 
 function MemberSkeleton() {
   return (
-    <div className="mx-auto w-full min-w-0 max-w-3xl bg-app px-3 py-4">
+    <div className="mx-auto w-full min-w-0 max-w-3xl px-3 py-4">
       <ConversationSkeleton label="Loading Member" window />
     </div>
   );

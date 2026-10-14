@@ -301,7 +301,7 @@ export function MemberCard({
       : member.tokens;
 
   return (
-    <div className="relative flex flex-col gap-2.5 p-3 border border-line rounded-md bg-app transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50">
+    <div className="relative flex flex-col gap-2.5 p-3 border border-line rounded-md bg-surface transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50">
       <div className="flex items-start justify-between gap-2 min-w-0">
         <div className="flex min-w-0 items-center gap-3">
           <Avatar memberId={member.id} />
