@@ -605,6 +605,7 @@ dependencies = [
     { name = "pillow" },
     { name = "psutil" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "duckduckgo", "google", "openai"] },
+    { name = "python-hosts" },
     { name = "soxr" },
     { name = "websockets" },
 ]
@@ -630,6 +631,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "duckduckgo", "google", "openai"], specifier = ">=2.28.0" },
+    { name = "python-hosts", specifier = "==1.1.3" },
     { name = "soxr", specifier = ">=1.1.0" },
     { name = "websockets", specifier = ">=16.1.1" },
 ]
@@ -2067,6 +2069,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
+]
+
+[[package]]
+name = "python-hosts"
+version = "1.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/3b/57e2497a51ed82d0f9a3f47dbd4e4dc3183d9f2f6fc2226b98bdc94f0ee9/python_hosts-1.1.3.tar.gz", hash = "sha256:c0a757b03a052755e9c4063f507c9ed9614a3ded28c5dd8782d182cd3d3b2aae", size = 33996, upload-time = "2026-09-27T10:24:57.471Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/f5/7e9b4c70ec14a1be31624e8b4db7383ea9c05c1c680dd0dd44c0fa23811d/python_hosts-1.1.3-py2.py3-none-any.whl", hash = "sha256:6aab29aa600d3b6d1397691c8828607b7db9b370a7d037d41e2bb86e4d4654c7", size = 11358, upload-time = "2026-09-27T10:24:28.877Z" },
 ]
 
 [[package]]

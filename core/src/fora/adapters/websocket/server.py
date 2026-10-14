@@ -30,6 +30,8 @@ from fora.adapters.websocket.address import (
     parse_origin,
     validate_host,
 )
+from fora.adapters.websocket.local_names import REFRESH_INTERVAL, collect_names
+from fora.adapters.websocket.origin_error import origin_error_page
 from fora.core.attachment import Upload
 from fora.core.errors import DomainError
 from fora.ports.usage import usage_session
@@ -320,17 +322,45 @@ def webui_directory(override: str | None = None) -> Path | None:
     return None
 
 
-def static_response(directory: Path, path: str) -> web.Response:
+def static_response(
+    directory: Path,
+    path: str,
+    *,
+    document_allowed: bool = True,
+    origin_allowed: bool = True,
+    entry_url: str | None = None,
+) -> web.Response:
+    def failure(status: int, text: str) -> web.Response:
+        if not origin_allowed:
+            return web.Response(status=403, text="Origin not allowed")
+        return web.Response(status=status, text=text)
+
     if not directory.is_dir():
-        return web.Response(status=503, text="Frontend not built")
+        return failure(503, "Frontend not built")
     relative = unquote(path).lstrip("/")
     target = directory / "index.html"
     if "." in relative:
         target = (directory / relative).resolve()
         if not target.is_relative_to(directory.resolve()) or not target.is_file():
-            return web.Response(status=404, text="Not found")
+            return failure(404, "Not found")
     if not target.is_file():
-        return web.Response(status=503, text="Frontend not built")
+        return failure(503, "Frontend not built")
+    document = target.resolve() == (directory / "index.html").resolve()
+    if document and (not document_allowed or not origin_allowed):
+        if entry_url is not None:
+            return web.Response(
+                status=403,
+                text=origin_error_page(entry_url),
+                content_type="text/html",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                },
+            )
+        log.debug("Origin notice unavailable: local-address-unavailable")
+        return web.Response(status=403, text="Origin not allowed")
+    if not origin_allowed:
+        return web.Response(status=403, text="Origin not allowed")
     content_type = CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
     return web.Response(
         headers={"Content-Type": content_type}, body=target.read_bytes()
@@ -395,6 +425,7 @@ class WebServer:
                 middlewares=[self._boundary], client_max_size=20 * 1024 * 1024
             )
             self._thread = threading.Thread(target=self._run, name="fora-web")
+            self._names: frozenset[str] = frozenset()
             self._origins = {
                 parse_origin(origin)
                 for origin in (
@@ -458,7 +489,7 @@ class WebServer:
             return False
         if origin in self._origins:
             return True
-        if not self.wildcard or origin.scheme != "http" or origin.port != self._port:
+        if origin.scheme != "http" or origin.port != self._port:
             return False
         transport = request.transport
         if transport is None:
@@ -473,7 +504,18 @@ class WebServer:
             requested = parse_origin(f"http://{request.host}")
         except ValueError:
             return False
-        return origin == local == requested
+        if (
+            int(address[1]) == self._port
+            and (
+                self.wildcard
+                and ip_address(address[0]).version == self._address.version
+                or ip_address(address[0]) == self._address
+            )
+            and origin.raw_host in self._names
+            and origin == requested
+        ):
+            return True
+        return self.wildcard and origin == local == requested
 
     def add_websocket_route(
         self, path: str, handler: SocketHandler, *, max_msg_size: int
@@ -557,17 +599,20 @@ class WebServer:
         self._stop = asyncio.Event()
         runner = web.AppRunner(self._app, access_log=None, shutdown_timeout=130)
         try:
+            self._names = await collect_names(self._address)
             await runner.setup()
             site = web.SockSite(runner, self._socket)
             await site.start()
             async with asyncio.TaskGroup() as tasks:
                 cleanup = tasks.create_task(self._cleanup())
+                refresh = tasks.create_task(self._refresh_names())
                 self._ready.set_result(None)
                 try:
                     await self._stop.wait()
                 finally:
                     await site.stop()
                     cleanup.cancel()
+                    refresh.cancel()
                     await asyncio.gather(
                         *(
                             self._close_socket(connection, code=1001)
@@ -593,6 +638,11 @@ class WebServer:
                         raise BaseExceptionGroup("Request shutdown failed", errors)
         finally:
             await runner.cleanup()
+
+    async def _refresh_names(self) -> None:
+        while True:
+            await asyncio.sleep(REFRESH_INTERVAL)
+            self._names = await collect_names(self._address)
 
     async def _cleanup(self) -> None:
         while True:
@@ -626,6 +676,10 @@ class WebServer:
             if (
                 request.path != "/ws"
                 or request.headers.get("Upgrade", "").lower() == "websocket"
+            ) and not (
+                handler == self._static
+                and request.method == "GET"
+                and self._directory is not None
             ):
                 raise web.HTTPForbidden(text="Origin not allowed")
             origin = None
@@ -663,6 +717,8 @@ class WebServer:
                     "Vary": "Origin",
                 }
             )
+        if response.status == 403 and response.content_type == "text/html":
+            return response
         if origin is not None:
             response.headers.update(
                 {
@@ -679,7 +735,29 @@ class WebServer:
             raise web.HTTPMethodNotAllowed(request.method, ["GET"])
         if self._directory is None:
             return web.Response(status=404, text="Not found")
-        return await worker(static_response, self._directory, request.path)
+        origin = request.headers.get("Origin")
+        transport = request.transport
+        address = transport.get_extra_info("sockname") if transport else None
+        entry_url = None
+        if address is not None:
+            try:
+                entry_url = str(
+                    URL(
+                        http_origin(str(ip_address(address[0])), int(address[1]))
+                    ).with_path("/")
+                )
+            except ValueError:
+                pass
+        return await worker(
+            partial(
+                static_response,
+                document_allowed=self._allows_origin(request, f"http://{request.host}"),
+                origin_allowed=origin is None or self._allows_origin(request, origin),
+                entry_url=entry_url,
+            ),
+            self._directory,
+            request.path,
+        )
 
     async def _close_socket(
         self, connection: web.WebSocketResponse, *, code: int = 1000

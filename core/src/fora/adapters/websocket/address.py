@@ -27,7 +27,7 @@ def validate_host(value: str) -> str:
     host = url.raw_host
     if host is None:
         raise ValueError("host must be a hostname or IP address")
-    return host
+    return host.lower().removesuffix(".")
 
 
 def http_origin(host: str, port: int) -> str:
@@ -52,7 +52,5 @@ def parse_origin(value: str) -> URL:
         or "%" in url.raw_host
     ):
         raise ValueError("invalid origin")
-    host = url.raw_host
-    if ":" in host:
-        host = str(ip_address(host))
+    host = validate_host(url.raw_host)
     return URL.build(scheme=url.scheme, host=host, port=url.explicit_port).origin()
