@@ -843,7 +843,17 @@ function regionalReads() {
     });
   const model = vi.spyOn(backend, "modelCatalog").mockResolvedValue({
     version: 2,
-    providers: [],
+    providers: [
+      {
+        id: "regional-provider",
+        name: "Regional provider",
+        api_type: "openai-chat",
+        base_url: "https://provider.invalid",
+        api_key_set: false,
+        enabled: true,
+        extra_body: {},
+      },
+    ],
     models: [],
     default_model_id: null,
     default_thinking: "default",
@@ -868,11 +878,15 @@ function regionalRead(region: Region, reads: ReturnType<typeof regionalReads>) {
 function regionalInput(region: Region, view: ReturnType<typeof render>) {
   if (region === "execution")
     fireEvent.click(view.getByRole("button", { name: "Add directory" }));
+  if (region === "model")
+    fireEvent.click(
+      view.getByRole("button", { name: /^Regional provider.*openai-chat/ }),
+    );
   const label = {
     agent: "Context window (tokens)",
     execution: "New directory path",
     langfuse: "Base URL",
-    model: "Provider name",
+    model: "API address",
     document: "Document",
   }[region];
   return view.getByLabelText(label) as HTMLInputElement | HTMLTextAreaElement;

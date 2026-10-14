@@ -525,6 +525,7 @@ export function ModelPanel() {
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(true);
   const online = useRef(true);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uncertain, setUncertain] = useState(false);
   const [reviewed, setReviewed] = useState(false);
@@ -555,6 +556,7 @@ export function ModelPanel() {
     }
     const request = ++generation.current;
     reading.current = request;
+    setLoadError(null);
     try {
       const loaded = await backend.modelCatalog();
       if (request !== generation.current) return;
@@ -563,7 +565,7 @@ export function ModelPanel() {
       setReviewed(true);
     } catch (failure) {
       if (request === generation.current) {
-        setError(failure instanceof Error ? failure.message : String(failure));
+        setLoadError(reportLoadFailure(failure));
       }
     } finally {
       if (request === generation.current && reading.current === request) {
@@ -741,6 +743,7 @@ export function ModelPanel() {
         return false;
       generation.current += 1;
       setCatalog(updated);
+      setLoadError(null);
       if (action === "save_provider" && id === null) {
         const created = updated.providers.filter(
           (item) => !catalog?.providers.some((old) => old.id === item.id),
@@ -1005,12 +1008,30 @@ export function ModelPanel() {
       aria-label="Model settings"
       className="model-settings m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
     >
+      {loadError && !(loadError.transport && backend.disconnected) ? (
+        <LoadError error={loadError} retry={() => void load()} />
+      ) : null}
       {!catalog ? (
-        <div
-          role="status"
-          aria-label="Loading model settings"
-          className="h-64 animate-pulse rounded bg-surface-hover"
-        />
+        !loadError && connected ? (
+          <LoadingSkeleton label="Loading model settings">
+            <div className="flex max-w-[560px] flex-col gap-4">
+              <FieldSkeleton />
+              <FieldSkeleton />
+            </div>
+            <div className="flex min-h-[580px] min-w-0 overflow-hidden rounded-md border border-line bg-surface">
+              <div className="flex min-w-0 flex-col gap-3 p-3 md:w-[280px] md:shrink-0 md:border-r md:border-line">
+                <FieldSkeleton />
+                <FieldSkeleton />
+                <FieldSkeleton />
+              </div>
+              <div className="hidden min-w-0 flex-1 flex-col gap-6 p-6 md:flex">
+                <FieldSkeleton />
+                <FieldSkeleton />
+                <FieldSkeleton />
+              </div>
+            </div>
+          </LoadingSkeleton>
+        ) : null
       ) : (
         <>
           <fieldset
@@ -1195,14 +1216,6 @@ export function ModelPanel() {
           />
         </>
       )}
-      {!catalog && error ? (
-        <>
-          <p role="alert" className="text-sm text-danger">
-            {error}
-          </p>
-          <Button onClick={() => void load()}>Retry</Button>
-        </>
-      ) : null}
       <Modal
         open={discard !== null}
         onOpenChange={(next) => {

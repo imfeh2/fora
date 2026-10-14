@@ -283,15 +283,85 @@ function deferred<T>() {
 }
 
 describe("Provider configuration", () => {
+  it("shows form placeholders until the first real catalog arrives", async () => {
+    const read = deferred<ModelCatalog>();
+    vi.mocked(backend.modelCatalog).mockReturnValue(read.promise);
+    mount();
+    const loading = screen.getByLabelText("Loading model settings");
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(loading.querySelectorAll(".animate-breathe").length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+    await act(async () => read.resolve(saved));
+    expect(screen.queryByLabelText("Loading model settings")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add" })).toBeTruthy();
+  });
+  it("ends initial placeholders on disconnect and accepts only the restored catalog", async () => {
+    const read = deferred<ModelCatalog>();
+    vi.mocked(backend.modelCatalog).mockReturnValue(read.promise);
+    mount();
+    await emit({ type: "connection.closed" });
+    expect(screen.queryByLabelText("Loading model settings")).toBeNull();
+    await act(async () => read.resolve(saved));
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+    vi.mocked(backend.modelCatalog).mockResolvedValue(saved);
+    await emit({ type: "connection.restored" });
+    expect(screen.getByRole("button", { name: "Add" })).toBeTruthy();
+  });
+  it("retains the selected catalog and draft through refresh failure and retry", async () => {
+    await open();
+    change("API address", "https://draft.test");
+    const input = screen.getByLabelText("API address");
+    vi.mocked(backend.modelCatalog).mockRejectedValueOnce(
+      new BackendError("internal_error", "Refresh unavailable"),
+    );
+    await emit({ type: "settings.updated", section: "model" });
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Refresh unavailable",
+    );
+    expect(screen.queryByLabelText("Loading model settings")).toBeNull();
+    expect(screen.getByLabelText("API address")).toBe(input);
+    expect(value("API address")).toBe("https://draft.test");
+    expect(backend.reportFailure).not.toHaveBeenCalled();
+    fireEvent.click(button("Retry"));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByLabelText("API address")).toBe(input);
+    expect(value("API address")).toBe("https://draft.test");
+    expect(backend.configureModel).not.toHaveBeenCalled();
+  });
+  it("reports disconnected transport failures through the shared connection handler", async () => {
+    vi.spyOn(backend, "disconnected", "get").mockReturnValue(true);
+    const failure = new BackendError(
+      "connection_lost",
+      "Connection lost",
+      true,
+    );
+    vi.mocked(backend.modelCatalog).mockRejectedValue(failure);
+    mount();
+    await waitFor(() =>
+      expect(backend.reportFailure).toHaveBeenCalledWith(failure),
+    );
+    expect(screen.queryByLabelText("Loading model settings")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
   it("loads only a real catalog and recovers from read failure", async () => {
     vi.mocked(backend.modelCatalog).mockRejectedValue(
       new BackendError("timeout", "Catalog unavailable", true),
     );
     mount();
     await screen.findByText("Catalog unavailable");
+    expect(screen.queryByLabelText("Loading model settings")).toBeNull();
     expect(screen.queryByLabelText("API address")).toBeNull();
-    vi.mocked(backend.modelCatalog).mockResolvedValue(saved);
+    const retry = deferred<ModelCatalog>();
+    vi.mocked(backend.modelCatalog).mockReturnValue(retry.promise);
     fireEvent.click(button("Retry"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByLabelText("Loading model settings")).toBeTruthy();
+    await act(async () => retry.resolve(saved));
     await screen.findByRole("button", { name: "Add" });
     expect(backend.configureModel).not.toHaveBeenCalled();
   });
