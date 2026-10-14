@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
@@ -473,3 +474,355 @@ def test_completed_request_index_update_rolls_back_with_history(stores):
     assert summary is not None and summary.status == "responded"
     assert history.usage_read(record_id)["status"] == "responded"
     assert history.usage_query({})["dataset_revision"] == before["dataset_revision"]
+
+
+def seed_history(db, agent_id, count, *, legacy=False):
+    with db:
+        for sequence in range(1, count + 1):
+            db.execute(
+                "INSERT INTO agent_runs(agent_id, sequence, run_id, status, started_at, messages_json, usage_json)"
+                " VALUES (?, ?, ?, 'completed', '2026-10-13T00:00:00Z', ?, ?)",
+                (
+                    agent_id,
+                    sequence,
+                    str(sequence),
+                    json.dumps([{"parts": "x" * 4096}]),
+                    '{"requests":1,"input_tokens":2,"output_tokens":3}',
+                ),
+            )
+            if not legacy:
+                db.execute(
+                    "INSERT INTO agent_model_requests(agent_id, sequence, ordinal, request_id, run_id,"
+                    " window_number, status, started_at, streaming, parameters_json, settings_json, model_json, response_json)"
+                    " VALUES (?, ?, 1, ?, ?, 1, 'completed', '2026-10-13T00:00:00Z', 0, '{}', '{}', '{}', ?)",
+                    (
+                        agent_id,
+                        sequence,
+                        str(sequence),
+                        str(sequence),
+                        '[{"kind":"response","usage":{"input_tokens":2,"output_tokens":3}}]',
+                    ),
+                )
+
+
+def test_initialization_batches_skip_aggregation_and_finish_with_one_query(
+    stores, monkeypatch
+):
+    store, history, agent = stores
+    seed_history(store._db, agent, 205)
+    original = store._db.execute
+    statements = []
+
+    def execute(sql, params=()):
+        statements.append(sql)
+        return original(sql, params)
+
+    monkeypatch.setattr(store._db, "execute", execute)
+    first = history.usage_query({"contributions_only": True})
+    assert set(first) == {"status", "filters", "index"}
+    assert first["status"] == "initializing"
+    assert first["index"]["processed_requests"] == 100
+    assert first["index"]["processed_turns"] == 100
+    assert not any("usage_decimal_sum" in sql for sql in statements)
+    other = SqliteAgentStore(store._db)
+    second = other.usage_query({"initialization_version": first["index"]["version"]})
+    assert second["status"] == "initializing"
+    assert second["index"]["processed_requests"] == 200
+    final = history.usage_query({"initialization_version": first["index"]["version"]})
+    assert final["status"] == "ready"
+    assert final["summary"]["requests"] == "205"
+    assert final["summary"]["total_tokens"] == "1025"
+    assert final["index"]["processed_turns"] == 205
+    assert len(final["records"]) == 20
+    repeated = history.usage_query({"dataset_revision": final["dataset_revision"]})
+    assert repeated["index"] == final["index"]
+    assert repeated["summary"] == final["summary"]
+
+
+def test_progress_migration_counts_rowid_gaps_once_and_keeps_ready_index(
+    stores, monkeypatch
+):
+    store, history, agent = stores
+    seed_history(store._db, agent, 5, legacy=True)
+    with store._db:
+        store._db.execute("DELETE FROM agent_runs WHERE sequence = 2")
+    history._usage.advance(2)
+    with store._db:
+        store._db.execute(
+            "ALTER TABLE usage_index_state DROP COLUMN processed_requests"
+        )
+        store._db.execute("ALTER TABLE usage_index_state DROP COLUMN processed_turns")
+    original = store._db.execute
+    plans = []
+
+    def execute(sql, params=()):
+        if "COUNT(*) FROM agent_runs INDEXED BY" in sql:
+            plans.extend(original("EXPLAIN QUERY PLAN " + sql, params))
+        return original(sql, params)
+
+    monkeypatch.setattr(store._db, "execute", execute)
+    index = UsageIndex(store._db)
+    assert index.state()["processed_turns"] == 2
+    state = index.advance(1)
+    assert state["turn_checkpoint"] == 4
+    assert state["processed_turns"] == 3
+    assert state["processed_requests"] == 0
+    assert any("COVERING INDEX agent_runs_summary" in row["detail"] for row in plans)
+    plan_count = len(plans)
+    while not index.advance(1)["ready"]:
+        pass
+    assert len(plans) == plan_count
+    assert index.state()["processed_turns"] == 4
+    snapshot = index.query({})
+    with store._db:
+        store._db.execute(
+            "ALTER TABLE usage_index_state DROP COLUMN processed_requests"
+        )
+        store._db.execute("ALTER TABLE usage_index_state DROP COLUMN processed_turns")
+    ready = UsageIndex(store._db)
+    monkeypatch.setattr(
+        ready, "sync_turn", lambda *args: pytest.fail("Ready index rescanned history")
+    )
+    result = ready.query({})
+    assert result["summary"] == snapshot["summary"]
+    assert result["dataset_revision"] == snapshot["dataset_revision"]
+    assert result["index"]["processed_turns"] == 4
+    assert result["index"]["ready"] == 1
+
+
+def test_progress_and_records_roll_back_together_and_resume_after_reopen(stores):
+    store, history, agent = stores
+    seed_history(store._db, agent, 102)
+    first = history.usage_query({})
+    with store._db:
+        store._db.execute(
+            "UPDATE agent_model_requests SET response_json = '{invalid' WHERE sequence = 102"
+        )
+    with pytest.raises(DomainError, match="Request"):
+        history.usage_query({"initialization_version": first["index"]["version"]})
+    failed = history._usage.state()
+    assert failed["request_checkpoint"] == 100
+    assert failed["processed_requests"] == 100
+    assert failed["processed_turns"] == 100
+    assert failed["error"]
+    assert not store._db.execute("SELECT 1 FROM usage_records WHERE sequence > 100")
+    with store._db:
+        store._db.execute(
+            "UPDATE agent_model_requests SET response_json = ? WHERE sequence = 102",
+            ('[{"kind":"response","usage":{"input_tokens":2,"output_tokens":3}}]',),
+        )
+    reopened = SqliteStore(store._path)
+    try:
+        resumed = SqliteAgentStore(reopened._db).usage_query(
+            {"initialization_version": first["index"]["version"]}
+        )
+        assert resumed["status"] == "ready"
+        assert resumed["index"]["processed_requests"] == 102
+        assert resumed["index"]["processed_turns"] == 102
+        assert resumed["index"]["error"] is None
+        assert resumed["summary"]["total_tokens"] == "510"
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    "params, code",
+    [
+        ({"initialization_version": True}, "invalid_params"),
+        ({"initialization_version": None}, "invalid_params"),
+        ({"initialization_version": "1"}, "invalid_params"),
+        ({"initialization_version": 1, "dataset_revision": 0}, "invalid_params"),
+        ({"initialization_version": 1, "cursor": "invalid"}, "invalid_params"),
+        ({"initialization_version": 2}, "usage_changed"),
+        ({"cursor": 1}, "invalid_params"),
+    ],
+)
+def test_invalid_initialization_identity_does_not_advance(stores, params, code):
+    store, history, agent = stores
+    seed_history(store._db, agent, 3)
+    before = history._usage.state()
+    with pytest.raises(DomainError) as error:
+        history.usage_query(params)
+    assert error.value.code == code
+    assert history._usage.state() == before
+    assert not store._db.execute("SELECT 1 FROM usage_records")
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_response_projection_preserves_numeric_cost_and_extra_fields(
+    stores, legacy, monkeypatch
+):
+    store, history, agent = stores
+    sequence, handle = request(history, agent, "pending")
+    amount = "0.12345678901234567890123456789"
+    response = (
+        '[{"kind":"response","parts":[{"content":"'
+        + "x" * 262144
+        + '"}],"usage":{"input_tokens":2,"output_tokens":3,"cost":'
+        + amount
+        + ',"extra":{"price":1.2345678901234567890123456789}},'
+        '"metadata":{"fora_usage":{"cost_source":"genai-prices","currency":"USD"}}}]'
+    )
+    original_loads = json.loads
+    decoded_bytes = []
+
+    def loads(value, *args, **kwargs):
+        decoded_bytes.append(len(value))
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", loads)
+    if legacy:
+        with store._db:
+            store._db.execute(
+                "UPDATE agent_model_requests SET response_json = ?, status = 'responded' WHERE agent_id = ?",
+                (response, agent),
+            )
+            history._usage.sync_request(agent, sequence, handle.ordinal)
+    else:
+        history.finish_model_request(agent, sequence, handle, (response,))
+    detail = history.usage_read(f"request:{agent}:{sequence}:{handle.ordinal}")
+    assert detail["cost"] == amount
+    assert detail["usage"]["cost"] == amount
+    assert detail["usage"]["extra"]["price"] == "1.2345678901234567890123456789"
+    assert max(decoded_bytes) < 4096
+    assert history.usage_query({})["summary"]["estimated_cost"] == amount
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        "{}",
+        "null",
+        "[1]",
+        '[{"kind":"request"}]',
+        '[{"kind":"response","usage":[]}]',
+        '[{"kind":"response","metadata":[]}]',
+        '[{"kind":"response","metadata":{"fora_usage":"invalid"}}]',
+        '[{"kind":"response"},{"kind":"response"}]',
+        '[{kind:"response"}]',
+        "{invalid",
+    ],
+)
+def test_response_projection_rejects_invalid_sources(stores, response):
+    _, history, agent = stores
+    sequence, handle = request(history, agent, "pending")
+    with pytest.raises(DomainError, match=f"{agent}/{sequence}/{handle.ordinal}"):
+        history.finish_model_request(agent, sequence, handle, (response,))
+    assert (
+        history.model_request_summary(agent, sequence, handle.ordinal).status
+        == "pending"
+    )
+
+
+def test_response_projection_keeps_blob_precedence_and_empty_blob_legacy_rule(stores):
+    store, history, agent = stores
+    sequence, handle = request(history, agent, {"input_tokens": 2, "output_tokens": 3})
+    with store._db:
+        store._db.execute(
+            "UPDATE agent_model_requests SET response_json = '{invalid' WHERE agent_id = ?",
+            (agent,),
+        )
+        history._usage.sync_request(agent, sequence, handle.ordinal)
+    assert history.usage_query({})["summary"]["total_tokens"] == "5"
+    with store._db:
+        store._db.execute(
+            "DELETE FROM agent_model_request_messages WHERE channel = 'response'"
+        )
+        store._db.execute(
+            "UPDATE agent_model_requests SET response_json = ? WHERE agent_id = ?",
+            (
+                '[{"kind":"response","usage":{"input_tokens":7,"output_tokens":8}}]',
+                agent,
+            ),
+        )
+        history._store_message_refs(
+            agent, sequence, handle.ordinal, "response", (("empty", "[]", 2),)
+        )
+        history._usage.sync_request(agent, sequence, handle.ordinal)
+    assert history.usage_query({})["summary"]["total_tokens"] == "15"
+
+
+def test_initialization_version_change_and_repeated_sync_preserve_counts(stores):
+    store, history, agent = stores
+    seed_history(store._db, agent, 101)
+    initial = history.usage_query({})
+    with store._db:
+        store._db.execute("UPDATE usage_index_state SET version = version + 1")
+        history._usage.sync_request(agent, 1, 1)
+        history._usage.sync_turn(agent, 1)
+    assert history._usage.state()["processed_requests"] == 100
+    with pytest.raises(DomainError) as error:
+        history.usage_query({"initialization_version": initial["index"]["version"]})
+    assert error.value.code == "usage_changed"
+    assert history._usage.state()["processed_requests"] == 100
+    final = history.usage_query({})
+    assert final["status"] == "ready"
+    assert final["index"]["version"] == 2
+    assert final["index"]["processed_requests"] == 101
+    with store._db:
+        history._usage.sync_request(agent, 101, 1)
+    assert history.usage_query({})["index"] == final["index"]
+
+
+def test_actual_usage_api_reads_turn_summaries_from_covering_index(stores, monkeypatch):
+    store, history, agent = stores
+    seed_history(store._db, agent, 3, legacy=True)
+    original = store._db.execute
+    plans = []
+
+    def execute(sql, params=()):
+        if (
+            sql.startswith(("SELECT", "WITH"))
+            and "agent_runs" in sql
+            and "INDEXED BY" in sql
+        ):
+            plans.append(original("EXPLAIN QUERY PLAN " + sql, params))
+        rows = original(sql, params)
+        if sql.startswith("SELECT"):
+            assert all(
+                len(value) < 4096
+                for row in rows
+                for value in row
+                if isinstance(value, str)
+            )
+        return rows
+
+    monkeypatch.setattr(store._db, "execute", execute)
+    result = history.usage_query({})
+    history.usage_read(result["records"][0]["record_id"])
+    history.usage_query({"coverage": "partial_history"})
+    assert len(plans) >= 5
+    assert all(
+        any("COVERING INDEX agent_runs_summary" in row["detail"] for row in plan)
+        for plan in plans
+    )
+
+
+def test_initialization_version_is_checked_inside_the_batch(stores, monkeypatch):
+    store, history, agent = stores
+    seed_history(store._db, agent, 2)
+    original = history._usage.advance
+
+    def advance(*args, **kwargs):
+        with store._db:
+            store._db.execute("UPDATE usage_index_state SET version = 2")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(history._usage, "advance", advance)
+    with pytest.raises(DomainError) as error:
+        history.usage_query({"initialization_version": 1})
+    assert error.value.code == "usage_changed"
+    assert history._usage.state()["processed_requests"] == 0
+    assert history._usage.state()["error"] is None
+    assert not store._db.execute("SELECT 1 FROM usage_records")
+
+
+def test_response_projection_propagates_database_failures(stores, monkeypatch):
+    store, history, agent = stores
+
+    def broken(sql, params=()):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store._db, "execute", broken)
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        history._usage._response(agent, 1, 1)

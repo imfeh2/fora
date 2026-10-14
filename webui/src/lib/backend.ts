@@ -32,8 +32,6 @@ export type UsageVersion = {
   live_versions?: [number, number, number][];
 };
 
-export type UsageIndexState = { ready: number; revision: number };
-
 export type UsageRecord = {
   record_id: string;
   source_kind: "request" | "turn_summary";
@@ -69,10 +67,31 @@ export type UsageQuery = UsageFilters &
     limit?: number;
     cursor?: string | null;
     dataset_revision?: number;
+    initialization_version?: number;
     anchor?: string;
   };
 
+export type UsageIndexState = {
+  version: number;
+  ready: number;
+  revision: number;
+  request_checkpoint: number;
+  turn_checkpoint: number;
+  processed_requests: number;
+  processed_turns: number;
+  error: string | null;
+};
+
+export type UsageInitialization = {
+  status: "initializing";
+  filters: UsageFilters;
+  index: UsageIndexState;
+};
+
+export type UsageQueryResult = UsageInitialization | UsageResult;
+
 export type UsageResult = UsageVersion & {
+  status: "ready";
   filters: UsageFilters;
   dataset_revision: number;
   index: UsageIndexState;
@@ -884,10 +903,13 @@ export class Backend {
   #rejectConnection: ((error: BackendError) => void) | null = null;
   #failures = new Set<(error: BackendError) => void>();
   #usageIndex: { generation: number; value: UsageIndexState } | null = null;
-  #usageAdvancing: {
-    generation: number;
-    operation: Promise<UsageIndexState>;
-  } | null = null;
+  #usageAdvancing = new Map<
+    number | undefined,
+    {
+      generation: number;
+      operation: Promise<UsageIndexState>;
+    }
+  >();
 
   constructor(
     locate: () => Connection = pageConnection,
@@ -1487,31 +1509,39 @@ export class Backend {
     return this.call<FoundMessage[]>("discussion.search", { query });
   }
 
-  usageAdvance(): Promise<UsageIndexState> {
+  usageAdvance(initialization_version?: number): Promise<UsageIndexState> {
     const generation = this.#generation;
     if (
       this.#usageIndex?.generation === generation &&
-      this.#usageIndex.value.ready
+      this.#usageIndex.value.ready &&
+      (initialization_version === undefined ||
+        this.#usageIndex.value.version === initialization_version)
     )
       return Promise.resolve(this.#usageIndex.value);
-    if (this.#usageAdvancing?.generation === generation)
-      return this.#usageAdvancing.operation;
-    const operation = this.call<UsageIndexState>("usage.advance")
+    const advancing = this.#usageAdvancing.get(initialization_version);
+    if (advancing?.generation === generation) return advancing.operation;
+    const operation = this.call<UsageIndexState>(
+      "usage.advance",
+      initialization_version === undefined ? {} : { initialization_version },
+    )
       .then((value) => {
         if (generation === this.#generation)
           this.#usageIndex = { generation, value };
         return value;
       })
       .finally(() => {
-        if (this.#usageAdvancing?.operation === operation)
-          this.#usageAdvancing = null;
+        if (
+          this.#usageAdvancing.get(initialization_version)?.operation ===
+          operation
+        )
+          this.#usageAdvancing.delete(initialization_version);
       });
-    this.#usageAdvancing = { generation, operation };
+    this.#usageAdvancing.set(initialization_version, { generation, operation });
     return operation;
   }
 
   usageQuery(params: UsageQuery) {
-    return this.call<UsageResult>("usage.query", params);
+    return this.call<UsageQueryResult>("usage.query", params);
   }
 
   usageRead(record_id: string) {

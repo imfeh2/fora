@@ -1358,7 +1358,17 @@ class Api:
                 return self._human().usage_read(params["record_id"], observation)
 
         def usage_advance(params: dict[str, Any]) -> Any:
-            result = self._human().usage_advance(params.get("limit", 100))
+            if (
+                "initialization_version" in params
+                and type(params["initialization_version"]) is not int
+            ):
+                raise DomainError(
+                    "invalid_params", "Initialization version must be an integer"
+                )
+            result = self._human().usage_advance(
+                params.get("limit", 100),
+                initialization_version=params.get("initialization_version"),
+            )
             self._dispatcher.emit(
                 "usage.index_updated",
                 {"dataset_revision": result["revision"], "ready": result["ready"]},

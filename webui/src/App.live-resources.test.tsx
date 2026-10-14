@@ -294,6 +294,16 @@ describe("Application resource regions", () => {
   });
 
   it("publishes known Members before a Cold usage index finishes advancing", async () => {
+    const index = {
+      version: 1,
+      ready: 0,
+      revision: 1,
+      request_checkpoint: 0,
+      turn_checkpoint: 0,
+      processed_requests: 0,
+      processed_turns: 0,
+      error: null,
+    };
     const advancing =
       deferred<Awaited<ReturnType<typeof backend.usageAdvance>>>();
     vi.spyOn(backend, "usageAdvance").mockReturnValue(advancing.promise);
@@ -302,14 +312,14 @@ describe("Application resource regions", () => {
         ...organization,
         usage_version: {
           dataset_revision: 1,
-          index: { ready: 0, revision: 1 },
+          index,
         },
       })
       .mockResolvedValue({
         ...organization,
         usage_version: {
           dataset_revision: 2,
-          index: { ready: 1, revision: 2 },
+          index: { ...index, ready: 1, revision: 2 },
         },
       });
     testing.render(<App />);
@@ -318,7 +328,9 @@ describe("Application resource regions", () => {
     expect(testing.screen.getByText("Helper")).toBeTruthy();
     expect(backend.organization).toHaveBeenCalledTimes(1);
     expect(backend.usageAdvance).toHaveBeenCalledTimes(1);
-    await testing.act(async () => advancing.resolve({ ready: 1, revision: 2 }));
+    await testing.act(async () =>
+      advancing.resolve({ ...index, ready: 1, revision: 2 }),
+    );
     expect(backend.organization).toHaveBeenCalledTimes(2);
     expect(testing.screen.getByText("Helper")).toBeTruthy();
   });

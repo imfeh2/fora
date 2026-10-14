@@ -230,8 +230,45 @@ function RangeControls({
   );
 }
 
-function useSavedRead<T>(read: () => Promise<T>) {
-  const { resource, refresh, invalidate } = useResource(read);
+function useSavedRead<T>(
+  read: (current: () => boolean) => Promise<T>,
+  stopOnError = false,
+) {
+  const failure = useRef<{ error: unknown } | null>(null);
+  const epoch = useRef(0);
+  const guardedRead = useCallback(async () => {
+    if (stopOnError && failure.current) throw failure.current.error;
+    const generation = epoch.current;
+    try {
+      return await read(() => generation === epoch.current);
+    } catch (error) {
+      if (generation === epoch.current) failure.current = { error };
+      throw error;
+    }
+  }, [read, stopOnError]);
+  const {
+    resource,
+    refresh: readResource,
+    invalidate: invalidateResource,
+  } = useResource(guardedRead);
+  const invalidate = useCallback(
+    (enabled: boolean, error?: BackendError) => {
+      epoch.current += 1;
+      failure.current = null;
+      invalidateResource(enabled, error);
+    },
+    [invalidateResource],
+  );
+  const refresh = useCallback(
+    (changed = false) => {
+      failure.current = null;
+      return readResource(changed);
+    },
+    [readResource],
+  );
+  const automaticRefresh = useCallback(() => {
+    if (!stopOnError || !failure.current) void readResource(true);
+  }, [readResource, stopOnError]);
   useEffect(() => {
     invalidate(!backend.disconnected);
     let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -259,25 +296,23 @@ function useSavedRead<T>(read: () => Promise<T>) {
         if (event.type === "turn.finished") {
           if (debounce !== undefined) clearTimeout(debounce);
           debounce = undefined;
-          void refresh(true);
+          automaticRefresh();
         } else if (debounce === undefined)
           debounce = setTimeout(() => {
             debounce = undefined;
-            void refresh(true);
+            automaticRefresh();
           }, 150);
       }
     });
     void refresh();
-    const poll = setInterval(() => {
-      void refresh(true);
-    }, 5000);
+    const poll = setInterval(automaticRefresh, 5000);
     return () => {
       invalidate(false);
       off();
       clearInterval(poll);
       if (debounce !== undefined) clearTimeout(debounce);
     };
-  }, [invalidate, refresh]);
+  }, [invalidate, refresh, automaticRefresh]);
   const retry = () => {
     if (backend.disconnected)
       void backend.reconnect().catch((error: unknown) =>
@@ -740,14 +775,29 @@ function QueryView({
     contributions_only: true,
     limit: 20,
   });
-  const read = useCallback(async () => {
+  const advanceVersion = useRef<{
+    version: number;
+    current: () => boolean;
+  } | null>(null);
+  const readIdentity = useRef<() => boolean>(() => false);
+  const read = useCallback(async (current: () => boolean) => {
     const target = query.current;
+    const advancing = advanceVersion.current;
+    advanceVersion.current = null;
+    readIdentity.current = current;
+    if (advancing?.current()) {
+      await backend.usageAdvance(advancing.version);
+      if (!current())
+        throw new BackendError("connection_changed", "Connection changed");
+    }
     try {
-      const result = await backend.usageQuery(target);
-      if (!result.index.ready) await backend.usageAdvance();
-      return { result, target };
+      return { result: await backend.usageQuery(target), target };
     } catch (error) {
-      if (!(error instanceof BackendError) || error.code !== "usage_changed")
+      if (
+        !current() ||
+        !(error instanceof BackendError) ||
+        error.code !== "usage_changed"
+      )
         throw error;
       const next = {
         ...target,
@@ -755,15 +805,19 @@ function QueryView({
         dataset_revision: undefined,
         runtime_epoch: undefined,
         live_versions: undefined,
+        initialization_version: undefined,
+        anchor:
+          target.initialization_version === undefined
+            ? target.anchor
+            : undefined,
       };
-      const result = await backend.usageQuery(next);
-      if (!result.index.ready) await backend.usageAdvance();
-      return { result, target: next };
+      return { result: await backend.usageQuery(next), target: next };
     }
   }, []);
-  const { resource, refresh, invalidate, retry } = useSavedRead(read);
+  const { resource, refresh, invalidate, retry } = useSavedRead(read, true);
   const response = resource.data;
   const data = response?.result;
+  const lastResponse = useRef<typeof response>(null);
   const lastSignal = useRef(refreshSignal);
   useEffect(() => {
     if (lastSignal.current !== refreshSignal) {
@@ -773,27 +827,46 @@ function QueryView({
   }, [refreshSignal, refresh]);
   useEffect(() => {
     if (!data || !response) return;
-    query.current = {
-      ...response.target,
-      dataset_revision: data.dataset_revision,
-      ...(data.runtime_epoch !== undefined
-        ? {
-            runtime_epoch: data.runtime_epoch,
-            live_versions: data.live_versions,
-          }
-        : {}),
-      anchor: data.records[0]?.record_id,
-    };
-    onRevision(data.dataset_revision);
-    if (!data.index.ready) {
-      const timer = setTimeout(() => {
-        void refresh(true);
-      }, 100);
-      return () => clearTimeout(timer);
+    if (data.status === "initializing") {
+      query.current = {
+        ...filters,
+        contributions_only: true,
+        limit: 20,
+        initialization_version: data.index.version,
+      };
+      if (!resource.error && !resource.refreshing && !backend.disconnected) {
+        const current = readIdentity.current;
+        const timer = setTimeout(() => {
+          if (!current() || backend.disconnected) return;
+          advanceVersion.current = { version: data.index.version, current };
+          void refresh(true);
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    } else if (!resource.error && lastResponse.current !== response) {
+      lastResponse.current = response;
+      advanceVersion.current = null;
+      query.current = {
+        ...response.target,
+        initialization_version: undefined,
+        dataset_revision: data.dataset_revision,
+        runtime_epoch: data.runtime_epoch,
+        live_versions: data.live_versions,
+        anchor: data.records[0]?.record_id,
+      };
+      onRevision(data.dataset_revision);
     }
-  }, [data, response, onRevision, refresh]);
+  }, [
+    data,
+    response,
+    resource.error,
+    resource.refreshing,
+    filters,
+    onRevision,
+    refresh,
+  ]);
   const page = (cursor: string) => {
-    if (!data || resource.refreshing) return;
+    if (!data || data.status !== "ready" || resource.refreshing) return;
     query.current = {
       ...filters,
       contributions_only: true,
@@ -816,20 +889,30 @@ function QueryView({
       {resource.error ? (
         <LoadError error={resource.error} retry={retry} />
       ) : null}
-      {!data?.index.ready ? (
-        resource.status === "failed" ? null : (
-          <LoadingSkeleton
-            label={
-              data && !data.index.ready
-                ? "Initializing saved usage"
-                : "Loading usage"
-            }
-          >
-            <Skeleton className="h-24 w-full" />
-            <Skeleton className="h-[200px] w-full" />
-            <Skeleton className="h-48 w-full" />
-          </LoadingSkeleton>
-        )
+      {data?.status === "initializing" || !data ? (
+        <>
+          {data?.status === "initializing" ? (
+            <p
+              role="status"
+              aria-label="Usage initialization progress"
+              className="text-sm text-fg-muted font-mono tabular-nums"
+            >
+              Initializing saved usage ·{" "}
+              {formatInteger(String(data.index.processed_requests))} requests
+              processed · {formatInteger(String(data.index.processed_turns))}{" "}
+              activities processed
+            </p>
+          ) : null}
+          {!resource.error ? (
+            <LoadingSkeleton
+              label={data ? "Initializing saved usage" : "Loading usage"}
+            >
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-[200px] w-full" />
+              <Skeleton className="h-48 w-full" />
+            </LoadingSkeleton>
+          ) : null}
+        </>
       ) : group ? (
         <Records
           result={data}

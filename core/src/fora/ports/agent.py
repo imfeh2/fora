@@ -198,7 +198,9 @@ class ModelRequestRecorder(Protocol):
 class HistoryStore(Protocol):
     def usage_query(self, params: dict[str, Any]) -> dict[str, Any]: ...
 
-    def usage_advance(self, limit: int = 100) -> dict[str, Any]: ...
+    def usage_advance(
+        self, limit: int = 100, *, initialization_version: int | None = None
+    ) -> dict[str, Any]: ...
 
     def usage_observe(
         self,

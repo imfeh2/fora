@@ -188,6 +188,72 @@ describe("usage index preparation", () => {
     });
     await expect(retry).resolves.toEqual({ ready: 1, revision: 2 });
   });
+
+  it("merges only matching initialization identities and validates ready caches after reconnecting", async () => {
+    const { backend, socket, connected } = harness();
+    const connection = await connected();
+    const first = backend.usageAdvance(1);
+    const second = backend.usageAdvance(2);
+    const startup = backend.usageAdvance();
+    expect(backend.usageAdvance(1)).toBe(first);
+    expect(backend.usageAdvance(2)).toBe(second);
+    expect(backend.usageAdvance()).toBe(startup);
+    const outcomes = Promise.allSettled([first, second, startup]);
+    await vi.waitFor(() => expect(connection.sent).toHaveLength(3));
+    expect(connection.sent.map((request) => request.params)).toEqual([
+      { initialization_version: 1 },
+      { initialization_version: 2 },
+      {},
+    ]);
+    for (const request of connection.sent.slice(1)) {
+      connection.reply({
+        type: "response",
+        id: request.id,
+        result: { ready: 1, revision: 2, version: 2 },
+      });
+    }
+    connection.reply({
+      type: "response",
+      id: connection.sent[0].id,
+      error: { code: "usage_changed", message: "Initialization changed" },
+    });
+    expect((await outcomes).map((result) => result.status)).toEqual([
+      "rejected",
+      "fulfilled",
+      "fulfilled",
+    ]);
+    await expect(backend.usageAdvance(2)).resolves.toMatchObject({
+      version: 2,
+    });
+    expect(connection.sent).toHaveLength(3);
+    const changed = backend.usageAdvance(1);
+    const rejected = expect(changed).rejects.toMatchObject({
+      code: "usage_changed",
+    });
+    await vi.waitFor(() => expect(connection.sent).toHaveLength(4));
+    expect(connection.sent[3].params).toEqual({ initialization_version: 1 });
+    connection.reply({
+      type: "response",
+      id: connection.sent[3].id,
+      error: { code: "usage_changed", message: "Initialization changed" },
+    });
+    await rejected;
+    connection.fail();
+    const reconnect = backend.reconnect();
+    await vi.waitFor(() => expect(socket()).not.toBe(connection));
+    socket().open();
+    await reconnect;
+    const restored = backend.usageAdvance(2);
+    expect(backend.usageAdvance(2)).toBe(restored);
+    await vi.waitFor(() => expect(socket().sent).toHaveLength(1));
+    expect(socket().sent[0].params).toEqual({ initialization_version: 2 });
+    socket().reply({
+      type: "response",
+      id: socket().sent[0].id,
+      result: { ready: 1, revision: 3, version: 2 },
+    });
+    await restored;
+  });
 });
 
 describe("connectionFrom", () => {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import MAX_PREC, Decimal, localcontext
@@ -21,7 +22,9 @@ CREATE TABLE IF NOT EXISTS usage_index_state (
     turn_checkpoint INTEGER NOT NULL DEFAULT 0,
     ready INTEGER NOT NULL DEFAULT 0,
     revision INTEGER NOT NULL DEFAULT 0,
-    error TEXT
+    error TEXT,
+    processed_requests INTEGER,
+    processed_turns INTEGER
 );
 INSERT OR IGNORE INTO usage_index_state(id, version) VALUES (1, 1);
 CREATE TABLE IF NOT EXISTS usage_records (
@@ -51,7 +54,7 @@ END;
 """
 
 PARTIAL_HISTORY = (
-    "u.source_kind = 'request' AND EXISTS (SELECT 1 FROM agent_runs t"
+    "u.source_kind = 'request' AND EXISTS (SELECT 1 FROM agent_runs t INDEXED BY agent_runs_summary"
     " WHERE t.agent_id = u.agent_id AND t.sequence = u.sequence"
     " AND json_extract(t.usage_json, '$.requests') > (SELECT COUNT(*)"
     " FROM agent_model_requests r WHERE r.agent_id = u.agent_id AND r.sequence = u.sequence))"
@@ -237,6 +240,32 @@ class UsageIndex:
     def __init__(self, db: LockedConnection) -> None:
         self.db = db
         db.executescript(SCHEMA)
+        with db:
+            columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(usage_index_state)")
+            }
+            for column, source, index, checkpoint in (
+                (
+                    "processed_requests",
+                    "agent_model_requests",
+                    "agent_model_requests_summary",
+                    "request_checkpoint",
+                ),
+                (
+                    "processed_turns",
+                    "agent_runs",
+                    "agent_runs_summary",
+                    "turn_checkpoint",
+                ),
+            ):
+                if column not in columns:
+                    db.execute(
+                        f"ALTER TABLE usage_index_state ADD COLUMN {column} INTEGER"
+                    )
+                db.execute(
+                    f"UPDATE usage_index_state SET {column} = (SELECT COUNT(*) FROM {source} INDEXED BY {index} WHERE rowid <= usage_index_state.{checkpoint}) WHERE {column} IS NULL"
+                )
         db.create_aggregate("usage_decimal_sum", 1, DecimalSum)
 
     def state(self) -> dict[str, Any]:
@@ -291,10 +320,79 @@ class UsageIndex:
                 "UPDATE usage_index_state SET revision = revision + 1 WHERE id = 1"
             )
 
+    def _response(
+        self, agent_id: int, sequence: int, ordinal: int
+    ) -> tuple[bool, dict[str, Any] | None, dict[str, Any]]:
+        projection = (
+            "json_valid(content_json) AS valid, json_type(content_json) AS kind,"
+            " json_array_length(content_json) AS count,"
+            " json_type(content_json, '$[0]') AS message_kind,"
+            " json_type(content_json, '$[0].metadata') AS metadata_kind,"
+            " json_type(content_json, '$[0].metadata.fora_usage') AS usage_metadata_kind,"
+            " json_extract(content_json, '$[0].kind', '$[0].usage', '$[0].metadata.fora_usage') AS fields"
+        )
+        parameters = (agent_id, sequence, ordinal)
+        try:
+            rows = self.db.execute(
+                "SELECT " + projection + " FROM agent_model_request_messages r"
+                " JOIN agent_history_message_blobs b ON b.content_hash = r.content_hash"
+                " WHERE r.agent_id = ? AND r.sequence = ? AND r.ordinal = ?"
+                " AND r.channel = 'response' ORDER BY r.position",
+                parameters,
+            )
+            if any(not row["valid"] or row["kind"] != "array" for row in rows):
+                raise DomainError(
+                    "usage_invalid",
+                    f"Invalid response for {agent_id}/{sequence}/{ordinal}",
+                )
+            if not sum(row["count"] for row in rows):
+                rows = self.db.execute(
+                    "SELECT "
+                    + projection
+                    + " FROM (SELECT response_json AS content_json"
+                    " FROM agent_model_requests WHERE agent_id = ? AND sequence = ? AND ordinal = ?"
+                    " AND response_json IS NOT NULL)",
+                    parameters,
+                )
+        except sqlite3.OperationalError as error:
+            if str(error) != "malformed JSON":
+                raise
+            raise DomainError(
+                "usage_invalid",
+                f"Invalid response for {agent_id}/{sequence}/{ordinal}: malformed JSON",
+            ) from error
+        if (
+            any(not row["valid"] or row["kind"] != "array" for row in rows)
+            or sum(row["count"] for row in rows) > 1
+        ):
+            raise DomainError(
+                "usage_invalid", f"Invalid response for {agent_id}/{sequence}/{ordinal}"
+            )
+        populated = [row for row in rows if row["count"]]
+        if not populated:
+            return False, None, {}
+        row = populated[0]
+        if (
+            row["message_kind"] != "object"
+            or row["metadata_kind"] not in (None, "null", "object")
+            or row["usage_metadata_kind"] not in (None, "null", "object")
+        ):
+            raise DomainError(
+                "usage_invalid",
+                f"Invalid response metadata for {agent_id}/{sequence}/{ordinal}",
+            )
+        kind, usage, metadata = json.loads(row["fields"], parse_float=Decimal)
+        if kind != "response" or (usage is not None and not isinstance(usage, dict)):
+            raise DomainError(
+                "usage_invalid", f"Invalid usage for {agent_id}/{sequence}/{ordinal}"
+            )
+        return True, usage, metadata or {}
+
     def sync_request(self, agent_id: int, sequence: int, ordinal: int) -> None:
         row = first(
             self.db.execute(
-                "SELECT * FROM agent_model_requests WHERE agent_id = ? AND sequence = ? AND ordinal = ?",
+                "SELECT request_id, status, started_at, completed_at, model_json FROM agent_model_requests"
+                " WHERE agent_id = ? AND sequence = ? AND ordinal = ?",
                 (agent_id, sequence, ordinal),
             )
         )
@@ -312,38 +410,12 @@ class UsageIndex:
                 model.get("model"),
             ]
         )
-        responses = self.db.execute(
-            "SELECT b.content_json FROM agent_model_request_messages r"
-            " JOIN agent_history_message_blobs b ON b.content_hash = r.content_hash"
-            " WHERE r.agent_id = ? AND r.sequence = ? AND r.ordinal = ?"
-            " AND r.channel = 'response' ORDER BY r.position",
-            (agent_id, sequence, ordinal),
-        )
-        messages = [
-            message
-            for item in responses
-            for message in json.loads(item["content_json"], parse_float=Decimal)
-        ]
-        if not messages and row["response_json"] is not None:
-            messages = json.loads(row["response_json"], parse_float=Decimal)
-        if len(messages) > 1 or (messages and messages[0].get("kind") != "response"):
-            raise DomainError(
-                "usage_invalid", f"Invalid response for {agent_id}/{sequence}/{ordinal}"
-            )
-        response = messages[0] if messages else None
-        usage = response.get("usage") if response is not None else None
-        if usage is not None and not isinstance(usage, dict):
-            raise DomainError(
-                "usage_invalid", f"Invalid usage for {agent_id}/{sequence}/{ordinal}"
-            )
-        metadata = (
-            (response.get("metadata") or {}).get("fora_usage", {}) if response else {}
-        )
+        has_response, usage, metadata = self._response(agent_id, sequence, ordinal)
         coverage = (
             "in_progress"
             if row["status"] == "pending"
             else "no_response"
-            if response is None
+            if not has_response
             else "missing_usage"
             if usage is None
             else "field_missing"
@@ -398,7 +470,8 @@ class UsageIndex:
             return
         row = first(
             self.db.execute(
-                "SELECT * FROM agent_runs WHERE agent_id = ? AND sequence = ?",
+                "SELECT status, started_at, completed_at, usage_json FROM agent_runs INDEXED BY agent_runs_summary"
+                " WHERE agent_id = ? AND sequence = ?",
                 (agent_id, sequence),
             )
         )
@@ -436,14 +509,25 @@ class UsageIndex:
             }
         )
 
-    def advance(self, limit: int = 100) -> dict[str, Any]:
+    def advance(
+        self, limit: int = 100, *, initialization_version: int | None = None
+    ) -> dict[str, Any]:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise DomainError(
                 "invalid_params", "Index batch limit must be between 1 and 1000"
             )
+        if (
+            initialization_version is not None
+            and type(initialization_version) is not int
+        ):
+            raise DomainError(
+                "invalid_params", "Initialization version must be an integer"
+            )
         try:
-            return self._advance(limit)
+            return self._advance(limit, initialization_version)
         except (ValueError, TypeError, KeyError, DomainError) as error:
+            if isinstance(error, DomainError) and error.code == "usage_changed":
+                raise
             message = f"Usage index failed: {error}"
             with self.db:
                 self.db.execute(
@@ -451,9 +535,18 @@ class UsageIndex:
                 )
             raise DomainError("usage_index_failed", message) from error
 
-    def _advance(self, limit: int) -> dict[str, Any]:
+    def _advance(
+        self, limit: int, initialization_version: int | None
+    ) -> dict[str, Any]:
         with self.db:
             state = self.state()
+            if (
+                initialization_version is not None
+                and initialization_version != state["version"]
+            ):
+                raise DomainError(
+                    "usage_changed", "Usage initialization changed; refresh this range"
+                )
             if state["ready"]:
                 return state
             requests = self.db.execute(
@@ -470,7 +563,7 @@ class UsageIndex:
                         f"Request {row['agent_id']}/{row['sequence']}/{row['ordinal']}: {error}",
                     ) from error
                 self.db.execute(
-                    "UPDATE usage_index_state SET request_checkpoint = ? WHERE id = 1",
+                    "UPDATE usage_index_state SET request_checkpoint = ?, processed_requests = processed_requests + 1 WHERE id = 1",
                     (row["checkpoint"],),
                 )
             turns = self.db.execute(
@@ -487,7 +580,7 @@ class UsageIndex:
                         f"Turn {row['agent_id']}/{row['sequence']}: {error}",
                     ) from error
                 self.db.execute(
-                    "UPDATE usage_index_state SET turn_checkpoint = ? WHERE id = 1",
+                    "UPDATE usage_index_state SET turn_checkpoint = ?, processed_turns = processed_turns + 1 WHERE id = 1",
                     (row["checkpoint"],),
                 )
             if len(requests) < limit and len(turns) < limit:
@@ -771,7 +864,7 @@ class UsageIndex:
             " t.usage_json AS turn_usage, (SELECT COUNT(*) FROM agent_model_requests r"
             " WHERE r.agent_id = u.agent_id AND r.sequence = u.sequence) AS request_count"
             f" FROM {table} u JOIN members m ON m.id = u.agent_id"
-            " JOIN agent_runs t ON t.agent_id = u.agent_id AND t.sequence = u.sequence"
+            " JOIN agent_runs t INDEXED BY agent_runs_summary ON t.agent_id = u.agent_id AND t.sequence = u.sequence"
         )
 
     def read(
@@ -963,11 +1056,52 @@ class UsageIndex:
             )
         where = " WHERE " + " AND ".join(clauses) if clauses else " WHERE 1"
         signature = hashlib.sha256(encode(filters).encode()).hexdigest()
+        cursor = params.get("cursor")
+        initialization_version = params.get("initialization_version")
+        if "initialization_version" in params:
+            if type(initialization_version) is not int:
+                raise DomainError(
+                    "invalid_params", "Initialization version must be an integer"
+                )
+            if params.get("dataset_revision") is not None or cursor is not None:
+                raise DomainError(
+                    "invalid_params",
+                    "Initialization version cannot accompany a revision or cursor",
+                )
+        position = None
+        if cursor is not None:
+            if not isinstance(cursor, str):
+                raise DomainError("invalid_params", "Usage cursor must be a string")
+            position = UsageCursor.model_validate_json(cursor).model_dump()
+            if position["filters"] != signature:
+                raise DomainError(
+                    "invalid_params", "Usage cursor belongs to another range"
+                )
+        with self.db.read():
+            state = self.state()
+            if (
+                initialization_version is not None
+                and initialization_version != state["version"]
+            ):
+                raise DomainError(
+                    "usage_changed", "Usage initialization changed; refresh this range"
+                )
+            expected = params.get("dataset_revision")
+            if expected is not None and expected != state["revision"]:
+                raise DomainError(
+                    "usage_changed", "Usage data changed; refresh this range"
+                )
+            if position is not None and position["revision"] != state["revision"]:
+                raise DomainError(
+                    "usage_changed", "Usage data changed; refresh this range"
+                )
         if advance:
-            self.advance()
-        with self.db if advance else self.db.read():
+            self.advance(initialization_version=initialization_version)
+        with self.db.read():
             self.db.current.create_aggregate("usage_decimal_sum", 1, DecimalSum)
             state = self.state()
+            if not state["ready"]:
+                return {"status": "initializing", "filters": filters, "index": state}
             revision = state["revision"]
             epoch = observation.runtime_epoch if observation is not None else None
             versions = list(observation.versions) if observation is not None else []
@@ -990,19 +1124,11 @@ class UsageIndex:
                 raise DomainError(
                     "usage_changed", "Usage data changed; refresh this range"
                 )
-            cursor = params.get("cursor")
             page_clause, page_values = "", []
             direction = "older"
-            if cursor is not None:
-                if not isinstance(cursor, str):
-                    raise DomainError("invalid_params", "Usage cursor must be a string")
-                position = UsageCursor.model_validate_json(cursor).model_dump()
-                if position.get("filters") != signature:
-                    raise DomainError(
-                        "invalid_params", "Usage cursor belongs to another range"
-                    )
+            if position is not None:
                 if (
-                    position.get("revision") != revision
+                    position["revision"] != revision
                     or position["runtime_epoch"] != epoch
                     or position["live_versions"] != versions
                 ):
@@ -1106,6 +1232,7 @@ class UsageIndex:
                 )
             ]
             return {
+                "status": "ready",
                 "filters": filters,
                 "dataset_revision": revision,
                 "index": state,

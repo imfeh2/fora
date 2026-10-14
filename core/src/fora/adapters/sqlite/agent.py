@@ -220,8 +220,10 @@ class SqliteAgentStore:
     def usage_query(self, params: dict[str, Any]) -> dict[str, Any]:
         return self._usage.query(params)
 
-    def usage_advance(self, limit: int = 100) -> dict[str, Any]:
-        return self._usage.advance(limit)
+    def usage_advance(
+        self, limit: int = 100, *, initialization_version: int | None = None
+    ) -> dict[str, Any]:
+        return self._usage.advance(limit, initialization_version=initialization_version)
 
     def usage_observe(
         self,

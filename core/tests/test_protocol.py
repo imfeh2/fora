@@ -327,6 +327,7 @@ def test_live_save_failure_retains_content_through_resume_and_replaces_on_saved_
     )
     room = deps.store.create_discussion("work", [1, member.id])
     deps.store.append_message(room.id, 1, "@Live work")
+    assert call(dispatcher, output, "usage.advance")["result"]["ready"] == 1
     model_calls = 0
 
     def respond(messages, info):
@@ -400,6 +401,7 @@ def test_live_save_failure_retains_content_through_resume_and_replaces_on_saved_
     query = call(
         dispatcher, output, "usage.query", agent_id=member.id, contributions_only=True
     )["result"]
+    assert query["status"] == "ready"
     assert query["summary"]["total_tokens"] == str(expected_tokens)
     assert query["summary"]["requests"] == str(len(retained.requests))
     assert sum(int(day["total_tokens"]) for day in query["daily"]) == expected_tokens
@@ -509,6 +511,7 @@ def test_live_content_is_readable_during_a_delayed_response_transaction(
     )
     room = deps.store.create_discussion("work", [1, member.id])
     deps.store.append_message(room.id, 1, "@Live work")
+    assert call(dispatcher, output, "usage.advance")["result"]["ready"] == 1
     started = threading.Event()
     release = threading.Event()
     original = deps.history.finish_model_request
@@ -552,6 +555,7 @@ def test_live_content_is_readable_during_a_delayed_response_transaction(
                 agent_id=member.id,
                 contributions_only=True,
             )["result"]
+            assert usage["status"] == "ready"
             assert usage["summary"]["total_tokens"] == "10"
             assert usage["records"][0]["saved"] is False
             assert usage["records"][0]["cost_source"] == "genai-prices"
@@ -3226,7 +3230,9 @@ def test_usage_index_batches_are_explicit_and_observation_reads_remain_pure(serv
     before = deps.store._db._connection.total_changes
     first = call(dispatcher, output, "usage.query", contributions_only=True)["result"]
     assert first["index"]["ready"] == 0
-    assert first["summary"]["total_tokens"] == "0"
+    assert first["status"] == "initializing"
+    assert "summary" not in first
+    assert first["index"]["processed_turns"] == 0
     members = call(dispatcher, output, "organization.get")["result"]["members"]
     assert (
         next(item for item in members if item["id"] == member.id)["usage_index_ready"]
@@ -3234,19 +3240,54 @@ def test_usage_index_batches_are_explicit_and_observation_reads_remain_pure(serv
     )
     assert deps.store._db._connection.total_changes == before
     for expected, ready in ((20, 0), (40, 0), (50, 1)):
-        state = call(dispatcher, output, "usage.advance", limit=2)["result"]
+        state = call(
+            dispatcher,
+            output,
+            "usage.advance",
+            limit=2,
+            initialization_version=first["index"]["version"],
+        )["result"]
         assert state["ready"] == ready
+        assert state["processed_turns"] == expected // 10
         checkpoint = state["turn_checkpoint"]
         before = deps.store._db._connection.total_changes
         for _ in range(3):
             result = call(dispatcher, output, "usage.query", contributions_only=True)[
                 "result"
             ]
-            assert result["summary"]["total_tokens"] == str(expected)
+            if ready:
+                assert result["status"] == "ready"
+                assert result["summary"]["total_tokens"] == str(expected)
+            else:
+                assert result["status"] == "initializing"
+                assert "summary" not in result
+            assert result["index"]["processed_turns"] == expected // 10
             assert result["index"]["turn_checkpoint"] == checkpoint
             assert result["index"]["ready"] == ready
         assert deps.store._db._connection.total_changes == before
     assert len(deps.store._db.execute("SELECT record_id FROM usage_records")) == 5
+
+
+@pytest.mark.parametrize("version", [None, True, "1", 1.5, 2])
+def test_usage_advance_rejects_invalid_identity_without_writes(server, version):
+    dispatcher, output, deps = server
+    state = deps.history._usage.state()
+    before = deps.store._db._connection.total_changes
+    outcome = call(dispatcher, output, "usage.advance", initialization_version=version)
+    assert outcome["error"]["code"] == (
+        "usage_changed" if version == 2 else "invalid_params"
+    )
+    assert deps.history._usage.state() == state
+    assert deps.store._db._connection.total_changes == before
+    state = call(dispatcher, output, "usage.advance", initialization_version=1)[
+        "result"
+    ]
+    assert state["ready"] == 1
+    before = deps.store._db._connection.total_changes
+    outcome = call(dispatcher, output, "usage.advance", initialization_version=2)
+    assert outcome["error"]["code"] == "usage_changed"
+    assert deps.history._usage.state() == state
+    assert deps.store._db._connection.total_changes == before
 
 
 def test_control_usage_cache_is_per_connection_and_clears_after_disconnect(

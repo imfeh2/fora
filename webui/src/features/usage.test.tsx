@@ -13,6 +13,7 @@ import type {
   AgentHistoryRead,
   BackendEvent,
   UsageDetail,
+  UsageInitialization,
   UsageMetrics,
   UsageQuery,
   UsageRecord,
@@ -28,6 +29,7 @@ let closeDom: () => void;
 let listeners: Set<(event: BackendEvent) => void>;
 let queryMock: ReturnType<typeof vi.spyOn>;
 let readMock: ReturnType<typeof vi.spyOn>;
+let advanceMock: ReturnType<typeof vi.spyOn>;
 
 const metrics: UsageMetrics = {
   records: 21,
@@ -78,9 +80,19 @@ const record: UsageRecord = {
 
 function result(params: UsageQuery = {}, revision = 1): UsageResult {
   return {
+    status: "ready",
     filters: { ...params },
     dataset_revision: revision,
-    index: { ready: 1, revision },
+    index: {
+      ready: 1,
+      revision,
+      version: 1,
+      request_checkpoint: 21,
+      turn_checkpoint: 4,
+      processed_requests: 21,
+      processed_turns: 4,
+      error: null,
+    },
     summary: { ...metrics },
     coverage: { recorded: 21 },
     groups: {
@@ -94,6 +106,23 @@ function result(params: UsageQuery = {}, revision = 1): UsageResult {
     previous_cursor: params.cursor ? "opaque-previous" : null,
     agents: [{ id: 2, name: "Researcher", deleted: 1 }],
     models: [{ key: "saved-model", model: record.model }],
+  };
+}
+
+function initializing(requests = 100, turns = 100): UsageInitialization {
+  return {
+    status: "initializing",
+    filters: {},
+    index: {
+      ready: 0,
+      revision: requests + turns,
+      version: 1,
+      request_checkpoint: requests * 2,
+      turn_checkpoint: turns * 3,
+      processed_requests: requests,
+      processed_turns: turns,
+      error: null,
+    },
   };
 }
 
@@ -228,6 +257,9 @@ beforeEach(() => {
   queryMock = vi
     .spyOn(backendModule.backend, "usageQuery")
     .mockImplementation(async (params) => result(params));
+  advanceMock = vi
+    .spyOn(backendModule.backend, "usageAdvance")
+    .mockResolvedValue(result().index);
   readMock = vi
     .spyOn(backendModule.backend, "usageRead")
     .mockImplementation(async () => detail());
@@ -273,6 +305,12 @@ async function emit(type: string) {
 
 function lastQuery(): UsageQuery {
   return queryMock.mock.calls.at(-1)?.[0] as UsageQuery;
+}
+
+function progressText() {
+  return testing.screen.getByRole("status", {
+    name: "Usage initialization progress",
+  }).textContent;
 }
 
 function summaryText() {
@@ -819,13 +857,8 @@ describe("Usage dashboard", () => {
 
   it("shows zero and unknown values faithfully and continues index initialization before showing totals", async () => {
     vi.useFakeTimers();
-    const advance = vi
-      .spyOn(backendModule.backend, "usageAdvance")
-      .mockResolvedValue({ ready: 1, revision: 1 });
-    queryMock.mockResolvedValueOnce({
-      ...result(),
-      index: { ready: 0, revision: 1 },
-    });
+    const advance = advanceMock;
+    queryMock.mockResolvedValueOnce(initializing());
     queryMock.mockResolvedValue({
       ...result(),
       summary: {
@@ -854,6 +887,234 @@ describe("Usage dashboard", () => {
     expect(usage.shareOf("0", "0")).toBe(0);
     expect(usage.shareOf(null, "1")).toBeNull();
     expect(usage.shareOf("9007199254740993", "18014398509481986")).toBe(50);
+  });
+
+  it("updates separate processed counts and continues with initialization identity until ready", async () => {
+    vi.useFakeTimers();
+    queryMock
+      .mockResolvedValueOnce(initializing(100, 80))
+      .mockResolvedValueOnce(initializing(200, 130))
+      .mockResolvedValueOnce(result());
+    await mount();
+    expect(progressText()).toContain(
+      "100 requests processed · 80 activities processed",
+    );
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(lastQuery().initialization_version).toBe(1);
+    expect(lastQuery().dataset_revision).toBeUndefined();
+    expect(lastQuery().cursor).toBeUndefined();
+    expect(lastQuery().anchor).toBeUndefined();
+    expect(progressText()).toContain(
+      "200 requests processed · 130 activities processed",
+    );
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+    expect(queryMock.mock.calls).toHaveLength(3);
+    await testing.act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(queryMock.mock.calls).toHaveLength(3);
+    await click("Refresh");
+    expect(lastQuery().initialization_version).toBeUndefined();
+    expect(lastQuery().dataset_revision).toBe(1);
+  });
+
+  it("publishes progress before advancing and keeps that progress when advancement fails", async () => {
+    vi.useFakeTimers();
+    queryMock.mockResolvedValueOnce(initializing(100, 80));
+    advanceMock.mockRejectedValueOnce(
+      new backendModule.BackendError(
+        "usage_index_failed",
+        "Invalid saved request",
+      ),
+    );
+    await mount();
+    expect(progressText()).toContain(
+      "100 requests processed · 80 activities processed",
+    );
+    expect(advanceMock).not.toHaveBeenCalled();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(advanceMock).toHaveBeenCalledExactlyOnceWith(1);
+    expect(progressText()).toContain(
+      "100 requests processed · 80 activities processed",
+    );
+    expect(testing.screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    await testing.act(async () => {
+      for (const listener of listeners) listener({ type: "turn.finished" });
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(advanceMock).toHaveBeenCalledTimes(1);
+    queryMock
+      .mockResolvedValueOnce(initializing(120, 90))
+      .mockResolvedValueOnce(result());
+    await click("Retry");
+    expect(progressText()).toContain(
+      "120 requests processed · 90 activities processed",
+    );
+    expect(advanceMock).toHaveBeenCalledTimes(1);
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(advanceMock).toHaveBeenCalledTimes(2);
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+  });
+
+  it("keeps one advancement during overlapping notifications and discards advancement after unmount", async () => {
+    vi.useFakeTimers();
+    const advancing = deferred<UsageResult["index"]>();
+    advanceMock.mockReturnValueOnce(advancing.promise);
+    queryMock.mockResolvedValueOnce(initializing(100, 80));
+    await mount();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(advanceMock).toHaveBeenCalledExactlyOnceWith(1);
+    await testing.act(async () => {
+      for (const listener of listeners) {
+        listener({ type: "usage.index_updated" });
+        listener({ type: "turn.finished" });
+      }
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(advanceMock).toHaveBeenCalledTimes(1);
+    testing.cleanup();
+    await testing.act(async () => advancing.resolve(result().index));
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(advanceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads current progress before resuming after disconnecting with a scheduled advancement", async () => {
+    vi.useFakeTimers();
+    const disconnected = vi.spyOn(backendModule.backend, "disconnected", "get");
+    queryMock
+      .mockResolvedValueOnce(initializing(100, 80))
+      .mockResolvedValueOnce(initializing(120, 90))
+      .mockResolvedValueOnce(result());
+    await mount();
+    disconnected.mockReturnValue(true);
+    await testing.act(async () => {
+      for (const listener of listeners) listener({ type: "connection.closed" });
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(advanceMock).not.toHaveBeenCalled();
+    disconnected.mockReturnValue(false);
+    await testing.act(async () => {
+      for (const listener of listeners)
+        listener({ type: "connection.restored" });
+    });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect(advanceMock).not.toHaveBeenCalled();
+    expect(progressText()).toContain(
+      "120 requests processed · 90 activities processed",
+    );
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(advanceMock).toHaveBeenCalledExactlyOnceWith(1);
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+  });
+
+  it("preserves initialization progress on failure and pauses hints and polling until Retry", async () => {
+    vi.useFakeTimers();
+    const failed = deferred<UsageInitialization>();
+    queryMock
+      .mockResolvedValueOnce(initializing(100, 40))
+      .mockImplementationOnce(() => failed.promise);
+    await mount();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    await emit("turn.finished");
+    await testing.act(async () => vi.advanceTimersByTimeAsync(150));
+    await testing.act(async () =>
+      failed.reject(
+        new backendModule.BackendError(
+          "usage_index_failed",
+          "Request 2/4/1: invalid usage",
+        ),
+      ),
+    );
+    expect(testing.screen.getByRole("alert").textContent).toContain(
+      "invalid usage",
+    );
+    expect(progressText()).toContain(
+      "100 requests processed · 40 activities processed",
+    );
+    await emit("member.updated");
+    await testing.act(async () => vi.advanceTimersByTimeAsync(11000));
+    expect(queryMock.mock.calls).toHaveLength(2);
+    queryMock.mockResolvedValueOnce(initializing(200, 90));
+    await click("Retry");
+    expect(lastQuery().initialization_version).toBe(1);
+    expect(progressText()).toContain(
+      "200 requests processed · 90 activities processed",
+    );
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+  });
+
+  it("keeps first initialization failure unknown until explicit Retry", async () => {
+    vi.useFakeTimers();
+    queryMock.mockRejectedValueOnce(
+      new backendModule.BackendError("timeout", "Usage timed out"),
+    );
+    await mount();
+    expect(testing.screen.getByRole("alert").textContent).toContain(
+      "Usage timed out",
+    );
+    expect(testing.screen.queryByText(/requests processed/)).toBeNull();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(11000));
+    expect(queryMock.mock.calls).toHaveLength(1);
+    await click("Retry");
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+  });
+
+  it("recovers an initialization version change with one fresh query", async () => {
+    vi.useFakeTimers();
+    queryMock
+      .mockResolvedValueOnce(initializing())
+      .mockRejectedValueOnce(
+        new backendModule.BackendError(
+          "usage_changed",
+          "Initialization changed",
+        ),
+      )
+      .mockResolvedValueOnce(result());
+    await mount();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(100));
+    expect(queryMock.mock.calls).toHaveLength(3);
+    expect(lastQuery().initialization_version).toBeUndefined();
+    expect(lastQuery().dataset_revision).toBeUndefined();
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+  });
+
+  it("discards obsolete initialization changes without another backend read", async () => {
+    const old = deferred<UsageInitialization>();
+    queryMock.mockImplementationOnce(() => old.promise);
+    await mount();
+    await click("Last 30 days");
+    await testing.act(async () =>
+      old.reject(
+        new backendModule.BackendError("usage_changed", "Old initialization"),
+      ),
+    );
+    expect(queryMock.mock.calls).toHaveLength(2);
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+  });
+
+  it("releases initialization timers across range changes, disconnection and unmount", async () => {
+    vi.useFakeTimers();
+    queryMock.mockResolvedValue(initializing());
+    await mount();
+    await click("Last 30 days");
+    expect(queryMock.mock.calls).toHaveLength(2);
+    const disconnected = vi.spyOn(backendModule.backend, "disconnected", "get");
+    disconnected.mockReturnValue(true);
+    await emit("connection.closed");
+    await testing.act(async () => vi.advanceTimersByTimeAsync(11000));
+    expect(queryMock.mock.calls).toHaveLength(2);
+    disconnected.mockReturnValue(false);
+    queryMock.mockResolvedValue(result());
+    await emit("connection.restored");
+    expect(lastQuery().initialization_version).toBe(1);
+    expect(summaryText()).toContain("9,007,199,254,741,000");
+    testing.cleanup();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(11000));
+    expect(queryMock.mock.calls).toHaveLength(3);
+    expect(listeners.size).toBe(0);
   });
 
   it("combines event hints and releases subscriptions and polling on unmount", async () => {

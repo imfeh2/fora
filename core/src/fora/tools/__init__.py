@@ -119,9 +119,13 @@ class AgentTools:
             return self._deps.history.usage_observe(params, observation, cache)
         return self._deps.history.usage_query(params)
 
-    def usage_advance(self, limit: int = 100) -> dict[str, Any]:
+    def usage_advance(
+        self, limit: int = 100, *, initialization_version: int | None = None
+    ) -> dict[str, Any]:
         self._authorize_usage()
-        return self._deps.history.usage_advance(limit)
+        return self._deps.history.usage_advance(
+            limit, initialization_version=initialization_version
+        )
 
     def usage_read(
         self, record_id: str, observation: UsageObservation | None = None
