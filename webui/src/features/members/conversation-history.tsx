@@ -1,35 +1,18 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type RefObject, useCallback, useLayoutEffect, useRef } from "react";
 import { Button, Spinner } from "@/components/ui/index";
 import { ConversationSkeleton } from "@/features/members/activity-skeleton";
 import { WindowHistory } from "@/features/members/activity-window";
 import { ConversationFeed } from "@/features/members/conversation";
 import {
-  applyHistoryPage,
-  createWindowHistory,
   mergeWindowSummary,
   type WindowHistoryState,
 } from "@/features/members/history-state";
+import { useConversationHistory } from "@/features/members/use-conversation-history";
 import {
   useWindowCache,
-  useWindowState,
   type WindowCache,
 } from "@/features/members/window-cache";
-import { type AgentRun, BackendError, backend } from "@/lib/backend";
-
-function historyFailure(failure: unknown): BackendError {
-  return failure instanceof BackendError
-    ? failure
-    : new BackendError(
-        "request_failed",
-        failure instanceof Error ? failure.message : String(failure),
-      );
-}
+import { type AgentRun, backend } from "@/lib/backend";
 
 function refreshWindowSummary(
   cache: WindowCache,
@@ -69,107 +52,12 @@ export function ConversationHistory({
   );
 }
 
-function ConversationWindow({
-  agentId,
-  initialRuns,
-  windowNumber,
-  isCurrent,
-}: {
-  agentId: number;
-  initialRuns: AgentRun[];
-  windowNumber: number | null;
-  isCurrent: boolean;
-}) {
-  const cache = useWindowCache();
-  const [history, setHistory] = useWindowState<WindowHistoryState>(
-    "history",
-    () => createWindowHistory(windowNumber, initialRuns),
-  );
-  const { runs, ranges } = history;
-  const before = ranges[0]?.lower;
-  const hasOlder = before !== undefined && Number.isFinite(before);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useWindowState<BackendError | null>(
-    "history:error",
-    null,
-  );
-  const [latestLoading, setLatestLoading] = useState(false);
-  const [latestError, setLatestError] = useWindowState<BackendError | null>(
-    "history:latestError",
-    null,
-  );
-  const latestGeneration = useRef(0);
-  const latestBusy = useRef(false);
-  const latestDirty = useRef(false);
-  const connected = useRef(true);
-  const root = useRef<HTMLDivElement>(null);
-  const generation = useRef(0);
-  const busy = useRef(false);
-  const [interruptedCursor, setInterruptedCursor] = useWindowState<
-    number | null
-  >("history:interrupted", null);
-  const interruptedBefore = useRef<number | null>(interruptedCursor);
+function useHistoryPosition(
+  root: RefObject<HTMLDivElement | null>,
+  cache: WindowCache | null,
+) {
   const anchor = useRef<{ node: Element; top: number } | null>(null);
   const capture = useRef<() => void>(() => {});
-
-  useEffect(
-    () => () => {
-      generation.current += 1;
-      latestGeneration.current += 1;
-      busy.current = false;
-      latestBusy.current = false;
-    },
-    [],
-  );
-
-  const loadLatest = useCallback(
-    async function refresh() {
-      if (!connected.current) return;
-      if (latestBusy.current) {
-        latestDirty.current = true;
-        return;
-      }
-      latestBusy.current = true;
-      latestDirty.current = false;
-      const current = ++latestGeneration.current;
-      setLatestLoading(true);
-      try {
-        const page = await backend.agentHistory(
-          agentId,
-          undefined,
-          30,
-          undefined,
-          30,
-          { window_number: windowNumber },
-        );
-        if (current !== latestGeneration.current) return;
-        setHistory((saved) =>
-          applyHistoryPage(saved, page, { agentId, windowNumber }),
-        );
-        setLatestError(null);
-      } catch (failure) {
-        if (current === latestGeneration.current)
-          setLatestError(historyFailure(failure));
-      } finally {
-        if (current === latestGeneration.current) {
-          latestBusy.current = false;
-          setLatestLoading(false);
-          if (latestDirty.current) void refresh();
-        }
-      }
-    },
-    [agentId, windowNumber, setHistory, setLatestError],
-  );
-
-  useEffect(() => {
-    setHistory((current) =>
-      mergeWindowSummary(current, windowNumber, initialRuns),
-    );
-    const saved = cache?.values.get("history") as
-      | WindowHistoryState
-      | undefined;
-    if (isCurrent || !saved?.ranges.length) void loadLatest();
-  }, [initialRuns, windowNumber, isCurrent, cache, loadLatest, setHistory]);
 
   useLayoutEffect(() => {
     const content = root.current;
@@ -270,90 +158,45 @@ function ConversationWindow({
       observer.disconnect();
       scroll.removeEventListener("scroll", onScroll);
       capture.current = () => {};
-      generation.current += 1;
     };
+  }, [cache, root]);
+
+  return useCallback(() => {
+    if (cache) cache.following = false;
+    capture.current();
   }, [cache]);
+}
 
-  const loadOlder = useCallback(
-    async (cursor = interruptedBefore.current ?? before) => {
-      if (busy.current || cursor === undefined || !Number.isFinite(cursor))
-        return;
-      busy.current = true;
-      interruptedBefore.current = cursor;
-      setInterruptedCursor(cursor);
-      if (cache) cache.following = false;
-      const current = ++generation.current;
-      capture.current();
-      setLoading(true);
-      try {
-        const page = await backend.agentHistory(
-          agentId,
-          cursor,
-          30,
-          undefined,
-          30,
-          { window_number: windowNumber },
-        );
-        if (current !== generation.current) return;
-        setHistory((saved) =>
-          applyHistoryPage(saved, page, {
-            agentId,
-            windowNumber,
-            before: cursor,
-          }),
-        );
-        interruptedBefore.current = null;
-        setInterruptedCursor(null);
-        setError(null);
-      } catch (failure) {
-        if (current === generation.current) {
-          setError(historyFailure(failure));
-        }
-      } finally {
-        if (current === generation.current) {
-          busy.current = false;
-          setLoading(false);
-        }
-      }
-    },
-    [
-      agentId,
-      before,
-      windowNumber,
-      cache,
-      setHistory,
-      setError,
-      setInterruptedCursor,
-    ],
-  );
-
-  useEffect(
-    () =>
-      backend.onEvent((event) => {
-        if (event.type === "connection.closed") {
-          connected.current = false;
-          generation.current += 1;
-          latestGeneration.current += 1;
-          latestBusy.current = false;
-          busy.current = false;
-          setLoading(false);
-          setLatestLoading(false);
-        }
-        if (event.type === "connection.restored") {
-          connected.current = true;
-          void loadLatest();
-          if (interruptedBefore.current !== null)
-            void loadOlder(interruptedBefore.current);
-        }
-        if (
-          isCurrent &&
-          event.type.startsWith("turn.") &&
-          event.agent_id === agentId
-        )
-          void loadLatest();
-      }),
-    [agentId, isCurrent, loadLatest, loadOlder],
-  );
+function ConversationWindow({
+  agentId,
+  initialRuns,
+  windowNumber,
+  isCurrent,
+}: {
+  agentId: number;
+  initialRuns: AgentRun[];
+  windowNumber: number | null;
+  isCurrent: boolean;
+}) {
+  const cache = useWindowCache();
+  const root = useRef<HTMLDivElement>(null);
+  const capture = useHistoryPosition(root, cache);
+  const {
+    history: { runs, ranges },
+    hasOlder,
+    latestLoading,
+    latestError,
+    olderLoading: loading,
+    olderError: error,
+    loadLatest,
+    loadOlder,
+  } = useConversationHistory({
+    agentId,
+    windowNumber,
+    isCurrent,
+    initialRuns,
+    beforeOlder: capture,
+  });
 
   return (
     <div ref={root} className="flex w-full min-w-0 flex-col gap-4">
