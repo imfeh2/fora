@@ -101,7 +101,14 @@ async function settle() {
   });
 }
 
+async function advance(duration: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(duration);
+  });
+}
+
 beforeEach(() => {
+  vi.useFakeTimers();
   cleanup = [];
   events = new Set();
   failures = new Set();
@@ -149,6 +156,174 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("application live resources", () => {
+  it("batches quick reads from the first event without extending the deadline", async () => {
+    mount();
+    await settle();
+    for (let index = 0; index < 20; index += 1) {
+      emit({ type: "usage.updated", agent_id: 2 });
+      emit({ type: "discussion.updated", discussion_id: 1 });
+      await advance(50);
+      expect(backend.organization).toHaveBeenCalledTimes(
+        1 + Math.floor(((index + 1) * 50) / 150),
+      );
+      expect(backend.discussions).toHaveBeenCalledTimes(
+        1 + Math.floor(((index + 1) * 50) / 150),
+      );
+    }
+    await advance(50);
+    expect(backend.organization).toHaveBeenCalledTimes(8);
+    expect(backend.discussions).toHaveBeenCalledTimes(8);
+  });
+
+  it("reads the finished Turn immediately and clears its scheduled batch", async () => {
+    mount();
+    await settle();
+    emit({ type: "usage.updated", agent_id: 2 });
+    await advance(100);
+    expect(backend.organization).toHaveBeenCalledTimes(1);
+    emit({ type: "turn.finished", agent_id: 2 });
+    await settle();
+    expect(backend.organization).toHaveBeenCalledTimes(2);
+    await advance(200);
+    expect(backend.organization).toHaveBeenCalledTimes(2);
+    expect(backend.discussions).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["disconnect", "unmount"])(
+    "clears both scheduled resources on %s",
+    async (condition) => {
+      mount();
+      await settle();
+      emit({ type: "usage.updated", agent_id: 2 });
+      emit({ type: "discussion.updated", discussion_id: 1 });
+      if (condition === "disconnect") {
+        page.visibilityState = "hidden";
+        disconnect();
+        emit({ type: "usage.updated", agent_id: 2 });
+      } else {
+        for (const off of cleanup.splice(0)) off();
+      }
+      await advance(200);
+      expect(backend.organization).toHaveBeenCalledTimes(1);
+      expect(backend.discussions).toHaveBeenCalledTimes(1);
+      if (condition === "disconnect") {
+        closed = false;
+        emit({ type: "connection.restored" });
+        await settle();
+        expect(backend.organization).toHaveBeenCalledTimes(2);
+        expect(backend.discussions).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it.each([0, 1, 12])(
+    "publishes continuously with %i Agents during 50ms events and 300ms reads",
+    async (agents) => {
+      mount();
+      await settle();
+      vi.useFakeTimers();
+      let version = 0;
+      let activeReads = 0;
+      let maximumReads = 0;
+      const publishedValues = new Set<number>();
+      const members = Array.from({ length: agents }, (_, index) => ({
+        id: index + 2,
+        name: `Agent ${index + 2}`,
+        type: "agent" as const,
+        state: "running" as const,
+      }));
+      vi.mocked(backend.organization).mockImplementation(() => {
+        const observed = version;
+        activeReads += 1;
+        maximumReads = Math.max(maximumReads, activeReads);
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            activeReads -= 1;
+            resolve({ ...organization, members, token_limit: observed });
+          }, 300);
+        });
+      });
+      try {
+        for (version = 1; version <= 200; version += 1) {
+          emit({ type: "usage.updated", agent_id: 2 });
+          await advance(50);
+          const value = render().organization.data?.token_limit;
+          if (value !== null && value !== undefined) publishedValues.add(value);
+        }
+        version = 200;
+        await advance(600);
+        expect(maximumReads).toBe(1);
+        expect(publishedValues.size).toBeGreaterThan(25);
+        expect(render().organization.data?.token_limit).toBe(200);
+        expect(
+          vi.mocked(backend.organization).mock.calls.length,
+        ).toBeLessThanOrEqual(36);
+        expect(backend.discussions).toHaveBeenCalledTimes(1);
+        expect(activeReads).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+  it("publishes member data while a discussion read is still running", async () => {
+    mount();
+    await settle();
+    const delayed = deferred<[]>();
+    vi.mocked(backend.discussions).mockReturnValueOnce(delayed.promise);
+    vi.mocked(backend.organization).mockResolvedValueOnce({
+      ...organization,
+      token_limit: 42,
+    });
+    emit({ type: "discussion.updated" });
+    emit({ type: "usage.updated", agent_id: 2 });
+    await advance(150);
+    await settle();
+    expect(render().organization.data?.token_limit).toBe(42);
+    expect(render().loading).toBe(true);
+    delayed.resolve([]);
+    await settle();
+    expect(render().loading).toBe(false);
+  });
+
+  it("does not reread discussions for tool progress or member usage", async () => {
+    mount();
+    await settle();
+    emit({ type: "tool.updated", agent_id: 2 });
+    emit({ type: "turn.progress", agent_id: 2, phase: "tool.result" });
+    await settle();
+    expect(backend.organization).toHaveBeenCalledTimes(1);
+    expect(backend.discussions).toHaveBeenCalledTimes(1);
+    emit({ type: "usage.updated", agent_id: 2 });
+    await advance(150);
+    await settle();
+    expect(backend.organization).toHaveBeenCalledTimes(2);
+    expect(backend.discussions).toHaveBeenCalledTimes(1);
+    emit({ type: "message.created", discussion_id: 1 });
+    await advance(150);
+    await settle();
+    expect(backend.organization).toHaveBeenCalledTimes(2);
+    expect(backend.discussions).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an error for the failed resource when another resource succeeds", async () => {
+    mount();
+    await settle();
+    vi.mocked(backend.discussions).mockRejectedValueOnce(
+      new BackendError("internal_error", "Discussion failed"),
+    );
+    emit({ type: "discussion.updated" });
+    await advance(150);
+    await settle();
+    emit({ type: "usage.updated", agent_id: 2 });
+    await advance(150);
+    await settle();
+    expect(render().discussions.error?.message).toBe("Discussion failed");
+    expect(render().failure).toBeNull();
+    expect(readToasts().filter((item) => item.open)).toHaveLength(0);
+  });
+});
+
 describe("application recovery with React effects", () => {
   it.each([
     ["organization.changed", "scheduler_stopped", 10],
@@ -173,6 +348,7 @@ describe("application recovery with React effects", () => {
       token_limit: tokenLimit,
     });
     emit({ type });
+    await advance(150);
     await settle();
     expect(backend.organization).toHaveBeenCalledTimes(2);
     expect(render().organization.data?.members).toEqual(members);
@@ -204,9 +380,10 @@ describe("application recovery with React effects", () => {
       mount();
       await settle();
       expect(render().organization.error).toBe(error);
-      await act(() => render().retry());
+      await act(() => render().retryResource("organization"));
       await settle();
       expect(render().organization.data?.human_id).toBe(1);
+      expect(render().organization.error).toBeNull();
       expect(render().failure).toBeNull();
       expect(backend.organization).toHaveBeenCalledTimes(2);
       expect(backend.reconnect).not.toHaveBeenCalled();
@@ -315,7 +492,7 @@ describe("application recovery with React effects", () => {
           ? transport.usageQuery({})
           : transport.usageRead("request:2:1:1");
       const pending = read().catch((error) => error);
-      await vi.advanceTimersByTimeAsync(60000);
+      await advance(60000);
       expect(await pending).toMatchObject({ code: "timeout", operation });
       expect(readToasts().filter((item) => item.open)).toEqual(before);
       const recovered = read();
@@ -430,7 +607,7 @@ describe("application recovery with React effects", () => {
     expect(render().failure).toBeNull();
   });
 
-  it("shows pending data while an initial resource retry is loading", async () => {
+  it("shows the affected region loading while an initial retry is pending", async () => {
     vi.mocked(backend.organization).mockRejectedValueOnce(
       new BackendError("internal_error", "Read failed"),
     );
@@ -440,10 +617,11 @@ describe("application recovery with React effects", () => {
     vi.mocked(backend.organization).mockReturnValueOnce(next.promise);
     let retry!: Promise<void>;
     act(() => {
-      retry = render().retry();
+      retry = render().retryResource("organization");
     });
     await settle();
     expect(render().organization.status).toBe("pending");
+    expect(render().organization.error).toBeNull();
     expect(render().loading).toBe(true);
     next.resolve(organization);
     await act(() => retry);
@@ -491,7 +669,9 @@ describe("application recovery with React effects", () => {
     expect(render().organization.data?.human_id).toBe(1);
     expect(backend.organization).toHaveBeenCalledTimes(2);
     expect(render().organization.error?.message).toBe("Follow-up failed");
-    await act(() => render().refreshOrganization());
+    expect(readToasts().filter((item) => item.open)).toHaveLength(0);
+    await act(() => render().retryResource("organization"));
+    await settle();
     expect(backend.organization).toHaveBeenCalledTimes(3);
     expect(render().organization.error).toBeNull();
   });
@@ -507,7 +687,10 @@ describe("application recovery with React effects", () => {
     await settle();
     expect(render().discussions.data).toBe(snapshot);
     expect(render().discussions.error?.code).toBe("timeout");
-    await act(() => render().refreshDiscussions());
+    expect(render().failure).toBeNull();
+    expect(readToasts().filter((item) => item.open)).toHaveLength(0);
+    await act(() => render().retryResource("discussions"));
+    await settle();
     expect(render().discussions.error).toBeNull();
     expect(backend.discussions).toHaveBeenCalledTimes(3);
   });

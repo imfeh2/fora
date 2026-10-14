@@ -64,6 +64,54 @@ describe("member actions", () => {
 });
 
 describe("member row", () => {
+  it("displays exact known totals and distinguishes unavailable totals from zero", () => {
+    const metrics = {
+      records: 2,
+      input_tokens: "9007199254740993",
+      output_tokens: "0",
+      total_tokens: "9007199254740993",
+      requests: "2",
+      input_known: 1,
+      output_known: 1,
+      total_known: 1,
+      requests_known: 2,
+      cache_read_tokens: null,
+      cache_write_tokens: null,
+      cache_read_known: 0,
+      cache_write_known: 0,
+      estimated_cost: null,
+      cost_known: 0,
+      last_active: null,
+      model_count: 1,
+    };
+    const member = { ...agent("running"), usage_metrics: metrics };
+    expect(render({ ...member, usage_index_ready: false })).toContain(
+      "Indexing saved usage",
+    );
+    const known = render(member, 1000);
+    expect(known).toContain("9,007,199,254,740,993");
+    expect(known).toContain("Partial usage");
+    const unknown = render(
+      {
+        ...member,
+        tokens: null,
+        usage_metrics: { ...metrics, total_tokens: null, total_known: 0 },
+      },
+      1000,
+    );
+    expect(unknown).toContain("Unavailable");
+    expect(unknown).toContain("tokens / 1,000");
+    const zero = render(
+      {
+        ...member,
+        usage_metrics: { ...metrics, total_tokens: "0", total_known: 2 },
+      },
+      1000,
+    );
+    expect(zero).not.toContain("Unavailable");
+    expect(zero).not.toContain("Partial usage");
+    expect(zero).toContain("0 tokens / 1,000");
+  });
   it("uses the same ID pattern for either member type and after renaming", () => {
     const avatar = renderToStaticMarkup(<Avatar memberId={human.id} />);
     expect(render(human)).toContain(avatar);

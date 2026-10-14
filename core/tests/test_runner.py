@@ -56,6 +56,7 @@ from fora.adapters.model.runner import (
 )
 from fora.core.attachment import ImageData, ViewedImage
 from fora.core.errors import DomainError
+from fora.ports.agent import ModelRequestHandle
 from fora.runtime.reminder import (
     HistoryPersistenceError,
     Reminder,
@@ -2597,7 +2598,7 @@ def test_live_model_records_the_provider_boundary_after_outgoing_changes(setting
             started.append(
                 (messages_json, parameters_json, settings_json, model_json, streaming)
             )
-            return "request-1"
+            return ModelRequestHandle(1, "request-1")
 
         def response(self, handle, response_json):
             responses.append((handle, response_json))
@@ -2632,7 +2633,7 @@ def test_live_model_records_the_provider_boundary_after_outgoing_changes(setting
     assert json.loads(started[0][1])["function_tools"] == []
     assert json.loads(started[0][3])["model"] == "test-model"
     assert started[0][4] is False
-    assert responses[0][0] == "request-1"
+    assert responses[0][0] == ModelRequestHandle(1, "request-1")
     assert (
         ModelMessagesTypeAdapter.validate_json(responses[0][1][0])[-1].parts[0].content
         == "ok"
@@ -2649,7 +2650,7 @@ def test_live_model_links_tool_results_to_the_current_request(settings):
         ):
             nonlocal starts
             starts += 1
-            return f"request-{starts}"
+            return ModelRequestHandle(starts, f"request-{starts}")
 
         def response(self, handle, response_json):
             pass
@@ -2696,7 +2697,7 @@ def test_live_model_finalizes_tool_results_without_following_request(settings):
         def start(
             self, messages_json, parameters_json, settings_json, model_json, streaming
         ):
-            return "request-1"
+            return ModelRequestHandle(1, "request-1")
 
         def response(self, handle, response_json):
             pass
@@ -2864,13 +2865,13 @@ def test_sdk_error_before_second_request_preserves_first_success(settings, monke
             raise UnexpectedModelBehavior("request setup failed")
         return request_context
 
-    original_run = runner._agent.run
+    original_iter = runner._agent.iter
 
-    async def run_with_hooks(*args, **kwargs):
+    def iter_with_hooks(*args, **kwargs):
         kwargs["capabilities"] = [*kwargs["capabilities"], hooks]
-        return await original_run(*args, **kwargs)
+        return original_iter(*args, **kwargs)
 
-    monkeypatch.setattr(runner._agent, "run", run_with_hooks)
+    monkeypatch.setattr(runner._agent, "iter", iter_with_hooks)
     outcome = runner.run(
         replace(request(), reminder=None, request_recorder=recorder), None
     )

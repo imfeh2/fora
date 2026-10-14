@@ -52,6 +52,8 @@ from fora.adapters.voice.remote import RemoteRecording
 from fora.adapters.websocket.server import WebServer
 from fora.core.errors import DomainError
 from fora.core.parameters import AgentParameters
+from fora.ports.agent import ModelRequestHandle
+from fora.ports.live import LiveRequestCoverage, LiveTool
 from fora.runtime.scheduler import Scheduler
 from fora.services.uploads import Uploads
 from fora.tools import Dependencies
@@ -142,6 +144,683 @@ def call(dispatcher: Dispatcher, output: Capture, method: str, **params: Any) ->
     responses = [item for item in frames if item.get("type") == "response"]
     assert responses, f"no response for {method}"
     return responses[-1]
+
+
+def test_live_api_preserves_part_identity_bounds_content_and_has_no_writes(
+    server, tmp_path
+):
+    dispatcher, output, deps = server
+    member = deps.store.create_member("agent", "Live")
+    run = deps.history.start_run(member.id)
+    scheduler = deps.__dict__["scheduler"]
+    observer = scheduler.live.begin(run)
+    handle = ModelRequestHandle(1, "live-request")
+    observer.started(handle, "2026-10-11T00:00:00Z", "{}")
+    observer.response(
+        handle,
+        '{"input_tokens":0}',
+        (LiveTool(0, "same", "short"), LiveTool(1, "same", "long", status="running")),
+    )
+    raw = ModelMessagesTypeAdapter.dump_json(
+        [
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        "short",
+                        {
+                            "text": "内容" * 10000,
+                            "image": BinaryContent(
+                                data=b"image", media_type="image/png"
+                            ),
+                        },
+                        tool_call_id="same",
+                    )
+                ]
+            )
+        ]
+    ).decode()
+    observer.tool(
+        handle,
+        LiveTool(
+            0,
+            "same",
+            "short",
+            status="completed",
+            result_json=raw,
+            content_version="v1",
+        ),
+    )
+    database = deps.store._db
+    before_changes = database._connection.total_changes
+    wal = tmp_path / "fora.sqlite3-wal"
+    before_wal = wal.stat().st_size
+    snapshot = call(
+        dispatcher,
+        output,
+        "agent.live",
+        agent_id=member.id,
+        sequence=run.sequence,
+        ordinal=1,
+    )["result"]
+    tools = snapshot["turn"]["requests"][0]["tools"]
+    assert [tool["part_index"] for tool in tools] == [0, 1]
+    assert [tool["status"] for tool in tools] == ["completed", "running"]
+    assert "result_json" not in tools[0]
+    identity = {
+        "agent_id": member.id,
+        "sequence": run.sequence,
+        "ordinal": 1,
+        "part_index": 0,
+        "runtime_epoch": snapshot["runtime_epoch"],
+    }
+    result = call(
+        dispatcher, output, "agent.live.read", **identity, content_version="v1"
+    )["result"]
+    assert (
+        call(dispatcher, output, "agent.live.read", **identity, content_version="v0")[
+            "error"
+        ]["code"]
+        == "live_changed"
+    )
+    content = result["messages"][0]["parts"][0]["content"]
+    text = content["text"]
+    assert text["source"] == "live" and text["has_more"]
+    assert text["runtime_epoch"] == snapshot["runtime_epoch"]
+    assert text["content_version"] == "v1"
+    assert len(text["value"].encode()) <= 16 * 1024
+    following = call(
+        dispatcher,
+        output,
+        "agent.history.text",
+        **identity,
+        source="live",
+        message_index=0,
+        path=text["path"],
+        offset=text["next_offset"],
+    )["result"]
+    assert following["offset"] == text["next_offset"]
+    assert (
+        call(
+            dispatcher,
+            output,
+            "agent.history.text",
+            **identity,
+            source="live",
+            message_index=0,
+            path=text["path"],
+            offset=text["next_offset"],
+            content_version="v0",
+        )["error"]["code"]
+        == "live_changed"
+    )
+    image = content["image"]
+    assert image["kind"] == "binary" and "data" not in image
+    binary = call(
+        dispatcher,
+        output,
+        "agent.history.image",
+        **identity,
+        source="live",
+        message_index=0,
+        path=image["path"],
+    )["result"]
+    assert base64.b64decode(binary["data"]) == b"image"
+    assert image["content_version"] == "v1"
+    assert (
+        call(
+            dispatcher,
+            output,
+            "agent.history.image",
+            **identity,
+            source="live",
+            message_index=0,
+            path=image["path"],
+            content_version="v0",
+        )["error"]["code"]
+        == "live_changed"
+    )
+    assert database._connection.total_changes == before_changes
+    assert wal.stat().st_size == before_wal
+    assert (
+        call(
+            dispatcher,
+            output,
+            "agent.live.read",
+            **{**identity, "runtime_epoch": "old"},
+        )["error"]["code"]
+        == "live_changed"
+    )
+    observer.saved((LiveRequestCoverage(handle, tools=((0, "v1"),)),))
+    assert (
+        call(dispatcher, output, "agent.live.read", **identity)["error"]["code"]
+        == "live_changed"
+    )
+    scheduler.live.remove(member.id)
+    assert (
+        call(dispatcher, output, "agent.live", agent_id=member.id)["result"]["turn"]
+        is None
+    )
+
+
+@pytest.mark.parametrize("save_node", ["response", "response-second", "related"])
+@pytest.mark.parametrize("finalization_fails", [False, True])
+def test_live_save_failure_retains_content_through_resume_and_replaces_on_saved_start(
+    server, tmp_path, monkeypatch, save_node, finalization_fails
+):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RequestUsage
+
+    dispatcher, output, deps = server
+    scheduler = deps.__dict__["scheduler"]
+    member = deps.store.create_member("agent", "Live")
+    deps.settings.set_settings(
+        "model",
+        {
+            "api_type": "openai-chat",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "unused",
+            "model": "test",
+        },
+    )
+    deps.execution.configure(
+        {"write_directories": [str(tmp_path)]}, lambda values: None
+    )
+    room = deps.store.create_discussion("work", [1, member.id])
+    deps.store.append_message(room.id, 1, "@Live work")
+    model_calls = 0
+
+    def respond(messages, info):
+        nonlocal model_calls
+        model_calls += 1
+        parts = (
+            [TextPart("known answer" * 3000)]
+            if save_node == "response" or model_calls > 1
+            else [ToolCallPart("short", {}, tool_call_id="short")]
+        )
+        return ModelResponse(
+            parts=parts,
+            usage=RequestUsage(input_tokens=10 * model_calls, output_tokens=2),
+        )
+
+    scheduler._runner._build_model = lambda config: FunctionModel(respond)
+
+    @scheduler._runner._agent.tool_plain
+    def short() -> str:
+        return "known tool result"
+
+    method = "link_model_request" if save_node == "related" else "finish_model_request"
+    original = getattr(deps.history, method)
+
+    def fail(*args, **kwargs):
+        if save_node == "response-second" and len(args) == 4 and args[2].ordinal == 1:
+            return original(*args, **kwargs)
+        raise OSError("snapshot unavailable")
+
+    monkeypatch.setattr(deps.history, method, fail)
+    finish_run = deps.history.finish_run
+    if finalization_fails:
+        monkeypatch.setattr(deps.history, "finish_run", fail)
+        with pytest.raises(OSError, match="snapshot unavailable"):
+            scheduler.run_turn(member.id)
+    else:
+        outcome = scheduler.run_turn(member.id)
+        assert outcome is not None and outcome.status == "failed"
+    retained = scheduler.live.capture(member.id)[0]
+    assert retained.status == "unsaved"
+    assert (member.id in scheduler._failures) is finalization_fails
+    assert json.loads(retained.requests[0].usage_json)["input_tokens"] == 10
+    request = retained.requests[-1]
+    assert request.response_saved is (save_node == "related")
+    assert (request.response_json is not None) is (save_node != "related")
+    if save_node == "response-second":
+        assert len(retained.requests) == 2
+        assert json.loads(request.usage_json)["input_tokens"] == 20
+        assert retained.requests[0].response_saved
+        assert retained.requests[0].tools[0].saved
+        assert retained.requests[0].tools[0].result_json is None
+    if save_node == "related":
+        assert request.tools[0].result_json is not None
+        assert not request.tools[0].saved
+    identity = {
+        "agent_id": member.id,
+        "sequence": retained.sequence,
+        "ordinal": request.ordinal,
+        "part_index": 0,
+        "runtime_epoch": retained.runtime_epoch,
+        "content_source": "tool" if save_node == "related" else "response",
+    }
+    before_changes = deps.store._db._connection.total_changes
+    wal = tmp_path / "fora.sqlite3-wal"
+    before_wal = wal.stat().st_size
+    expected_tokens = sum(
+        json.loads(item.usage_json)["input_tokens"]
+        + json.loads(item.usage_json)["output_tokens"]
+        for item in retained.requests
+    )
+    query = call(
+        dispatcher, output, "usage.query", agent_id=member.id, contributions_only=True
+    )["result"]
+    assert query["summary"]["total_tokens"] == str(expected_tokens)
+    assert query["summary"]["requests"] == str(len(retained.requests))
+    assert sum(int(day["total_tokens"]) for day in query["daily"]) == expected_tokens
+    member_data = call(dispatcher, output, "organization.get")["result"]
+    shown = next(item for item in member_data["members"] if item["id"] == member.id)
+    assert shown["usage_metrics"]["total_tokens"] == query["summary"]["total_tokens"]
+    detail = call(dispatcher, output, "agent.detail", agent_id=member.id)["result"]
+    assert detail["usage_metrics"] == query["summary"]
+    assert detail["runs"][0]["usage_metrics"]["total_tokens"] == str(expected_tokens)
+    usage_record = next(
+        item for item in query["records"] if item["ordinal"] == request.ordinal
+    )
+    assert usage_record["saved"] is request.response_saved
+    usage_detail = call(
+        dispatcher, output, "usage.read", record_id=usage_record["record_id"]
+    )["result"]
+    assert usage_detail["saved"] is request.response_saved
+    assert (
+        usage_detail["usage"]["input_tokens"]
+        == json.loads(request.usage_json)["input_tokens"]
+    )
+    for _ in range(2):
+        result = call(dispatcher, output, "agent.live.read", **identity)["result"]
+        assert result["saved"] is False
+        text = result["messages"][0]["parts"][0]["content"]
+        if save_node != "related":
+            assert text["saved"] is False
+            assert text["has_more"]
+            following = call(
+                dispatcher,
+                output,
+                "agent.history.text",
+                **identity,
+                source="live",
+                message_index=0,
+                path=text["path"],
+                offset=text["next_offset"],
+            )["result"]
+            assert following["value"]
+        else:
+            assert text == "known tool result"
+    assert deps.store._db._connection.total_changes == before_changes
+    assert wal.stat().st_size == before_wal
+    monkeypatch.setattr(deps.history, method, original)
+    monkeypatch.setattr(deps.history, "finish_run", finish_run)
+    scheduler.pause(member.id)
+    assert scheduler.run_turn(member.id) is None
+    assert scheduler.live.capture(member.id)[0] is retained
+    scheduler.resume(member.id)
+    recovered = scheduler.live.capture(member.id)[0]
+    assert recovered.requests == retained.requests
+    assert member.id not in scheduler._failures
+    assert deps.history.runs(member.id)[0].status == (
+        "interrupted" if finalization_fails else "failed"
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(deps.history, "start_run", fail)
+        with pytest.raises(OSError, match="snapshot unavailable"):
+            scheduler.run_turn(member.id)
+        assert scheduler.live.capture(member.id)[0] is recovered
+    scheduler.resume(member.id)
+    replacements = []
+    original_emit = scheduler.live._emit
+
+    def observe(name, payload):
+        replacements.extend(scheduler.live.capture(member.id))
+        original_emit(name, payload)
+
+    scheduler.live._emit = observe
+    next_turn = scheduler.run_turn(member.id)
+    assert next_turn is not None and next_turn.sequence == retained.sequence + 1
+    assert next_turn.status == "completed"
+    assert replacements[0].sequence == next_turn.sequence
+    assert replacements[0].requests == ()
+    assert scheduler.live.capture(member.id) == ()
+    assert retained.requests[-1] is request
+
+
+def test_live_content_is_readable_during_a_delayed_response_transaction(
+    server, tmp_path, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RequestUsage
+
+    dispatcher, output, deps = server
+    scheduler = deps.__dict__["scheduler"]
+    member = deps.store.create_member("agent", "Live")
+    deps.settings.set_settings(
+        "model",
+        {
+            "api_type": "openai-chat",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "unused",
+            "model": "test",
+        },
+    )
+    deps.execution.configure(
+        {"write_directories": [str(tmp_path)]}, lambda values: None
+    )
+    scheduler._runner._build_model = lambda config: FunctionModel(
+        lambda messages, info: ModelResponse(
+            parts=[TextPart("known response")],
+            usage=RequestUsage(input_tokens=10),
+        )
+    )
+    room = deps.store.create_discussion("work", [1, member.id])
+    deps.store.append_message(room.id, 1, "@Live work")
+    started = threading.Event()
+    release = threading.Event()
+    original = deps.history.finish_model_request
+
+    def delayed(*args, **kwargs):
+        with deps.history.transaction():
+            started.set()
+            assert release.wait(5)
+            return original(*args, **kwargs)
+
+    monkeypatch.setattr(deps.history, "finish_model_request", delayed)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(scheduler.run_turn, member.id)
+        try:
+            assert started.wait(5)
+            turn = scheduler.live.capture(member.id)[0]
+            assert json.loads(turn.requests[0].usage_json)["input_tokens"] == 10
+            before_changes = deps.store._db._connection.total_changes
+            identity = {
+                "agent_id": member.id,
+                "sequence": turn.sequence,
+                "ordinal": turn.requests[0].ordinal,
+            }
+            page = call(dispatcher, output, "agent.live", **identity)["result"]
+            assert page["turn"]["requests"][0]["response_saved"] is False
+            result = call(
+                dispatcher,
+                output,
+                "agent.live.read",
+                **identity,
+                part_index=0,
+                runtime_epoch=turn.runtime_epoch,
+                content_source="response",
+            )["result"]
+            assert result["messages"][0]["parts"][0]["content"] == "known response"
+            assert result["saved"] is False
+            usage = call(
+                dispatcher,
+                output,
+                "usage.query",
+                agent_id=member.id,
+                contributions_only=True,
+            )["result"]
+            assert usage["summary"]["total_tokens"] == "10"
+            assert usage["records"][0]["saved"] is False
+            assert usage["records"][0]["cost_source"] == "genai-prices"
+            detail = call(dispatcher, output, "agent.detail", agent_id=member.id)[
+                "result"
+            ]
+            assert detail["usage_metrics"] == usage["summary"]
+            history = call(dispatcher, output, "agent.history.read", **identity)[
+                "result"
+            ]
+            assert history["run"]["usage_metrics"]["sequence"] == turn.sequence
+            assert {
+                key: value
+                for key, value in history["run"]["usage_metrics"].items()
+                if key != "sequence"
+            } == usage["summary"]
+            assert history["request"]["response_saved"] is False
+            assert history["request"]["response"]["saved"] is False
+            assert (
+                history["request"]["response"]["messages"][0]["parts"][0]["content"]
+                == "known response"
+            )
+            assert (
+                history["request"]["observation"]["request_id"]
+                == turn.requests[0].request_id
+            )
+            members = call(dispatcher, output, "organization.get")["result"]["members"]
+            assert (
+                next(item for item in members if item["id"] == member.id)["tokens"]
+                == 10
+            )
+            assert deps.store._db._connection.total_changes == before_changes
+            assert not future.done()
+        finally:
+            release.set()
+        outcome = future.result(timeout=5)
+    assert outcome.status == "completed"
+    assert scheduler.live.capture(member.id) == ()
+    saved = call(dispatcher, output, "agent.history.read", **identity)["result"]
+    assert saved["request"]["response_saved"] is True
+    assert "observation" not in saved["request"]
+    assert (
+        saved["request"]["response"]["messages"][0]["parts"][0]["content"]
+        == "known response"
+    )
+    assert saved["run"]["usage_metrics"]["total_tokens"] == "10"
+
+
+@pytest.mark.parametrize(
+    "save_method", ["finish_model_request", "fail_model_request", "link_model_request"]
+)
+def test_duplicate_batch_keeps_history_persistence_failure_priority(
+    server, tmp_path, monkeypatch, save_method
+):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RequestUsage
+
+    _, _, deps = server
+    scheduler = deps.__dict__["scheduler"]
+    member = deps.store.create_member("agent", "Live")
+    deps.settings.set_settings(
+        "model",
+        {
+            "api_type": "openai-chat",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "unused",
+            "model": "test",
+        },
+    )
+    deps.execution.configure(
+        {"write_directories": [str(tmp_path)]}, lambda values: None
+    )
+    room = deps.store.create_discussion("work", [1, member.id])
+    deps.store.append_message(room.id, 1, "@Live work")
+    responses = []
+    calls = []
+
+    def respond(messages, info):
+        responses.append(1)
+        return ModelResponse(
+            parts=[
+                ToolCallPart("first", {}, tool_call_id="shared"),
+                ToolCallPart("second", {}, tool_call_id="shared"),
+            ],
+            usage=RequestUsage(input_tokens=10),
+        )
+
+    scheduler._runner._build_model = lambda config: FunctionModel(respond)
+
+    @scheduler._runner._agent.tool_plain
+    def first() -> str:
+        calls.append("first")
+        return "first"
+
+    @scheduler._runner._agent.tool_plain
+    def second() -> str:
+        calls.append("second")
+        return "second"
+
+    def fail(*args, **kwargs):
+        raise OSError("history unavailable")
+
+    monkeypatch.setattr(deps.history, save_method, fail)
+    outcome = scheduler.run_turn(member.id)
+    assert outcome.status == "failed"
+    assert outcome.error.startswith("HistoryPersistenceError:")
+    assert responses == [1]
+    assert calls == []
+    turn = scheduler.live.capture(member.id)[0]
+    assert json.loads(turn.requests[0].usage_json)["input_tokens"] == 10
+    assert all(
+        tool.started_at is None
+        and tool.status in ("queued", "cancelled")
+        and tool.result_json is None
+        for tool in turn.requests[0].tools
+    )
+
+
+def test_duplicate_batch_uses_the_existing_preparation_failure_streak(server, tmp_path):
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RequestUsage
+
+    from fora.core.turn import model_error_signature
+
+    _, _, deps = server
+    scheduler = deps.__dict__["scheduler"]
+    member = deps.store.create_member("agent", "Live")
+    deps.settings.set_settings(
+        "model",
+        {
+            "api_type": "openai-chat",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "unused",
+            "model": "test",
+        },
+    )
+    deps.settings.set_settings("agent", {"context_window_tokens": 1})
+    deps.execution.configure(
+        {"write_directories": [str(tmp_path)]}, lambda values: None
+    )
+    seed = deps.history.start_run(member.id)
+    deps.history.finish_run(
+        member.id,
+        seed.sequence,
+        status="completed",
+        messages_json="[]",
+        usage_json='{"last_input_tokens":2}',
+    )
+    room = deps.store.create_discussion("work", [1, member.id])
+    responses = []
+    calls = []
+
+    def respond(messages, info):
+        responses.append(1)
+        call_id = f"shared-{len(responses)}"
+        return ModelResponse(
+            parts=[
+                ToolCallPart("first", {}, tool_call_id=call_id),
+                ToolCallPart("second", {}, tool_call_id=call_id),
+            ],
+            usage=RequestUsage(input_tokens=2),
+        )
+
+    scheduler._runner._build_model = lambda config: FunctionModel(respond)
+
+    @scheduler._runner._agent.tool_plain
+    def first() -> str:
+        calls.append("first")
+        return "first"
+
+    @scheduler._runner._agent.tool_plain
+    def second() -> str:
+        calls.append("second")
+        return "second"
+
+    window = deps.history.window(member.id)
+    errors = []
+    for index in range(1, 4):
+        deps.store.append_message(room.id, 1, f"@Live work {index}")
+        outcome = scheduler.run_turn(member.id)
+        assert outcome.status == "failed"
+        assert outcome.error.startswith(
+            "UnexpectedModelBehavior: Duplicate tool_call_id"
+        )
+        errors.append(outcome.error)
+        if index < 3:
+            assert (
+                deps.history.preparation_failure_streak(member.id, outcome.sequence)
+                == index
+            )
+        else:
+            assert deps.history.window(member.id).number == window.number + 1
+            assert deps.history.window(member.id).reason == "overflow"
+    assert responses == [1, 1, 1]
+    assert calls == []
+    assert len(set(errors)) == 3
+    assert len({model_error_signature(error) for error in errors}) == 1
+
+
+@pytest.mark.parametrize("release", ["delete", "close", "restart"])
+def test_live_retained_content_is_released_with_its_runtime_owner(server, release):
+    dispatcher, output, deps = server
+    scheduler = deps.__dict__["scheduler"]
+    member = deps.store.create_member("agent", "Live")
+    run = deps.history.start_run(member.id)
+    observer = scheduler.live.begin(run)
+    handle = ModelRequestHandle(1, "retained-request")
+    observer.started(handle, "start", "{}")
+    raw = ModelMessagesTypeAdapter.dump_json(
+        [ModelResponse(parts=[TextPart("not persisted")])]
+    ).decode()
+    observer.response(handle, '{"input_tokens":10}', (), raw, "content-v1")
+    scheduler.live.failed(member.id, run.sequence, "save unavailable")
+    previous = scheduler.live.capture(member.id)[0]
+    if release == "delete":
+        result = call(
+            dispatcher, output, "organization.delete_agent", agent_id=member.id
+        )
+        assert "result" in result
+        assert scheduler.live.capture(member.id) == ()
+        assert (
+            call(dispatcher, output, "agent.live", agent_id=member.id)["error"]["code"]
+            == "not_found"
+        )
+    elif release == "close":
+        scheduler.stop()
+        assert scheduler.live.capture(member.id) == ()
+    else:
+        replacement = Scheduler(deps, PydanticModelRunner(deps.settings))
+        replacement.recover()
+        assert replacement.live.runtime_epoch != previous.runtime_epoch
+        assert replacement.live.capture(member.id) == ()
+        assert deps.history.runs(member.id)[0].status == "interrupted"
+        assert deps.history.runs(member.id)[0].messages_json == "[]"
+        scheduler.stop()
+        replacement.stop()
+    assert previous.requests[0].response_json == raw
+
+
+def test_live_api_paginates_short_records_and_requires_an_existing_agent(server):
+    dispatcher, output, deps = server
+    member = deps.store.create_member("agent", "Live")
+    scheduler = deps.__dict__["scheduler"]
+    observer = scheduler.live.begin(deps.history.start_run(member.id))
+    for ordinal in range(1, 33):
+        handle = ModelRequestHandle(ordinal, f"request-{ordinal}")
+        observer.started(handle, "start", "{}")
+        observer.response(
+            handle, "{}", tuple(LiveTool(index, "same", "tool") for index in range(102))
+        )
+    page = call(dispatcher, output, "agent.live", agent_id=member.id)["result"]["turn"]
+    assert len(page["requests"]) == 30 and page["next_after"] == 30
+    request = page["requests"][0]
+    assert len(request["tools"]) == 100 and request["tools_next_after"] == 99
+    tail = call(
+        dispatcher, output, "agent.live", agent_id=member.id, ordinal=1, tool_after=99
+    )["result"]["turn"]["requests"][0]
+    assert [tool["part_index"] for tool in tail["tools"]] == [100, 101]
+    assert not tail["tools_has_more"]
+    assert (
+        call(dispatcher, output, "agent.live", agent_id=member.id, limit=0)["error"][
+            "code"
+        ]
+        == "invalid_params"
+    )
+    assert (
+        call(dispatcher, output, "agent.live", agent_id=99999)["error"]["code"]
+        == "not_found"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2527,6 +3206,125 @@ def send_control(connection, identifier, method, **params):
     connection.send(json.dumps({"id": identifier, "method": method, "params": params}))
 
 
+def test_usage_index_batches_are_explicit_and_observation_reads_remain_pure(server):
+    dispatcher, output, deps = server
+    member = deps.store.create_member("agent", "Cold index")
+    for _ in range(5):
+        run = deps.history.start_run(member.id)
+        deps.history.finish_run(
+            member.id,
+            run.sequence,
+            status="completed",
+            messages_json="[]",
+            usage_json='{"input_tokens":10,"output_tokens":0,"requests":1}',
+        )
+    with deps.store._db:
+        deps.store._db.execute("DELETE FROM usage_records")
+        deps.store._db.execute(
+            "UPDATE usage_index_state SET request_checkpoint = 0, turn_checkpoint = 0, ready = 0, revision = revision + 1 WHERE id = 1"
+        )
+    before = deps.store._db._connection.total_changes
+    first = call(dispatcher, output, "usage.query", contributions_only=True)["result"]
+    assert first["index"]["ready"] == 0
+    assert first["summary"]["total_tokens"] == "0"
+    members = call(dispatcher, output, "organization.get")["result"]["members"]
+    assert (
+        next(item for item in members if item["id"] == member.id)["usage_index_ready"]
+        is False
+    )
+    assert deps.store._db._connection.total_changes == before
+    for expected, ready in ((20, 0), (40, 0), (50, 1)):
+        state = call(dispatcher, output, "usage.advance", limit=2)["result"]
+        assert state["ready"] == ready
+        checkpoint = state["turn_checkpoint"]
+        before = deps.store._db._connection.total_changes
+        for _ in range(3):
+            result = call(dispatcher, output, "usage.query", contributions_only=True)[
+                "result"
+            ]
+            assert result["summary"]["total_tokens"] == str(expected)
+            assert result["index"]["turn_checkpoint"] == checkpoint
+            assert result["index"]["ready"] == ready
+        assert deps.store._db._connection.total_changes == before
+    assert len(deps.store._db.execute("SELECT record_id FROM usage_records")) == 5
+
+
+def test_control_usage_cache_is_per_connection_and_clears_after_disconnect(
+    server, monkeypatch
+):
+    from fora.ports.usage import UsageCache
+
+    dispatcher, _, deps = server
+    member = deps.store.create_member("agent", "Cache owner")
+    run = deps.history.start_run(member.id)
+    handle = deps.history.start_model_request(
+        member.id,
+        run.sequence,
+        run.run_id,
+        1,
+        (),
+        "{}",
+        "{}",
+        '{"model":"cache-test","provider":"test"}',
+        False,
+    )
+    deps.history.finish_model_request(
+        member.id,
+        run.sequence,
+        handle,
+        ('[{"kind":"response","usage":{"input_tokens":10,"output_tokens":2}}]',),
+    )
+    deps.history.usage_advance(1000)
+    caches = []
+    aggregates = []
+    obtain = UsageCache.obtain
+    aggregate = deps.history._usage._aggregates
+
+    def tracked_obtain(cache, key, build):
+        if cache not in caches:
+            caches.append(cache)
+        return obtain(cache, key, build)
+
+    def tracked_aggregate(execute, table, where, values):
+        aggregates.append(table)
+        return aggregate(execute, table, where, values)
+
+    monkeypatch.setattr(UsageCache, "obtain", tracked_obtain)
+    monkeypatch.setattr(deps.history._usage, "_aggregates", tracked_aggregate)
+    web = WebServer(dispatcher, "test-token", None, port=0)
+    web.start()
+    before = deps.store._db._connection.total_changes
+    try:
+        with connect(f"ws://127.0.0.1:{web.port}/ws?token=test-token") as connection:
+            for identifier in (1, 2):
+                send_control(connection, identifier, "usage.query", agent_id=member.id)
+                frame = json.loads(connection.recv(timeout=3))
+                assert frame["id"] == identifier and "error" not in frame
+                assert frame["result"]["summary"]["total_tokens"] == "12"
+            assert len(caches) == 1
+            assert aggregates.count("persisted_usage") == 1
+            assert aggregates.count("live_usage") == 2
+            previous_key = caches[0]._key
+            send_control(
+                connection, 3, "usage.query", agent_id=member.id, coverage="recorded"
+            )
+            frame = json.loads(connection.recv(timeout=3))
+            assert frame["id"] == 3 and "error" not in frame
+            assert len(caches) == 1 and caches[0]._key != previous_key
+            assert aggregates.count("persisted_usage") == 2
+        with connect(f"ws://127.0.0.1:{web.port}/ws?token=test-token") as connection:
+            send_control(connection, 1, "usage.query", agent_id=member.id)
+            frame = json.loads(connection.recv(timeout=3))
+            assert frame["result"]["summary"]["total_tokens"] == "12"
+            assert len(caches) == 2 and caches[0] is not caches[1]
+            assert aggregates.count("persisted_usage") == 3
+    finally:
+        web.stop()
+    assert all(cache._key is None and cache._value is None for cache in caches)
+    assert deps.store._db._connection.total_changes == before
+    assert not web._requests and not web._handlers
+
+
 def test_control_independent_requests_complete_during_history(server, monkeypatch):
     dispatcher, _, deps = server
     reader = deps.store.create_member("agent", "Reader")
@@ -2739,6 +3537,8 @@ def test_request_scope_resources_and_real_side_effects(server):
         return dispatcher.scope(request)
 
     assert set(dispatcher.methods()) == set(dispatcher._scopes)
+    assert scope("organization.get").follows(scope("usage.advance"))
+    assert not scope("discussion.list").follows(scope("usage.advance"))
     assert scope("discussion.page", discussion_id=room.id).follows(
         scope("discussion.send", discussion_id=room.id)
     )
@@ -3075,13 +3875,15 @@ def test_all_registered_operations_declare_their_business_resources(server):
         },
         "uploads": {"upload.create", "upload.status", "upload.cancel"},
         "history": {
+            "agent.live",
+            "agent.live.read",
             "agent.history",
             "agent.history.windows",
             "agent.history.read",
             "agent.history.text",
             "agent.history.image",
         },
-        "usage": {"usage.query", "usage.read"},
+        "usage": {"usage.query", "usage.read", "usage.advance"},
         "workspace": {"agent.detail", "workspace.list", "workspace.read"},
         "library": {
             "library.list",
@@ -3102,6 +3904,7 @@ def test_all_registered_operations_declare_their_business_resources(server):
     expected = set().union(*groups.values())
     assert expected == set(dispatcher.methods())
     modifications = {
+        "usage.advance",
         "organization.create_agent",
         "organization.rename_member",
         "organization.pause_agent",
@@ -3145,7 +3948,10 @@ def test_all_registered_operations_declare_their_business_resources(server):
         if method in groups["history"]:
             assert Resource("history", 2) in scope.reads
         if method in groups["usage"]:
-            assert Resource("history") in scope.reads
+            if method == "usage.advance":
+                assert Resource("history") in scope.writes
+            else:
+                assert Resource("history") in scope.reads
             assert Resource("member") in scope.reads
         if method in groups["uploads"]:
             assert Resource("attachments", HUMAN_ID) in scope.writes
@@ -3304,6 +4110,7 @@ def test_control_disconnect_during_socket_send_preserves_committed_message(
         "voice",
         "watermark",
         "upload",
+        "usage",
     ],
 )
 def test_control_related_side_effects_finish_before_following_reads(
@@ -3375,6 +4182,21 @@ def test_control_related_side_effects_finish_before_following_reads(
             {"upload_ids": [upload.id]},
         ),
     }
+    if effect == "usage":
+        run = deps.history.start_run(agent.id)
+        deps.history.finish_run(
+            agent.id,
+            run.sequence,
+            status="completed",
+            messages_json="[]",
+            usage_json='{"input_tokens":17,"output_tokens":3,"requests":1}',
+        )
+        with deps.store._db:
+            deps.store._db.execute("DELETE FROM usage_records")
+            deps.store._db.execute(
+                "UPDATE usage_index_state SET request_checkpoint = 0, turn_checkpoint = 0, ready = 0, revision = revision + 1 WHERE id = 1"
+            )
+        cases[effect] = ("usage.advance", {"limit": 2}, "organization.get", {})
     first, first_params, second, second_params = cases[effect]
     original = dispatcher._handlers[first]
     entered = threading.Event()
@@ -3435,6 +4257,13 @@ def test_control_related_side_effects_finish_before_following_reads(
                 )
             elif effect == "upload":
                 assert deps.store.get_upload(upload.id, HUMAN_ID).state == "expired"
+            elif effect == "usage":
+                member = next(
+                    item for item in result["members"] if item["id"] == agent.id
+                )
+                assert member["tokens"] == 20
+                assert member["usage_index_ready"] is True
+                assert result["usage_version"]["index"]["ready"] == 1
     finally:
         release.set()
         web.stop()

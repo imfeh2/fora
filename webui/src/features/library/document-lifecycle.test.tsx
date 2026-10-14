@@ -91,6 +91,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
+  vi.useRealTimers();
   clearToasts();
   await act(async () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -141,6 +142,220 @@ function saveButton(container: HTMLElement): HTMLButtonElement {
 async function openInitialDocument(container: HTMLElement) {
   await waitFor(() => expect(editor(container).value).toBe(initial.content));
 }
+
+describe("Live Library documents", () => {
+  it("publishes fixed batches during continuous notifications and quick reads", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    vi.useFakeTimers();
+    for (let index = 1; index <= 20; index += 1) {
+      vi.mocked(backend.readLibrary).mockResolvedValue({
+        ...initial,
+        content: `version ${index}`,
+        hash: `hash-${index}`,
+      });
+      await act(async () => {
+        event({ type: "library.updated", path });
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(backend.readLibrary).toHaveBeenCalledTimes(
+        1 + Math.floor((index * 50) / 150),
+      );
+      if (index % 3 === 0)
+        expect(editor(view.container).value).toBe(`version ${index}`);
+    }
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    expect(backend.readLibrary).toHaveBeenCalledTimes(8);
+    expect(editor(view.container).value).toBe("version 20");
+  });
+
+  it("completes a queued batch immediately on Turn completion", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    vi.useFakeTimers();
+    vi.mocked(backend.readLibrary).mockResolvedValue(latest);
+    await act(async () => {
+      event({ type: "library.updated", path });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(backend.readLibrary).toHaveBeenCalledTimes(1);
+    await act(async () => event({ type: "turn.finished", agent_id: 2 }));
+    expect(backend.readLibrary).toHaveBeenCalledTimes(2);
+    expect(editor(view.container).value).toBe(latest.content);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(backend.readLibrary).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["disconnect", "unmount"])(
+    "clears a pending document batch on %s",
+    async (condition) => {
+      const view = mount();
+      await openInitialDocument(view.container);
+      vi.useFakeTimers();
+      await act(async () => event({ type: "library.updated", path }));
+      if (condition === "disconnect") {
+        await act(async () => {
+          event({ type: "connection.closed" });
+          event({ type: "library.updated", path });
+        });
+      } else view.unmount();
+      await act(async () => vi.advanceTimersByTimeAsync(200));
+      expect(backend.readLibrary).toHaveBeenCalledTimes(1);
+      if (condition === "disconnect") {
+        await act(async () => event({ type: "connection.restored" }));
+        expect(backend.readLibrary).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("clears the previous path batch when the document changes", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    vi.useFakeTimers();
+    await act(async () => event({ type: "library.updated", path }));
+    vi.mocked(backend.readLibrary).mockResolvedValue({
+      path: "next.md",
+      content: "next document",
+      hash: "next",
+    });
+    await act(async () => {
+      view.rerender(
+        <RouterProvider>
+          <DocumentPage key="next.md" path="next.md" />
+        </RouterProvider>,
+      );
+    });
+    expect(backend.readLibrary).toHaveBeenCalledTimes(2);
+    expect(editor(view.container).value).toBe("next document");
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(backend.readLibrary).toHaveBeenCalledTimes(2);
+    expect(backend.readLibrary).toHaveBeenLastCalledWith("next.md");
+  });
+
+  it("refreshes the current path and leaves unrelated files alone", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    await act(async () => event({ type: "library.updated", path: "other.md" }));
+    expect(backend.readLibrary).toHaveBeenCalledTimes(1);
+    vi.mocked(backend.readLibrary).mockResolvedValueOnce(latest);
+    await act(async () => event({ type: "library.updated", path }));
+    await waitFor(() =>
+      expect(editor(view.container).value).toBe(latest.content),
+    );
+  });
+
+  it("publishes a completed read during continuing notifications and combines the next read", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    let finish!: (value: LibraryDocument) => void;
+    let finishNext!: (value: LibraryDocument) => void;
+    vi.mocked(backend.readLibrary)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishNext = resolve;
+          }),
+      );
+    await act(async () => event({ type: "library.updated", path }));
+    await waitFor(() => expect(backend.readLibrary).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      for (let index = 0; index < 100; index += 1)
+        event({ type: "library.updated", path });
+      event({ type: "turn.finished", agent_id: 2 });
+    });
+    expect(backend.readLibrary).toHaveBeenCalledTimes(2);
+    await act(async () => finish(latest));
+    expect(editor(view.container).value).toBe(latest.content);
+    expect(backend.readLibrary).toHaveBeenCalledTimes(3);
+    await act(async () =>
+      finishNext({ ...latest, content: "final", hash: "final" }),
+    );
+    expect(editor(view.container).value).toBe("final");
+    expect(backend.readLibrary).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves edits made while the current file is being refreshed", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    let finish!: (value: LibraryDocument) => void;
+    vi.mocked(backend.readLibrary).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await act(async () => event({ type: "library.updated", path }));
+    await waitFor(() => expect(backend.readLibrary).toHaveBeenCalledTimes(2));
+    fireEvent.change(editor(view.container), {
+      target: { value: "local edit" },
+    });
+    await act(async () => finish(latest));
+    expect(editor(view.container).value).toBe("local edit");
+    expect(conflict().title).toBe("Saved elsewhere");
+  });
+
+  it("keeps a confirmed save when an older read completes later", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    let finish!: (value: LibraryDocument) => void;
+    vi.mocked(backend.readLibrary).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await act(async () => event({ type: "library.updated", path }));
+    await waitFor(() => expect(backend.readLibrary).toHaveBeenCalledTimes(2));
+    fireEvent.change(editor(view.container), {
+      target: { value: "saved edit" },
+    });
+    vi.spyOn(backend, "writeLibrary").mockResolvedValueOnce({
+      path,
+      kind: "file",
+      size: 10,
+      modified_at: "now",
+      hash: "saved",
+    });
+    fireEvent.click(saveButton(view.container));
+    await waitFor(() => expect(saveButton(view.container).disabled).toBe(true));
+    await act(async () => finish(initial));
+    expect(editor(view.container).value).toBe("saved edit");
+    expect(
+      readToasts().some((item) => item.id === `document-conflict:${path}`),
+    ).toBe(false);
+  });
+
+  it("ignores the old connection response after reconnecting", async () => {
+    const view = mount();
+    await openInitialDocument(view.container);
+    let finish!: (value: LibraryDocument) => void;
+    vi.mocked(backend.readLibrary)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(latest);
+    await act(async () => event({ type: "library.updated", path }));
+    await waitFor(() => expect(backend.readLibrary).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      event({ type: "connection.closed" });
+      event({ type: "connection.restored" });
+    });
+    await waitFor(() =>
+      expect(editor(view.container).value).toBe(latest.content),
+    );
+    await act(async () => finish(initial));
+    expect(editor(view.container).value).toBe(latest.content);
+  });
+});
 
 describe("Library document conflict recovery", () => {
   it("keeps edits until Reopen after a reconnect conflict", async () => {

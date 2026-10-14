@@ -22,6 +22,7 @@ import {
   backend,
   type HistoryText,
   type HistoryValue,
+  type LivePage,
   type Message,
 } from "@/lib/backend";
 
@@ -68,6 +69,7 @@ afterEach(() => {
   listeners.clear();
   observers.clear();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const date = "2026-10-08T09:15:00Z";
@@ -303,6 +305,75 @@ beforeEach(() => {
   );
 });
 
+function liveToolPage(
+  partIndex: number,
+  status: "running" | "completed",
+  revision: number,
+  saved = false,
+): LivePage {
+  return {
+    runtime_epoch: "live-epoch",
+    turn: {
+      agent_id: 2,
+      sequence: 4,
+      run_id: "run-4",
+      live_revision: revision,
+      status: "running",
+      error: null,
+      has_more: false,
+      next_after: null,
+      requests: [
+        {
+          ordinal: 1,
+          request_id: "request",
+          started_at: date,
+          tools_has_more: false,
+          tools_next_after: null,
+          tools: [
+            {
+              part_index: partIndex,
+              tool_call_id: partIndex === 0 ? "short" : "long",
+              tool_name: "run",
+              status,
+              started_at: date,
+              completed_at: status === "completed" ? date : null,
+              saved,
+              has_result: status === "completed" && !saved,
+              content_version: `${partIndex}:${status}`,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function runningTools(): AgentHistoryRead {
+  const value = read(4, [
+    {
+      part_kind: "tool-call",
+      tool_name: "run",
+      tool_call_id: "short",
+      args: { argv: ["short"] },
+    },
+    {
+      part_kind: "tool-call",
+      tool_name: "run",
+      tool_call_id: "long",
+      args: { argv: ["long"] },
+    },
+  ]);
+  value.run.status = "running";
+  value.run.completed_at = null;
+  if (!value.request) throw new Error("Request is missing");
+  value.request.observation = {
+    runtime_epoch: "live-epoch",
+    live_revision: 1,
+    request_id: "request",
+  };
+  return value;
+}
+
 describe("Member conversation", () => {
   it("observes multiple targets and independently releases shared targets", () => {
     const first = document.createElement("div");
@@ -339,6 +410,466 @@ describe("Member conversation", () => {
     expect(one).toHaveBeenCalledTimes(3);
     observer.disconnect();
   });
+
+  it("publishes a short tool result while its parallel tool remains running", async () => {
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(runningTools());
+    let completed = false;
+    vi.spyOn(backend, "agentLive").mockImplementation(
+      async (_agent, _sequence, _ordinal, after, limit) => {
+        expect(limit).toBe(1);
+        const partIndex = after === undefined ? 0 : after + 1;
+        return liveToolPage(
+          partIndex,
+          partIndex === 0 && completed ? "completed" : "running",
+          completed ? 2 : 1,
+        );
+      },
+    );
+    vi.spyOn(backend, "agentLiveRead").mockResolvedValue({
+      offset: 0,
+      total: 1,
+      has_more: false,
+      saved: false,
+      messages: [
+        {
+          kind: "request",
+          parts: [
+            {
+              part_kind: "tool-return",
+              tool_name: "run",
+              tool_call_id: "short",
+              outcome: "success",
+              content: { stdout: "short result", exit_code: 0 },
+            },
+          ],
+        },
+      ],
+    });
+    mount();
+    const short = await testing.screen.findByRole("button", {
+      name: "Run short · Running",
+    });
+    expect(
+      testing.screen.getByRole("button", { name: "Run long · Running" }),
+    ).toBeTruthy();
+    testing.fireEvent.click(short);
+    await testing.act(async () => {});
+    expect(backend.agentLiveRead).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    completed = true;
+    await event({
+      type: "tool.updated",
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: 0,
+    });
+    await testing.act(async () => vi.advanceTimersByTimeAsync(150));
+    expect(
+      testing.screen.getByRole("button", { name: "Run short · Completed" }),
+    ).toBeTruthy();
+    expect(
+      testing.screen.getByRole("button", { name: "Run long · Running" }),
+    ).toBeTruthy();
+    expect(testing.screen.getByText("short result")).toBeTruthy();
+    expect(testing.screen.getByText("Not saved")).toBeTruthy();
+    expect(backend.agentLiveRead).toHaveBeenCalledWith(
+      2,
+      4,
+      1,
+      0,
+      "live-epoch",
+      "tool",
+      "0:completed",
+    );
+  });
+
+  it.each([
+    ["queued", "Queued", null],
+    ["running", "Running", date],
+    ["failed", "Failed", null],
+    ["cancelled", "Cancelled", date],
+  ] as const)(
+    "shows the observed %s state with its actual start time",
+    async (status, label, started) => {
+      const value = read(4, [
+        {
+          part_kind: "tool-call",
+          tool_name: "run",
+          tool_call_id: "short",
+          args: { argv: ["short"] },
+        },
+      ]);
+      value.run.status = "running";
+      vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+      vi.spyOn(backend, "agentLive").mockImplementation(async () => {
+        const page = liveToolPage(0, "running", 1);
+        if (!page.turn) throw new Error("Turn is missing");
+        const tool = page.turn.requests[0].tools[0];
+        tool.status = status;
+        tool.started_at = started;
+        tool.completed_at =
+          status === "failed" || status === "cancelled" ? date : null;
+        return page;
+      });
+      const result = vi.spyOn(backend, "agentLiveRead");
+      mount();
+      const action = await testing.screen.findByRole("button", {
+        name: `Run short · ${label}`,
+      });
+      testing.fireEvent.click(action);
+      await testing.act(async () => {});
+      expect(testing.screen.queryByText("Not saved")).toBeNull();
+      expect(testing.screen.queryByText(/^Started /) !== null).toBe(
+        started !== null,
+      );
+      expect(result).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reads saved SDK image positions together with their tool lifecycle", async () => {
+    const binary = {
+      kind: "binary",
+      source: "related",
+      request_ordinal: 1,
+      message_index: 0,
+      path: ["parts", 1, "content", 0],
+      media_type: "image/png",
+      size: 3,
+      identifier: null,
+    };
+    const value = command("Image ready");
+    if (!value.request) throw new Error("Request is missing");
+    value.request.related.messages = [
+      {
+        kind: "request",
+        metadata: {
+          fora: {
+            request_id: "request",
+            request_ordinal: 1,
+            tool_observations: [
+              {
+                request_ordinal: 1,
+                part_index: 0,
+                tool_call_id: "read",
+                tool_name: "run",
+                status: "completed",
+                started_at: date,
+                completed_at: date,
+                has_result: true,
+                content_version: "saved-image",
+                result_positions: [
+                  [0, 0],
+                  [0, 1],
+                ],
+              },
+            ],
+          },
+        },
+        parts: [
+          {
+            part_kind: "tool-return",
+            tool_call_id: "read",
+            tool_name: "run",
+            outcome: "success",
+            content: "Image ready",
+          },
+          { part_kind: "user-prompt", content: [binary] },
+        ],
+      },
+    ];
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+    const image = vi.spyOn(backend, "agentHistoryImage").mockResolvedValue({
+      media_type: "image/png",
+      data: "bmV3",
+      size: 3,
+      identifier: null,
+    });
+    mount();
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", {
+        name: "Read file docs/发布说明.md · Completed",
+      }),
+    );
+    await testing.screen.findByRole("button", { name: "Open history image" });
+    expect(image).toHaveBeenCalledWith(2, 4, binary);
+    expect(testing.screen.getByText(/^Started /)).toBeTruthy();
+    expect(testing.screen.getByText(/^Finished /)).toBeTruthy();
+    expect(testing.screen.getByText("Image ready")).toBeTruthy();
+    expect(testing.screen.queryByText("Not saved")).toBeNull();
+  });
+
+  it("uses the saved SDK outcome independently of command output fields", async () => {
+    const value = command({ exit_code: 1, stderr: "Command output" });
+    if (!value.request) throw new Error("Request is missing");
+    const message = value.request.related.messages[0];
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      Array.isArray(message) ||
+      !Array.isArray(message.parts)
+    )
+      throw new Error("Saved result is missing");
+    const part = message.parts[0];
+    if (typeof part !== "object" || part === null || Array.isArray(part))
+      throw new Error("Saved part is missing");
+    part.outcome = "success";
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+    mount();
+    const action = await testing.screen.findByRole("button", {
+      name: "Read file docs/发布说明.md · Completed",
+    });
+    testing.fireEvent.click(action);
+    expect(await testing.screen.findByText("Exited with code 1")).toBeTruthy();
+    expect(testing.screen.getByText("Command output")).toBeTruthy();
+  });
+
+  it("batches fast activity reads during continuous notifications and cleans its timers", async () => {
+    mount();
+    await testing.screen.findByText(/发布说明已完成/);
+    vi.useFakeTimers();
+    const before = vi.mocked(backend.agentHistoryRead).mock.calls.length;
+    for (let index = 1; index <= 20; index += 1) {
+      await event({
+        type: "tool.updated",
+        agent_id: 2,
+        sequence: 4,
+        ordinal: 1,
+      });
+      await testing.act(async () => vi.advanceTimersByTimeAsync(50));
+      expect(backend.agentHistoryRead).toHaveBeenCalledTimes(
+        before + Math.floor((index * 50) / 150),
+      );
+    }
+    await event({ type: "turn.finished", agent_id: 2, sequence: 4 });
+    expect(backend.agentHistoryRead).toHaveBeenCalledTimes(before + 7);
+    await event({ type: "tool.updated", agent_id: 2, sequence: 4 });
+    testing.cleanup();
+    await testing.act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(backend.agentHistoryRead).toHaveBeenCalledTimes(before + 7);
+    expect(listeners.size).toBe(0);
+  });
+
+  it("publishes throughout ten seconds of notifications with one delayed activity read", async () => {
+    mount();
+    await testing.screen.findByText(/发布说明已完成/);
+    vi.useFakeTimers();
+    let received = 0;
+    let completed = 0;
+    let inFlight = 0;
+    let maximum = 0;
+    const before = vi.mocked(backend.agentHistoryRead).mock.calls.length;
+    vi.mocked(backend.agentHistoryRead).mockImplementation(async () => {
+      const value = received;
+      inFlight += 1;
+      maximum = Math.max(maximum, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      inFlight -= 1;
+      completed = value;
+      return read(4, [{ part_kind: "text", content: `Received ${value}` }]);
+    });
+    for (let index = 1; index <= 200; index += 1) {
+      received = index;
+      await event({ type: "tool.updated", agent_id: 2, sequence: 4 });
+      await testing.act(async () => vi.advanceTimersByTimeAsync(50));
+      if (index % 20 === 0) {
+        expect(completed).toBeGreaterThanOrEqual(index - 12);
+        expect(testing.screen.getByText(`Received ${completed}`)).toBeTruthy();
+      }
+    }
+    await event({ type: "turn.finished", agent_id: 2, sequence: 4 });
+    await testing.act(async () => vi.advanceTimersByTimeAsync(650));
+    expect(testing.screen.getByText("Received 200")).toBeTruthy();
+    expect(maximum).toBe(1);
+    expect(inFlight).toBe(0);
+    expect(
+      vi.mocked(backend.agentHistoryRead).mock.calls.length - before,
+    ).toBeLessThanOrEqual(35);
+    testing.cleanup();
+    expect(listeners.size).toBe(0);
+  });
+
+  it("binds text continuations to the current temporary version and switches to saved content", async () => {
+    let version = "v1";
+    let saved = false;
+    const reference = (): HistoryText => ({
+      kind: "text",
+      source: saved ? "response" : "live",
+      request_ordinal: 1,
+      message_index: 0,
+      path: ["parts", 0, "content"],
+      offset: 0,
+      next_offset: 2,
+      total_bytes: 4,
+      value: version,
+      has_more: true,
+      ...(saved
+        ? {}
+        : {
+            runtime_epoch: "live-epoch",
+            part_index: 0,
+            content_source: "response" as const,
+            content_version: version,
+          }),
+    });
+    vi.mocked(backend.agentHistoryRead).mockImplementation(async () => {
+      const value = read(4, [
+        { part_kind: "text", content: reference() as unknown as HistoryValue },
+      ]);
+      value.run.status = "running";
+      if (!value.request?.response) throw new Error("Response is missing");
+      value.request.response_saved = saved;
+      value.request.response.saved = saved;
+      return value;
+    });
+    const pending =
+      deferred<Awaited<ReturnType<typeof backend.agentHistoryText>>>();
+    const text = vi
+      .spyOn(backend, "agentHistoryText")
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        offset: 2,
+        next_offset: 4,
+        total_bytes: 4,
+        value: "OK",
+        has_more: false,
+      });
+    mount();
+    const original = await testing.screen.findByText("v1");
+    const article = original.closest("article");
+    expect(testing.screen.getByText("Not saved")).toBeTruthy();
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Load more text" }),
+    );
+    await testing.waitFor(() => expect(text).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    version = "v2";
+    await event({ type: "usage.updated", agent_id: 2, sequence: 4 });
+    await testing.act(async () => vi.advanceTimersByTimeAsync(150));
+    expect(testing.screen.getByText("v2").closest("article")).toBe(article);
+    await testing.act(async () =>
+      pending.resolve({
+        offset: 2,
+        next_offset: 4,
+        total_bytes: 4,
+        value: "OLD",
+        has_more: false,
+      }),
+    );
+    expect(testing.screen.queryByText("v1OLD")).toBeNull();
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Load more text" }),
+    );
+    await testing.act(async () => {});
+    expect(testing.screen.getByText("v2OK")).toBeTruthy();
+    expect(text.mock.calls[0][2].content_version).toBe("v1");
+    expect(text.mock.calls[1][2].content_version).toBe("v2");
+    saved = true;
+    await event({ type: "turn.finished", agent_id: 2, sequence: 4 });
+    expect(testing.screen.queryByText("Not saved")).toBeNull();
+    expect(testing.screen.getByText("v2").closest("article")).toBe(article);
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Load more text" }),
+    );
+    await testing.act(async () => {});
+    expect(text.mock.calls[2][2].source).toBe("response");
+    expect(text.mock.calls[2][2].content_version).toBeUndefined();
+    expect(testing.screen.getByText("v2OK")).toBeTruthy();
+  });
+
+  it("replaces temporary image versions and ignores an earlier image response", async () => {
+    let version = "v1";
+    vi.mocked(backend.agentHistoryRead).mockImplementation(async () =>
+      command({
+        kind: "binary",
+        source: "live",
+        runtime_epoch: "live-epoch",
+        content_source: "tool",
+        content_version: version,
+        part_index: 0,
+        request_ordinal: 1,
+        message_index: 0,
+        path: ["parts", 0, "content"],
+        media_type: "image/png",
+        size: 3,
+        identifier: null,
+      }),
+    );
+    const pending =
+      deferred<Awaited<ReturnType<typeof backend.agentHistoryImage>>>();
+    const image = vi
+      .spyOn(backend, "agentHistoryImage")
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        media_type: "image/png",
+        data: "bmV3",
+        size: 3,
+        identifier: null,
+      });
+    mount();
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", { name: /Read file docs/ }),
+    );
+    await testing.waitFor(() => expect(image).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    version = "v2";
+    await event({ type: "tool.updated", agent_id: 2, sequence: 4 });
+    await testing.act(async () => vi.advanceTimersByTimeAsync(150));
+    expect(testing.screen.getByRole("img").getAttribute("src")).toBe(
+      "data:image/png;base64,bmV3",
+    );
+    await testing.act(async () =>
+      pending.resolve({
+        media_type: "image/png",
+        data: "b2xk",
+        size: 3,
+        identifier: null,
+      }),
+    );
+    expect(testing.screen.getByRole("img").getAttribute("src")).toBe(
+      "data:image/png;base64,bmV3",
+    );
+    expect(image.mock.calls[0][2].content_version).toBe("v1");
+    expect(image.mock.calls[1][2].content_version).toBe("v2");
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: /Read file docs/ }),
+    );
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: /Read file docs/ }),
+    );
+    await testing.act(async () => {});
+    expect(image).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears temporary response content on disconnect and reads a new Core epoch", async () => {
+    let epoch = "first";
+    let content = "Temporary first response";
+    const saved = false;
+    vi.mocked(backend.agentHistoryRead).mockImplementation(async () => {
+      const value = read(4, [{ part_kind: "text", content }]);
+      value.run.status = "running";
+      if (!value.request?.response) throw new Error("Response is missing");
+      value.request.response_saved = saved;
+      value.request.response.saved = saved;
+      value.request.observation = {
+        runtime_epoch: epoch,
+        live_revision: 1,
+        request_id: "request",
+      };
+      return value;
+    });
+    mount();
+    await testing.screen.findByText(content);
+    await event({ type: "connection.closed" });
+    expect(testing.screen.queryByText(content)).toBeNull();
+    epoch = "second";
+    content = "Temporary second response";
+    await event({ type: "connection.restored" });
+    expect(await testing.screen.findByText(content)).toBeTruthy();
+    expect(testing.screen.queryByText("Temporary first response")).toBeNull();
+    expect(testing.screen.getByText("Not saved")).toBeTruthy();
+  });
+
   it("keeps window and conversation reads distinct from confirmed empty history", async () => {
     const windows = deferred<AgentHistoryWindows>();
     const history = deferred<AgentHistoryPage>();
@@ -681,7 +1212,7 @@ describe("Member conversation", () => {
     );
     mount();
     const action = await testing.screen.findByRole("button", {
-      name: /Failed/,
+      name: /Result saved/,
     });
     testing.fireEvent.click(action);
     const body = await testing.screen.findByText(output, {
@@ -901,7 +1432,7 @@ describe("Member conversation", () => {
       expect(await testing.screen.findByText("无法读取文件")).toBeTruthy();
       expect(
         await testing.screen.findByRole("button", {
-          name: "Run python · Failed",
+          name: "Run python · Result saved",
         }),
       ).toBeTruthy();
       expect(JSON.stringify(value)).toContain(
@@ -1108,7 +1639,7 @@ describe("Member conversation", () => {
     },
   );
 
-  it("reports the saved command failure after reading its structured output", async () => {
+  it("renders saved command output after reading structured data", async () => {
     vi.mocked(backend.agentHistoryRead).mockResolvedValue(
       command(
         JSON.stringify({ exit_code: 1, stdout: "", stderr: "文件尚未保存" }),
@@ -1120,7 +1651,7 @@ describe("Member conversation", () => {
     );
     expect(
       await testing.screen.findByRole("button", {
-        name: "Read file docs/发布说明.md · Failed",
+        name: "Read file docs/发布说明.md · Result saved",
       }),
     ).toBeTruthy();
     expect(await testing.screen.findByText("文件尚未保存")).toBeTruthy();
@@ -1147,7 +1678,8 @@ describe("Member conversation", () => {
           ]),
       );
       const mounted = mount();
-      await testing.screen.findByText("记录正文 45");
+      await testing.act(async () => {});
+      expect(testing.screen.getByText("记录正文 45")).toBeTruthy();
       const opener = testing.screen.getByText("Load earlier history", {
         selector: "button",
       });
@@ -1170,13 +1702,14 @@ describe("Member conversation", () => {
           })),
         ),
       );
-      await testing.screen.findByText("记录正文 80");
+      await testing.act(async () => {});
+      expect(testing.screen.getByText("记录正文 80")).toBeTruthy();
       await testing.act(async () =>
         pending.resolve(page(1, sequences(15, 15))),
       );
-      await testing.screen.findByText("记录正文 1");
+      expect(testing.screen.getByText("记录正文 1")).toBeTruthy();
       await testing.act(async () => testing.fireEvent.click(earlier()));
-      await testing.screen.findByText("记录正文 50");
+      expect(testing.screen.getByText("记录正文 50")).toBeTruthy();
       expect(testing.screen.getByText("记录正文 45")).toBeTruthy();
       expect(testing.screen.getByText("记录正文 1")).toBeTruthy();
       expect(controls.isConnected).toBe(false);

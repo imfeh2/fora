@@ -9,7 +9,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOrganization, useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import {
@@ -100,6 +100,7 @@ export function DiscussionsPage({
 } = {}) {
   const {
     members,
+    humanId,
     discussions,
     organizationError,
     discussionsError,
@@ -110,8 +111,8 @@ export function DiscussionsPage({
   const readArchived = useCallback(() => backend.discussions(true), []);
   const {
     resource: archiveResource,
-    refresh: load,
-    invalidate,
+    refresh: refreshArchived,
+    invalidate: invalidateArchived,
   } = useResource(readArchived);
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState<{
@@ -125,36 +126,72 @@ export function DiscussionsPage({
   const [archiveBusy, setArchiveBusy] = useState<number | null>(null);
   const [connectionRevision, setConnectionRevision] = useState(0);
 
-  useEffect(() => {
-    invalidate(archived && !backend.disconnected);
-    if (archived) void load();
-    return () => invalidate(false);
-  }, [archived, load, invalidate]);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<Promise<void> | null>(null);
+  const clearTimer = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+  const load = useCallback(
+    (changed = false) => {
+      clearTimer();
+      const operation = refreshArchived(changed);
+      pending.current = operation;
+      void operation.finally(() => {
+        if (pending.current === operation) pending.current = null;
+      });
+      return operation;
+    },
+    [clearTimer, refreshArchived],
+  );
 
   useEffect(() => {
-    return backend.onEvent((event) => {
-      if (event.type === "connection.closed")
-        invalidate(
+    let enabled = archived && !backend.disconnected;
+    invalidateArchived(enabled);
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.closed") {
+        enabled = false;
+        clearTimer();
+        pending.current = null;
+        invalidateArchived(
           false,
           event.error instanceof BackendError ? event.error : undefined,
         );
+        return;
+      }
       if (event.type === "connection.restored") {
         setConnectionRevision((value) => value + 1);
-        invalidate(archived);
-        if (archived) void load();
+        enabled = archived;
+        invalidateArchived(enabled);
+        if (enabled) void load();
+        return;
       }
       if (
-        archived &&
+        enabled &&
         (event.type === "message.created" ||
+          event.type === "discussion.read_updated" ||
           event.type === "mention.acked" ||
           event.type === "mention.revoked" ||
           event.type === "discussion.created" ||
           event.type === "discussion.updated")
       ) {
-        void load(true);
+        if (pending.current) void load(true);
+        else if (timer.current === null)
+          timer.current = setTimeout(() => {
+            timer.current = null;
+            void load(true);
+          }, 150);
       }
     });
-  }, [archived, load, invalidate]);
+    if (enabled) void load();
+    return () => {
+      enabled = false;
+      clearTimer();
+      pending.current = null;
+      off();
+      invalidateArchived(false);
+    };
+  }, [archived, clearTimer, load, invalidateArchived]);
 
   useEffect(() => {
     const text = query.trim();
@@ -223,7 +260,9 @@ export function DiscussionsPage({
         actions={
           <Button
             variant="primary"
-            disabled={members === null || backend.disconnected}
+            disabled={
+              members === null || humanId === null || backend.disconnected
+            }
             onClick={() => setCreating(true)}
           >
             <Plus size={16} />
@@ -253,7 +292,7 @@ export function DiscussionsPage({
         !(archiveResource.error.transport && backend.disconnected) ? (
           <LoadError error={archiveResource.error} retry={() => void load()} />
         ) : null}
-        {!archived && discussionsError ? (
+        {!archived && discussionsError && !connectionError ? (
           <LoadError
             error={discussionsError}
             retry={() => void retry("discussions")}
@@ -386,7 +425,7 @@ export function DiscussionsPage({
             title="No Discussions yet"
             description="Create a Discussion to bring Members together."
             action={
-              members !== null && !backend.disconnected
+              members !== null && humanId !== null && !backend.disconnected
                 ? {
                     label: "New Discussion",
                     icon: <Plus size={16} />,
@@ -452,13 +491,13 @@ export function DiscussionCard({
   archiveBusy = false,
 }: {
   item: DiscussionSummary;
-  byId: Map<number, Member>;
+  byId: Map<number, Member> | null;
   onOpen: () => void;
   onArchive: () => void;
   archiveBusy?: boolean;
 }) {
   const people = item.member_ids
-    .map((id) => byId.get(id))
+    .map((id) => byId?.get(id))
     .filter((member): member is Member => member !== undefined);
   const shown = people.slice(0, 3);
   const rest = people.length - shown.length;
@@ -503,6 +542,7 @@ export function DiscussionCard({
       </div>
       <div className="flex items-center justify-between gap-2 text-xs">
         <div className="flex flex-wrap gap-1">
+          {byId === null ? <Skeleton className="h-5 w-28" /> : null}
           {shown.map((member) => (
             <Chip
               key={member.id}
@@ -540,14 +580,14 @@ export function DiscussionRow({
   membersPending = false,
 }: {
   item: DiscussionSummary;
-  byId: Map<number, Member>;
+  byId: Map<number, Member> | null;
   onOpen: () => void;
   onArchive: () => void;
   archiveBusy?: boolean;
   membersPending?: boolean;
 }) {
   const people = item.member_ids
-    .map((id) => byId.get(id))
+    .map((id) => byId?.get(id))
     .filter((member): member is Member => member !== undefined);
   const shown = people.slice(0, 3);
   const rest = people.length - shown.length;

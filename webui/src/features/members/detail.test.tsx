@@ -18,6 +18,7 @@ import { TreeView } from "@/features/library/tree-view";
 import {
   AgentDetailStatus,
   HistorySection,
+  LiveTools,
   MemberPage,
   TurnHistoryModal,
   WorkspaceContent,
@@ -32,8 +33,10 @@ import {
   backend,
   type HistoryBinary,
   type HistoryImage,
+  type HistoryMessages,
   type HistoryText,
   type LibraryEntry,
+  type LivePage,
 } from "@/lib/backend";
 import { formatTime } from "@/lib/format";
 
@@ -224,6 +227,7 @@ describe("Agent history request fields", () => {
   let render: typeof import("@testing-library/react").render;
   let screen: typeof import("@testing-library/react").screen;
   let within: typeof import("@testing-library/react").within;
+  let waitFor: typeof import("@testing-library/react").waitFor;
   let closeDom: (() => void) | undefined;
 
   beforeAll(async () => {
@@ -258,9 +262,13 @@ describe("Agent history request fields", () => {
     render = testing.render;
     screen = testing.screen;
     within = testing.within;
+    waitFor = testing.waitFor;
   }, 30000);
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
 
   it("delegates reading history to the real window directory and conversation entry", async () => {
     vi.spyOn(backend, "disconnected", "get").mockReturnValue(false);
@@ -411,6 +419,420 @@ describe("Agent history request fields", () => {
     await act(async () => {});
   }
 
+  function livePage(revision: number, finished = false): LivePage {
+    return {
+      runtime_epoch: "epoch",
+      turn: {
+        agent_id: 2,
+        sequence: 4,
+        run_id: "run-4",
+        live_revision: revision,
+        status: "running",
+        error: null,
+        requests: [
+          {
+            ordinal: 1,
+            request_id: "request-1",
+            started_at: "2026-01-01T00:00:00Z",
+            tools_has_more: false,
+            tools_next_after: null,
+            tools: [
+              {
+                part_index: 0,
+                tool_call_id: "short",
+                tool_name: "short",
+                status: finished ? "completed" : "running",
+                started_at: null,
+                completed_at: null,
+                saved: false,
+                has_result: finished,
+                content_version: "tool-v1",
+              },
+              {
+                part_index: 1,
+                tool_call_id: "long",
+                tool_name: "long",
+                status: "running",
+                started_at: null,
+                completed_at: null,
+                saved: false,
+                has_result: false,
+              },
+            ],
+          },
+        ],
+        has_more: false,
+        next_after: null,
+      },
+    };
+  }
+
+  it("shows the completed short tool result while the long tool continues", async () => {
+    const updates = events();
+    vi.spyOn(backend, "agentLive")
+      .mockResolvedValueOnce(livePage(1))
+      .mockResolvedValue(livePage(2, true));
+    vi.spyOn(backend, "agentLiveRead").mockResolvedValue({
+      messages: [{ content: "short result" }],
+      offset: 0,
+      total: 1,
+      has_more: false,
+    });
+    const view = render(<LiveTools agentId={2} sequence={4} ordinal={1} />);
+    await waitFor(() => expect(view.container.textContent).toContain("short"));
+    updates.emit({
+      type: "tool.updated",
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: 0,
+    });
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("short result"),
+    );
+    expect(view.container.textContent).toContain("completed");
+    expect(view.container.textContent).toContain("longrunning");
+    expect(backend.agentLiveRead).toHaveBeenCalledWith(
+      2,
+      4,
+      1,
+      0,
+      "epoch",
+      "tool",
+      "tool-v1",
+    );
+  });
+
+  it("marks the failed response as Not saved and releases it after confirmed persistence", async () => {
+    const updates = events();
+    const page = livePage(1);
+    const failedTurn = page.turn;
+    if (!failedTurn) throw new Error("Expected a live Turn");
+    failedTurn.status = "unsaved";
+    failedTurn.requests[0] = {
+      ...failedTurn.requests[0],
+      tools: [],
+      has_response: true,
+      response_saved: false,
+      response_version: "response-v1",
+    };
+    vi.spyOn(backend, "agentLive")
+      .mockResolvedValueOnce(page)
+      .mockResolvedValue({ runtime_epoch: "epoch", turn: null });
+    let finish!: (value: HistoryMessages) => void;
+    vi.spyOn(backend, "agentLiveRead").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(<LiveTools agentId={2} sequence={4} ordinal={1} />);
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("Not saved"),
+    );
+    expect(backend.agentLiveRead).toHaveBeenCalledWith(
+      2,
+      4,
+      1,
+      0,
+      "epoch",
+      "response",
+      "response-v1",
+    );
+    updates.emit({ type: "turn.finished", agent_id: 2, sequence: 4 });
+    await waitFor(() => expect(view.container.textContent).toBe(""));
+    finish({
+      messages: [{ content: "unsaved response" }],
+      offset: 0,
+      total: 1,
+      has_more: false,
+    });
+    await Promise.resolve();
+    expect(view.container.textContent).toBe("");
+  });
+
+  it("publishes only content at the confirmed saved revision", async () => {
+    const updates = events();
+    let finish!: (value: LivePage) => void;
+    const saved = livePage(3, true);
+    const savedTurn = saved.turn;
+    if (!savedTurn) throw new Error("Expected a live Turn");
+    savedTurn.requests[0].tools[0] = {
+      ...savedTurn.requests[0].tools[0],
+      saved: true,
+      has_result: false,
+    };
+    vi.spyOn(backend, "agentLive")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue(saved);
+    const read = vi.spyOn(backend, "agentLiveRead");
+    const view = render(<LiveTools agentId={2} sequence={4} ordinal={1} />);
+    await waitFor(() => expect(backend.agentLive).toHaveBeenCalledTimes(1));
+    updates.emit({
+      type: "tool.updated",
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      runtime_epoch: "epoch",
+      live_revision: 3,
+      saved: true,
+    });
+    finish(livePage(1, true));
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("completed"),
+    );
+    expect(backend.agentLive).toHaveBeenCalledTimes(2);
+    expect(read).not.toHaveBeenCalled();
+    expect(view.container.querySelectorAll(".text-danger")).toHaveLength(1);
+  });
+
+  it("combines tool notifications and publishes the pending snapshot before the next read", async () => {
+    const updates = events();
+    let finish!: (value: LivePage) => void;
+    let finishNext!: (value: LivePage) => void;
+    vi.spyOn(backend, "agentLive")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishNext = resolve;
+          }),
+      );
+    vi.spyOn(backend, "agentLiveRead").mockResolvedValue({
+      messages: [{ content: "short result" }],
+      offset: 0,
+      total: 1,
+      has_more: false,
+    });
+    const view = render(<LiveTools agentId={2} sequence={4} ordinal={1} />);
+    await waitFor(() => expect(backend.agentLive).toHaveBeenCalledTimes(1));
+    updates.emit({ type: "tool.updated", agent_id: 3, sequence: 4 });
+    for (let index = 0; index < 100; index += 1)
+      updates.emit({
+        type: "tool.updated",
+        agent_id: 2,
+        sequence: 4,
+        ordinal: 1,
+      });
+    expect(backend.agentLive).toHaveBeenCalledTimes(1);
+    finish(livePage(1));
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("longrunning"),
+    );
+    expect(backend.agentLive).toHaveBeenCalledTimes(2);
+    finishNext(livePage(2, true));
+    await waitFor(() =>
+      expect(view.container.textContent).toContain("short result"),
+    );
+    expect(backend.agentLive).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears temporary tool content when a different runtime epoch is read", async () => {
+    const updates = events();
+    vi.spyOn(backend, "agentLive")
+      .mockResolvedValueOnce(livePage(1, true))
+      .mockResolvedValue({ runtime_epoch: "new-epoch", turn: null });
+    let finish!: (value: {
+      messages: { content: string }[];
+      offset: number;
+      total: number;
+      has_more: boolean;
+    }) => void;
+    vi.spyOn(backend, "agentLiveRead").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const view = render(<LiveTools agentId={2} sequence={4} ordinal={1} />);
+    await waitFor(() => expect(backend.agentLiveRead).toHaveBeenCalledTimes(1));
+    updates.emit({ type: "connection.closed" });
+    updates.emit({ type: "connection.restored" });
+    await waitFor(() => expect(view.container.textContent).toBe(""));
+    finish({
+      messages: [{ content: "old result" }],
+      offset: 0,
+      total: 1,
+      has_more: false,
+    });
+    await Promise.resolve();
+    expect(view.container.textContent).toBe("");
+  });
+
+  it("batches quick Agent reads without extending the first event deadline", async () => {
+    const stream = events();
+    const read = vi.spyOn(backend, "agentDetail").mockResolvedValue(tokens(1));
+    const view = render(page(2));
+    await act(async () => {});
+    await openContext();
+    vi.useFakeTimers();
+    for (let index = 1; index <= 20; index += 1) {
+      read.mockResolvedValue(tokens(index));
+      await act(async () => {
+        stream.emit({ type: "usage.updated", agent_id: 2 });
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(read).toHaveBeenCalledTimes(1 + Math.floor((index * 50) / 150));
+      if (index % 3 === 0) expect(screen.getByText(String(index))).toBeTruthy();
+    }
+    await act(async () => stream.emit({ type: "turn.finished", agent_id: 2 }));
+    expect(read).toHaveBeenCalledTimes(8);
+    expect(screen.getByText("20")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(read).toHaveBeenCalledTimes(8);
+    await act(async () => stream.emit({ type: "usage.updated", agent_id: 2 }));
+    view.unmount();
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(read).toHaveBeenCalledTimes(8);
+    expect(stream.listeners.size).toBe(0);
+  });
+
+  it("clears scheduled Agent reads on disconnect and identity change", async () => {
+    const stream = events();
+    const read = vi.spyOn(backend, "agentDetail").mockResolvedValue(tokens(1));
+    const view = render(page(2));
+    await act(async () => {});
+    vi.useFakeTimers();
+    await act(async () => {
+      stream.emit({ type: "usage.updated", agent_id: 2 });
+      stream.emit({ type: "connection.closed" });
+      stream.emit({ type: "usage.updated", agent_id: 2 });
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    await act(async () => stream.emit({ type: "connection.restored" }));
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => stream.emit({ type: "usage.updated", agent_id: 2 }));
+    await act(async () => view.rerender(page(3)));
+    expect(read.mock.calls.map(([id]) => id)).toEqual([2, 2, 3]);
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(read.mock.calls.map(([id]) => id)).toEqual([2, 2, 3]);
+  });
+
+  it("batches the open Workspace file and reads Turn completion immediately", async () => {
+    const stream = events();
+    const read = vi.spyOn(backend, "workspaceRead").mockResolvedValue({
+      path: "notes/MEMORY.md",
+      content: "version 0",
+      hash: "hash-0",
+    });
+    const view = render(
+      <TooltipProvider>
+        <WorkspaceSection agentId={2} entries={entries} />
+      </TooltipProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /notes/ }));
+    fireEvent.click(screen.getByRole("button", { name: "MEMORY.md" }));
+    await act(async () => {});
+    expect(read).toHaveBeenCalledExactlyOnceWith(2, "notes/MEMORY.md");
+    vi.useFakeTimers();
+    for (let index = 1; index <= 20; index += 1) {
+      read.mockResolvedValue({
+        path: "notes/MEMORY.md",
+        content: `version ${index}`,
+        hash: `hash-${index}`,
+      });
+      await act(async () => {
+        stream.emit({ type: "workspace.changed", agent_id: 3 });
+        stream.emit({
+          type: "workspace.changed",
+          agent_id: 2,
+          path: "other.md",
+        });
+        stream.emit({ type: "workspace.changed", agent_id: 2 });
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(read).toHaveBeenCalledTimes(1 + Math.floor((index * 50) / 150));
+      if (index % 3 === 0)
+        expect(screen.getByText(`version ${index}`)).toBeTruthy();
+    }
+    await act(async () => stream.emit({ type: "turn.finished", agent_id: 2 }));
+    expect(read).toHaveBeenCalledTimes(8);
+    expect(screen.getByText("version 20")).toBeTruthy();
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(read).toHaveBeenCalledTimes(8);
+    await act(async () =>
+      stream.emit({ type: "workspace.changed", agent_id: 2 }),
+    );
+    view.unmount();
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+    expect(read).toHaveBeenCalledTimes(8);
+    expect(stream.listeners.size).toBe(0);
+  });
+
+  it("combines Workspace events during a read and clears its disconnect batch", async () => {
+    const stream = events();
+    let finish!: (
+      value: Awaited<ReturnType<typeof backend.workspaceRead>>,
+    ) => void;
+    let finishNext!: (
+      value: Awaited<ReturnType<typeof backend.workspaceRead>>,
+    ) => void;
+    const read = vi
+      .spyOn(backend, "workspaceRead")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishNext = resolve;
+          }),
+      )
+      .mockResolvedValue({
+        path: "notes/MEMORY.md",
+        content: "restored",
+        hash: "restored",
+      });
+    render(
+      <TooltipProvider>
+        <WorkspaceSection agentId={2} entries={entries} />
+      </TooltipProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /notes/ }));
+    fireEvent.click(screen.getByRole("button", { name: "MEMORY.md" }));
+    await act(async () => {});
+    await act(async () => {
+      for (let index = 0; index < 20; index += 1)
+        stream.emit({ type: "workspace.changed", agent_id: 2 });
+      finish({ path: "notes/MEMORY.md", content: "first", hash: "first" });
+    });
+    expect(screen.getByText("first")).toBeTruthy();
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () =>
+      finishNext({
+        path: "notes/MEMORY.md",
+        content: "second",
+        hash: "second",
+      }),
+    );
+    expect(screen.getByText("second")).toBeTruthy();
+    vi.useFakeTimers();
+    await act(async () => {
+      stream.emit({ type: "workspace.changed", agent_id: 2 });
+      stream.emit({ type: "connection.closed" });
+      stream.emit({ type: "workspace.changed", agent_id: 2 });
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    await act(async () => stream.emit({ type: "connection.restored" }));
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(screen.getByText("restored")).toBeTruthy();
+  });
+
   it("filters unrelated events and merges bursts while publishing every completed read", async () => {
     const stream = events();
     const first = pendingDetail();
@@ -493,6 +915,7 @@ describe("Agent history request fields", () => {
       await act(async () =>
         stream.emit({ type: "turn.progress", agent_id: 2 }),
       );
+      await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
       view.rerender(page(3));
       await act(async () => {});
       expect(screen.queryByText("101")).toBeNull();
@@ -545,6 +968,7 @@ describe("Agent history request fields", () => {
     await act(async () => {});
     await openContext();
     await act(async () => stream.emit({ type: "turn.failed", agent_id: 2 }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(screen.getByText("101")).toBeTruthy();
     expect(screen.getAllByRole("alert")[0].textContent).toContain(
       "read failed",
@@ -1039,7 +1463,7 @@ describe("Agent history request fields", () => {
     );
   });
 
-  it("keeps a live request when the initial history read finishes later", async () => {
+  it("combines Turn progress while the initial history read is running", async () => {
     const emptyMessages = {
       messages: [],
       offset: 0,
@@ -1164,15 +1588,15 @@ describe("Agent history request fields", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /#4/ }));
     fireEvent.click(screen.getByRole("button", { name: "View full context" }));
+    await waitFor(() => expect(reads).toBe(1));
     listener?.({ type: "turn.progress", agent_id: 2, sequence: 4 });
-    expect(await screen.findByRole("tab", { name: /Request 1/ })).toBeTruthy();
-
+    expect(reads).toBe(1);
     resolveInitial(initialRead);
-    await Promise.resolve();
-    expect(screen.getByRole("tab", { name: /Request 1/ })).toBeTruthy();
+    expect(await screen.findByRole("tab", { name: /Request 1/ })).toBeTruthy();
+    expect(reads).toBe(2);
   });
 
-  it("keeps a live request when a stale initial history failure finishes later", async () => {
+  it("keeps the restored request when the previous connection read fails later", async () => {
     const emptyMessages = {
       messages: [],
       offset: 0,
@@ -1285,7 +1709,9 @@ describe("Agent history request fields", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /#4/ }));
     fireEvent.click(screen.getByRole("button", { name: "View full context" }));
-    listener?.({ type: "turn.progress", agent_id: 2, sequence: 4 });
+    await waitFor(() => expect(reads).toBe(1));
+    listener?.({ type: "connection.closed" });
+    listener?.({ type: "connection.restored" });
     expect(await screen.findByRole("tab", { name: /Request 1/ })).toBeTruthy();
 
     rejectInitial(new Error("stale initial failure"));

@@ -20,6 +20,7 @@ from fora.ports.agent import HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
 from fora.ports.files import ConflictError, FileTree
 from fora.ports.store import OrganizationStore
+from fora.ports.usage import UsageCache, UsageObservation
 from fora.services.history import History
 from fora.services.library import Library
 from fora.services.uploads import Uploads
@@ -100,17 +101,33 @@ class AgentTools:
                 "not_a_member", f"You do not belong to Discussion {discussion_id}"
             )
 
-    def usage_query(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _authorize_usage(self) -> None:
         if self._actor.is_agent:
             raise DomainError("not_permitted", "Agent history is restricted to Humans")
         for member in self._deps.store.list_members(include_deleted=True):
             if member.is_agent:
                 self.authorize_agent_history(member.id, include_deleted=True)
+
+    def usage_query(
+        self,
+        params: dict[str, Any],
+        observation: UsageObservation | None = None,
+        cache: UsageCache | None = None,
+    ) -> dict[str, Any]:
+        self._authorize_usage()
+        if observation is not None:
+            return self._deps.history.usage_observe(params, observation, cache)
         return self._deps.history.usage_query(params)
 
-    def usage_read(self, record_id: str) -> dict[str, Any]:
-        with self._deps.history.transaction():
-            record = self._deps.history.usage_read(record_id)
+    def usage_advance(self, limit: int = 100) -> dict[str, Any]:
+        self._authorize_usage()
+        return self._deps.history.usage_advance(limit)
+
+    def usage_read(
+        self, record_id: str, observation: UsageObservation | None = None
+    ) -> dict[str, Any]:
+        with self._deps.reading():
+            record = self._deps.history.usage_read(record_id, observation)
             self.authorize_agent_history(record["agent_id"], include_deleted=True)
             return record
 
@@ -780,10 +797,13 @@ class AgentTools:
         base = str(self._deps.agent_directory_for(self._actor.member_id))
         cwd = base if cwd is None else execution.resolve_path(cwd, base=base)
         directories = self._write_directories(execution)
-        with self._library_updates():
-            result = execution.run(
-                list(argv), cwd=cwd, timeout=timeout, write_directories=directories
-            )
+        try:
+            with self._library_updates():
+                result = execution.run(
+                    list(argv), cwd=cwd, timeout=timeout, write_directories=directories
+                )
+        finally:
+            self._changed("workspace.changed", {"agent_id": self._actor.member_id})
         self._record("run", f"{' '.join(argv)} exited {result.exit_code}")
         return {
             "exit_code": result.exit_code,
@@ -810,6 +830,18 @@ class AgentTools:
                 edits,
                 write_directories=directories,
                 create=create,
+            )
+        target = Path(result.path).resolve()
+        workspace_root = self._deps.workspace_tree_for(
+            self._actor.member_id
+        ).root.resolve()
+        if target.is_relative_to(workspace_root):
+            self._changed(
+                "workspace.changed",
+                {
+                    "agent_id": self._actor.member_id,
+                    "path": target.relative_to(workspace_root).as_posix(),
+                },
             )
         summary = (
             f"{result.path} (created)"

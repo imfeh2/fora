@@ -2,7 +2,15 @@ import { Bot, User, Users } from "lucide-react";
 import { useId, useState } from "react";
 import { useOrganization } from "@/app/organization";
 import { Modal } from "@/components/ui/dialog";
-import { Avatar, Button, Chip, Input, toast } from "@/components/ui/index";
+import {
+  Avatar,
+  Button,
+  Chip,
+  Input,
+  LoadingSkeleton,
+  Skeleton,
+  toast,
+} from "@/components/ui/index";
 import { StatePanel } from "@/components/ui/state-panel";
 import { backend, type Member } from "@/lib/backend";
 
@@ -90,7 +98,7 @@ export function DiscussionMembersDialog({
   if (members === null) return null;
 
   const save = async () => {
-    if (!changed || busy) return;
+    if (!changed || busy || members === null || backend.disconnected) return;
     setBusy(true);
     try {
       const updated = await backend.setDiscussionMembers(
@@ -124,18 +132,30 @@ export function DiscussionMembersDialog({
           <Button disabled={busy} onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!changed || busy} onClick={save}>
+          <Button
+            variant="primary"
+            disabled={
+              !changed || busy || members === null || backend.disconnected
+            }
+            onClick={save}
+          >
             Save
           </Button>
         </>
       }
     >
-      <MemberPicker
-        members={members}
-        selected={selected}
-        onChange={setSelected}
-        disabled={busy}
-      />
+      {members !== null ? (
+        <MemberPicker
+          members={members}
+          selected={selected}
+          onChange={setSelected}
+          disabled={busy || backend.disconnected}
+        />
+      ) : (
+        <LoadingSkeleton label="Loading Members">
+          <Skeleton className="h-20 w-full rounded-sm" />
+        </LoadingSkeleton>
+      )}
     </Modal>
   );
 }

@@ -416,7 +416,7 @@ describe("Usage dashboard", () => {
     expect(testing.within(groups).getByText("Estimated cost")).toBeTruthy();
     expect(
       testing.screen.getByText(
-        "Totals include saved requests and earlier saved usage; requests still in progress are not counted.",
+        "Totals include usage already received for requests still running and earlier saved usage; a running request can add more before it finishes.",
       ),
     ).toBeTruthy();
     await click("Saved model");
@@ -433,6 +433,29 @@ describe("Usage dashboard", () => {
     expect(testing.within(modal).getByText("0.350215250")).toBeTruthy();
     expect(testing.within(modal).getByText("cost_source")).toBeTruthy();
     expect(testing.within(modal).getByText("genai-prices")).toBeTruthy();
+  });
+
+  it("keeps the running usage explanation while newly received usage replaces totals", async () => {
+    vi.useFakeTimers();
+    let total = "12";
+    queryMock.mockImplementation(async (params: UsageQuery) => ({
+      ...result(params),
+      summary: { ...metrics, total_tokens: total },
+    }));
+    await mount();
+    const explanation = testing.screen.getByText(
+      "Totals include usage already received for requests still running and earlier saved usage; a running request can add more before it finishes.",
+    );
+    expect(summaryText()).toContain("Total tokens12");
+    total = "44";
+    await emit("usage.updated");
+    await testing.act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(summaryText()).toContain("Total tokens44");
+    expect(testing.screen.getByText(explanation.textContent ?? "")).toBe(
+      explanation,
+    );
   });
 
   it("shows four totals, a real responsive chart and one group table with exact saved numbers", async () => {
@@ -467,6 +490,81 @@ describe("Usage dashboard", () => {
       testing.screen.getByRole("button", { name: "Researcher" }),
     ).toBeTruthy();
     expect(testing.screen.getByText("Deleted")).toBeTruthy();
+  });
+
+  it("binds pagination to the complete observation and restores its anchor after a runtime update", async () => {
+    vi.useFakeTimers();
+    let revision = 1;
+    queryMock.mockImplementation(async (params: UsageQuery) => ({
+      ...result(params),
+      runtime_epoch: "runtime",
+      live_versions: [[2, 4, revision]],
+    }));
+    await mount();
+    await click("Agent");
+    await click("Researcher");
+    revision = 2;
+    queryMock.mockRejectedValueOnce(
+      new backendModule.BackendError(
+        "usage_changed",
+        "Usage observation changed",
+      ),
+    );
+    await click("Next");
+    expect(queryMock.mock.calls.at(-2)?.[0]).toMatchObject({
+      runtime_epoch: "runtime",
+      live_versions: [[2, 4, 1]],
+      agent_id: 2,
+    });
+    expect(lastQuery()).toMatchObject({
+      cursor: null,
+      anchor: record.record_id,
+      agent_id: 2,
+    });
+    expect(lastQuery().runtime_epoch).toBeUndefined();
+    await emit("usage.updated");
+    await testing.act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(lastQuery()).toMatchObject({
+      runtime_epoch: "runtime",
+      live_versions: [[2, 4, 2]],
+      agent_id: 2,
+    });
+    expect(
+      testing.screen.getByRole("table", { name: "Request records" }),
+    ).toBeTruthy();
+  });
+
+  it("updates independent unsaved usage status in records and the open detail", async () => {
+    vi.useFakeTimers();
+    let saved = false;
+    queryMock.mockImplementation(async (params: UsageQuery) => ({
+      ...result(params),
+      records: [{ ...record, saved, observation_source: "runtime" }],
+    }));
+    readMock.mockImplementation(async () => ({
+      ...detail(),
+      saved,
+      observation_source: "runtime",
+    }));
+    await mount();
+    await click("Agent");
+    await click("Researcher");
+    await testing.act(async () => {
+      const row = testing.screen
+        .getByRole("table", { name: "Request records" })
+        .querySelector("tbody tr");
+      if (!row) throw new Error("No request record");
+      testing.fireEvent.click(row);
+    });
+    expect(testing.screen.getAllByText("Not saved")).toHaveLength(2);
+    saved = true;
+    await emit("tool.updated");
+    await testing.act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    expect(testing.screen.queryByText("Not saved")).toBeNull();
   });
 
   it("uses backend group keys, fixed page size and restores the selected range and grouping", async () => {
@@ -721,6 +819,9 @@ describe("Usage dashboard", () => {
 
   it("shows zero and unknown values faithfully and continues index initialization before showing totals", async () => {
     vi.useFakeTimers();
+    const advance = vi
+      .spyOn(backendModule.backend, "usageAdvance")
+      .mockResolvedValue({ ready: 1, revision: 1 });
     queryMock.mockResolvedValueOnce({
       ...result(),
       index: { ready: 0, revision: 1 },
@@ -748,6 +849,7 @@ describe("Usage dashboard", () => {
     expect(summaryText()).toBe(
       "Total tokens0Input tokens0Output tokens0Requests0",
     );
+    expect(advance).toHaveBeenCalledTimes(1);
     expect(usage.formatInteger(null)).toBe("Unavailable");
     expect(usage.shareOf("0", "0")).toBe(0);
     expect(usage.shareOf(null, "1")).toBeNull();

@@ -155,6 +155,7 @@ afterEach(() => {
   cleanup();
   clearToasts();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 afterAll(() => {
@@ -620,7 +621,9 @@ it.each(["internal_error", "timeout"])(
     vi.mocked(backend.discussions).mockImplementation((value) =>
       value ? refresh.promise : Promise.resolve(discussions),
     );
+    vi.useFakeTimers();
     await emit({ type: "mention.acked", discussion_id: 4 });
+    await act(async () => vi.advanceTimersByTimeAsync(150));
     expect(view.getByText("Saved archive")).toBe(row);
     expect(view.queryByLabelText("Loading Discussions")).toBeNull();
     await act(async () => {
@@ -749,7 +752,9 @@ it("retains archived rows and input across disconnect and restoration", async ()
       ? old.promise
       : Promise.resolve(value ? archived : discussions),
   );
+  vi.useFakeTimers();
   await emit({ type: "discussion.updated", discussion_id: 99 });
+  await act(async () => vi.advanceTimersByTimeAsync(150));
   const input = view.getByRole("searchbox", { name: "Search messages" });
   vi.spyOn(backend, "disconnected", "get").mockReturnValue(true);
   await emit({

@@ -18,6 +18,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -62,9 +63,16 @@ import {
   type HistoryValue,
   type LibraryDocument,
   type LibraryEntry,
+  type LivePage,
   type Member,
 } from "@/lib/backend";
-import { formatBytes, formatTime, plural, relativeTime } from "@/lib/format";
+import {
+  formatBytes,
+  formatInteger,
+  formatTime,
+  plural,
+  relativeTime,
+} from "@/lib/format";
 
 const TOOL_ICONS: Record<string, ReactNode> = {
   send: <Send size={13} />,
@@ -140,8 +148,26 @@ function AgentPage({
 }) {
   const navigate = useNavigate();
   const read = useCallback(() => backend.agentDetail(member.id), [member.id]);
-  const { resource, refresh: load, invalidate } = useResource(read);
+  const { resource, refresh: refreshDetail, invalidate } = useResource(read);
   const detail = resource.data;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRead = useRef<Promise<void> | null>(null);
+  const clearTimer = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+  const load = useCallback(
+    (changed = false) => {
+      clearTimer();
+      const operation = refreshDetail(changed);
+      pendingRead.current = operation;
+      void operation.finally(() => {
+        if (pendingRead.current === operation) pendingRead.current = null;
+      });
+      return operation;
+    },
+    [clearTimer, refreshDetail],
+  );
   const [doomed, setDoomed] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [panel, setPanel] = useState<"model" | "workspace" | "context" | null>(
@@ -172,30 +198,54 @@ function AgentPage({
   };
 
   useEffect(() => {
+    let connected = true;
+    const schedule = (immediate = false) => {
+      if (!connected) return;
+      if (pendingRead.current || immediate) void load(true);
+      else if (timer.current === null)
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          void load(true);
+        }, 150);
+    };
     invalidate(true);
-    void load();
-    return () => invalidate(false);
-  }, [load, invalidate]);
-
-  useEffect(() => {
-    return backend.onEvent((event) => {
-      if (
-        (event.type.startsWith("turn.") && event.agent_id === member.id) ||
-        event.type === "organization.changed" ||
-        event.type === "settings.updated"
-      )
-        void load(true);
-      if (event.type === "connection.closed")
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.closed") {
+        connected = false;
+        clearTimer();
+        pendingRead.current = null;
         invalidate(
           false,
           event.error instanceof BackendError ? event.error : undefined,
         );
+        return;
+      }
       if (event.type === "connection.restored") {
+        connected = true;
         invalidate(true);
         void load();
+        return;
       }
+      if (
+        ((event.type.startsWith("turn.") ||
+          event.type === "usage.updated" ||
+          event.type === "workspace.changed") &&
+          event.agent_id === member.id) ||
+        event.type === "organization.changed" ||
+        event.type === "usage.index_updated" ||
+        event.type === "settings.updated"
+      )
+        schedule(event.type === "turn.finished");
     });
-  }, [load, invalidate, member.id]);
+    void load();
+    return () => {
+      connected = false;
+      clearTimer();
+      pendingRead.current = null;
+      off();
+      invalidate(false);
+    };
+  }, [clearTimer, load, invalidate, member.id]);
 
   return (
     <Page>
@@ -381,17 +431,30 @@ function AgentContextSummary({
         <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px overflow-hidden rounded-md border border-line bg-line flex-none">
           <Stat
             label="Token spend"
-            value={detail.usage.total_tokens.toLocaleString("en-US")}
+            value={formatInteger(
+              detail.usage_metrics
+                ? detail.usage_metrics.total_tokens
+                : detail.usage.total_tokens,
+            )}
             detail={
               detail.token_limit === null ? (
                 <span className="text-fg-muted">Token ceiling unavailable</span>
               ) : detail.token_limit > 0 ? (
                 <>
-                  <Meter
-                    value={detail.usage.total_tokens}
-                    max={detail.token_limit}
-                    label={`Token spend for ${member.name}`}
-                  />
+                  {detail.usage_metrics?.total_tokens !== null ? (
+                    <Meter
+                      value={Math.min(
+                        Number(
+                          detail.usage_metrics
+                            ? detail.usage_metrics.total_tokens
+                            : detail.usage.total_tokens,
+                        ),
+                        detail.token_limit,
+                      )}
+                      max={detail.token_limit}
+                      label={`Token spend for ${member.name}`}
+                    />
+                  ) : null}
                   <span className="text-fg-muted">
                     of {detail.token_limit.toLocaleString("en-US")}
                   </span>
@@ -403,16 +466,37 @@ function AgentContextSummary({
           />
           <Stat
             label="Model requests"
-            value={detail.usage.requests.toLocaleString("en-US")}
+            value={formatInteger(
+              detail.usage_metrics
+                ? detail.usage_metrics.requests
+                : detail.usage.requests,
+            )}
             detail={
               <span className="text-fg-muted">
-                {detail.usage.input_tokens.toLocaleString("en-US")} in ·{" "}
-                {detail.usage.output_tokens.toLocaleString("en-US")} out
+                {formatInteger(
+                  detail.usage_metrics
+                    ? detail.usage_metrics.input_tokens
+                    : detail.usage.input_tokens,
+                )}{" "}
+                in ·{" "}
+                {formatInteger(
+                  detail.usage_metrics
+                    ? detail.usage_metrics.output_tokens
+                    : detail.usage.output_tokens,
+                )}{" "}
+                out
               </span>
             }
           />
         </div>
       )}
+      {detail.usage_version && !detail.usage_version.index.ready ? (
+        <p className="text-fg-muted text-xs">Indexing saved usage</p>
+      ) : null}
+      {detail.usage_metrics &&
+      detail.usage_metrics.total_known < detail.usage_metrics.records ? (
+        <p className="text-fg-muted text-xs">Partial usage</p>
+      ) : null}
       <AgentDetailStatus detail={detail} />
       <HistorySection agentId={member.id} initialRuns={detail.runs} />
     </>
@@ -479,35 +563,105 @@ export function WorkspaceSection({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const generation = useRef(0);
-  const load = useCallback(async () => {
-    if (path === null) return;
-    const current = ++generation.current;
-    setLoading(true);
-    try {
-      const result = await backend.workspaceRead(agentId, path);
-      if (current !== generation.current) return;
-      setFile(result);
-      setError(null);
-    } catch (failure) {
-      if (current === generation.current)
-        setError(failure instanceof Error ? failure.message : String(failure));
-    } finally {
-      if (current === generation.current) setLoading(false);
+  const connected = useRef(true);
+  const pending = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearTimer = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+  const load = useCallback((): Promise<void> => {
+    if (path === null || !connected.current) return Promise.resolve();
+    clearTimer();
+    if (pending.current) {
+      dirty.current = true;
+      return pending.current;
     }
-  }, [agentId, path]);
+    const current = generation.current;
+    dirty.current = false;
+    setLoading(true);
+    setError(null);
+    const operation = Promise.resolve().then(async () => {
+      if (current !== generation.current) return;
+      try {
+        for (;;) {
+          try {
+            const result = await backend.workspaceRead(agentId, path);
+            if (current !== generation.current) return;
+            setFile((previous) =>
+              previous?.hash === result.hash ? previous : result,
+            );
+            setError(null);
+          } catch (failure) {
+            if (current !== generation.current) return;
+            setError(
+              failure instanceof Error ? failure.message : String(failure),
+            );
+          }
+          if (!dirty.current || current !== generation.current) return;
+          dirty.current = false;
+        }
+      } finally {
+        if (current === generation.current && pending.current === operation) {
+          pending.current = null;
+          setLoading(false);
+        }
+      }
+    });
+    pending.current = operation;
+    return operation;
+  }, [agentId, clearTimer, path]);
 
   useEffect(() => {
+    generation.current += 1;
+    connected.current = true;
     setFile(null);
     setError(null);
-    void load();
+    if (path === null) return;
+    const schedule = (immediate = false) => {
+      if (!connected.current) return;
+      if (pending.current || immediate) void load();
+      else if (timer.current === null)
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          void load();
+        }, 150);
+    };
     const off = backend.onEvent((event) => {
-      if (event.type === "connection.restored") void load();
+      if (event.type === "connection.closed") {
+        clearTimer();
+        generation.current += 1;
+        connected.current = false;
+        pending.current = null;
+        dirty.current = false;
+        setLoading(false);
+      }
+      if (event.type === "connection.restored") {
+        generation.current += 1;
+        connected.current = true;
+        pending.current = null;
+        dirty.current = false;
+        void load();
+      }
+      if (
+        event.agent_id === agentId &&
+        ((event.type === "workspace.changed" &&
+          (event.path === undefined || event.path === path)) ||
+          event.type === "turn.finished")
+      )
+        schedule(event.type === "turn.finished");
     });
+    void load();
     return () => {
       generation.current += 1;
+      connected.current = false;
+      pending.current = null;
+      dirty.current = false;
+      clearTimer();
       off();
     };
-  }, [load]);
+  }, [clearTimer, load, path]);
 
   return (
     <Section title="Workspace">
@@ -803,6 +957,8 @@ export function TurnHistoryModal({
   );
   const [error, setError] = useState<BackendError | null>(null);
   const loadGeneration = useRef(0);
+  const pendingRefresh = useRef<Promise<void> | null>(null);
+  const refreshDirty = useRef(false);
 
   const load = useCallback(
     async (
@@ -964,23 +1120,56 @@ export function TurnHistoryModal({
     [agentId, sequence],
   );
 
+  const refreshOrdinal = useRef<number | undefined>(undefined);
+  const refreshHistory = useCallback(
+    (nextOrdinal: number | undefined): Promise<void> => {
+      refreshOrdinal.current = nextOrdinal;
+      if (pendingRefresh.current) {
+        refreshDirty.current = true;
+        return pendingRefresh.current;
+      }
+      const requestedGeneration = loadGeneration.current;
+      const operation = Promise.resolve().then(async () => {
+        if (loadGeneration.current !== requestedGeneration) return;
+        try {
+          do {
+            refreshDirty.current = false;
+            const previous = loadGeneration.current;
+            await load(refreshOrdinal.current);
+            if (loadGeneration.current !== previous + 1) return;
+          } while (refreshDirty.current);
+        } finally {
+          if (pendingRefresh.current === operation)
+            pendingRefresh.current = null;
+        }
+      });
+      pendingRefresh.current = operation;
+      return operation;
+    },
+    [load],
+  );
+
   useEffect(() => {
     if (!open) return;
     setRead(null);
     following.current = inline && initialOrdinal === undefined;
     const initial = following.current ? newestOrdinal.current : initialOrdinal;
     setOrdinal(initial);
-    void load(initial);
+    void refreshHistory(initial);
     return () => {
       loadGeneration.current += 1;
+      pendingRefresh.current = null;
+      refreshDirty.current = false;
     };
-  }, [initialOrdinal, inline, load, open, sequence]);
+  }, [initialOrdinal, inline, refreshHistory, open, sequence]);
 
   useEffect(() => {
     if (!open) return;
     return backend.onEvent((event) => {
       if (event.type === "connection.closed") {
         loadGeneration.current += 1;
+        pendingRefresh.current = null;
+        refreshDirty.current = false;
         setError((current) =>
           current && isHistoryConnectionFailure(current) ? null : current,
         );
@@ -992,9 +1181,11 @@ export function TurnHistoryModal({
           event.agent_id === agentId &&
           event.sequence === sequence)
       )
-        void load(following.current ? newestOrdinal.current : ordinal);
+        void refreshHistory(
+          following.current ? newestOrdinal.current : ordinal,
+        );
     });
-  }, [agentId, load, open, ordinal, sequence]);
+  }, [agentId, refreshHistory, open, ordinal, sequence]);
 
   useEffect(() => {
     if (
@@ -1005,11 +1196,13 @@ export function TurnHistoryModal({
     )
       return;
     setOrdinal(latestOrdinal);
-    void load(latestOrdinal);
-  }, [latestOrdinal, load, open, ordinal]);
+    void refreshHistory(latestOrdinal);
+  }, [latestOrdinal, refreshHistory, open, ordinal]);
 
   const selectRequest = (nextOrdinal: number) => {
     following.current = false;
+    pendingRefresh.current = null;
+    refreshDirty.current = false;
     setOrdinal(nextOrdinal);
     void load(nextOrdinal);
   };
@@ -1313,6 +1506,11 @@ function RequestHistoryContent({
           <span className="text-danger">{request.summary.error}</span>
         ) : null}
       </div>
+      <LiveTools
+        agentId={agentId}
+        sequence={sequence}
+        ordinal={request.summary.ordinal}
+      />
       {!compact ? (
         <>
           <HistoryMessagesPanel
@@ -1345,6 +1543,7 @@ function RequestHistoryContent({
           />
         </>
       ) : null}
+
       {request.response ? (
         <HistoryMessagesPanel
           agentId={agentId}
@@ -1373,6 +1572,333 @@ function RequestHistoryContent({
         />
       ) : null}
     </div>
+  );
+}
+
+export function LiveTools({
+  agentId,
+  sequence,
+  ordinal,
+}: {
+  agentId: number;
+  sequence: number;
+  ordinal: number;
+}) {
+  const [page, setPage] = useState<LivePage | null>(null);
+  const [error, setError] = useState<BackendError | null>(null);
+  const retryRead = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    let active = true;
+    let connected = true;
+    let generation = 0;
+    let pending = false;
+    let dirty = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let confirmedEpoch: string | null = null;
+    let confirmedRevision = 0;
+    const load = async () => {
+      if (!active || !connected) return;
+      if (pending) {
+        dirty = true;
+        return;
+      }
+      pending = true;
+      const current = generation;
+      try {
+        do {
+          dirty = false;
+          let after: number | undefined;
+          do {
+            const cursor = after;
+            const result = await backend.agentLive(
+              agentId,
+              sequence,
+              ordinal,
+              cursor,
+            );
+            if (!active || current !== generation) return;
+            if (
+              result.turn &&
+              result.runtime_epoch === confirmedEpoch &&
+              result.turn.live_revision < confirmedRevision
+            ) {
+              dirty = true;
+              break;
+            }
+            setPage((previous) => {
+              if (
+                cursor === undefined ||
+                !previous?.turn ||
+                !result.turn ||
+                previous.runtime_epoch !== result.runtime_epoch
+              )
+                return result;
+              const first = previous.turn.requests[0];
+              const next = result.turn.requests[0];
+              if (!first || !next || first.request_id !== next.request_id)
+                return result;
+              const tools = new Map(
+                first.tools.map((tool) => [tool.part_index, tool]),
+              );
+              for (const tool of next.tools) tools.set(tool.part_index, tool);
+              return {
+                ...result,
+                turn: {
+                  ...result.turn,
+                  requests: [
+                    {
+                      ...next,
+                      tools: [...tools.values()].sort(
+                        (a, b) => a.part_index - b.part_index,
+                      ),
+                    },
+                  ],
+                },
+              };
+            });
+            setError(null);
+            const next = result.turn?.requests[0];
+            after = next?.tools_has_more
+              ? (next.tools_next_after ?? undefined)
+              : undefined;
+          } while (after !== undefined);
+        } while (dirty);
+      } catch (failure) {
+        if (active && current === generation) setError(historyFailure(failure));
+      } finally {
+        if (active && current === generation) pending = false;
+      }
+    };
+    const schedule = (immediate = false) => {
+      if (!active || !connected) return;
+      if (pending) {
+        dirty = true;
+        return;
+      }
+      if (immediate) {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+        void load();
+      } else if (timer === null) {
+        timer = setTimeout(() => {
+          timer = null;
+          void load();
+        }, 150);
+      }
+    };
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.closed") {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+        confirmedEpoch = null;
+        confirmedRevision = 0;
+        connected = false;
+        generation += 1;
+        pending = false;
+        dirty = false;
+      }
+      if (event.type === "connection.restored") {
+        connected = true;
+        generation += 1;
+        pending = false;
+        dirty = false;
+        void load();
+      }
+      if (
+        (event.type === "tool.updated" ||
+          event.type === "usage.updated" ||
+          event.type === "turn.finished") &&
+        event.agent_id === agentId &&
+        event.sequence === sequence &&
+        (event.ordinal === undefined || event.ordinal === ordinal)
+      ) {
+        if (
+          event.saved === true &&
+          typeof event.runtime_epoch === "string" &&
+          typeof event.live_revision === "number"
+        ) {
+          if (confirmedEpoch !== event.runtime_epoch) confirmedRevision = 0;
+          confirmedEpoch = event.runtime_epoch;
+          confirmedRevision = Math.max(confirmedRevision, event.live_revision);
+        }
+        schedule(event.type === "turn.finished");
+      }
+    });
+    retryRead.current = load;
+    void load();
+    return () => {
+      active = false;
+      if (timer !== null) clearTimeout(timer);
+      off();
+      retryRead.current = null;
+    };
+  }, [agentId, sequence, ordinal]);
+  const failure =
+    error && !(error.transport && backend.disconnected) ? (
+      <LoadError
+        error={error}
+        retry={() => {
+          if (!retryRead.current) throw new Error("Live read is inactive");
+          void retryRead.current();
+        }}
+      />
+    ) : null;
+  const request = page?.turn?.requests[0];
+  if (
+    !page ||
+    !request ||
+    (request.tools.length === 0 && !request.has_response)
+  )
+    return failure;
+  return (
+    <section className="flex flex-col gap-2">
+      {failure}
+      {request.has_response && !request.response_saved ? (
+        <>
+          <p className="text-danger text-xs">Not saved</p>
+          <LiveContent
+            key={`${page.runtime_epoch}:${request.request_id}:${request.response_version}`}
+            agentId={agentId}
+            sequence={sequence}
+            ordinal={ordinal}
+            partIndex={0}
+            contentSource="response"
+            epoch={page.runtime_epoch}
+            contentVersion={request.response_version}
+          />
+        </>
+      ) : null}
+      {request.tools.length > 0 ? (
+        <h3 className="m-0 text-sm font-semibold tracking-title">Tools</h3>
+      ) : null}
+      {request.tools.map((tool) => (
+        <div
+          key={`${page.runtime_epoch}:${request.request_id}:${tool.part_index}`}
+          className="flex flex-col gap-2"
+        >
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            <span>{tool.tool_name}</span>
+            <span>{tool.status}</span>
+            {!tool.saved ? (
+              <span className="text-danger">Not saved</span>
+            ) : null}
+            {tool.started_at ? (
+              <span>Started {formatTime(tool.started_at)}</span>
+            ) : null}
+            {tool.completed_at ? (
+              <span>Finished {formatTime(tool.completed_at)}</span>
+            ) : null}
+          </div>
+          {tool.has_result && !tool.saved ? (
+            <LiveContent
+              key={tool.content_version}
+              agentId={agentId}
+              sequence={sequence}
+              ordinal={ordinal}
+              partIndex={tool.part_index}
+              contentSource="tool"
+              epoch={page.runtime_epoch}
+              contentVersion={tool.content_version}
+            />
+          ) : null}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function LiveContent({
+  agentId,
+  sequence,
+  ordinal,
+  partIndex,
+  contentSource,
+  epoch,
+  contentVersion,
+}: {
+  agentId: number;
+  sequence: number;
+  ordinal: number;
+  partIndex: number;
+  contentSource: "tool" | "response";
+  epoch: string;
+  contentVersion?: string | null;
+}) {
+  const [content, setContent] = useState<HistoryMessages | null>(null);
+  const [error, setError] = useState<BackendError | null>(null);
+  const retryRead = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    let active = true;
+    let generation = 0;
+    const load = async () => {
+      const current = ++generation;
+      try {
+        const result = await backend.agentLiveRead(
+          agentId,
+          sequence,
+          ordinal,
+          partIndex,
+          epoch,
+          contentSource,
+          contentVersion,
+        );
+        if (!active || current !== generation) return;
+        setContent(result);
+        setError(null);
+      } catch (failure) {
+        if (
+          active &&
+          current === generation &&
+          !(failure instanceof BackendError && failure.code === "live_changed")
+        )
+          setError(historyFailure(failure));
+      }
+    };
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.closed") {
+        generation += 1;
+        setContent(null);
+        setError(null);
+      }
+      if (event.type === "connection.restored") void load();
+    });
+    retryRead.current = load;
+    void load();
+    return () => {
+      active = false;
+      off();
+      retryRead.current = null;
+    };
+  }, [
+    agentId,
+    sequence,
+    ordinal,
+    partIndex,
+    contentSource,
+    epoch,
+    contentVersion,
+  ]);
+  return (
+    <>
+      {error && !(error.transport && backend.disconnected) ? (
+        <LoadError
+          error={error}
+          retry={() => {
+            if (!retryRead.current)
+              throw new Error("Live content read is inactive");
+            void retryRead.current();
+          }}
+        />
+      ) : null}
+      {content ? (
+        <HistoryMessagesPanel
+          agentId={agentId}
+          sequence={sequence}
+          title={contentSource === "response" ? "Response" : "Tool result"}
+          content={content}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -1699,6 +2225,25 @@ function HistoryValueView({
   );
 }
 
+function historyContentIdentity(
+  agentId: number,
+  sequence: number,
+  reference: HistoryText | HistoryBinary,
+): string {
+  return JSON.stringify([
+    agentId,
+    sequence,
+    reference.source,
+    reference.request_ordinal,
+    reference.message_index,
+    reference.path,
+    reference.runtime_epoch,
+    reference.part_index,
+    reference.content_source,
+    reference.content_version,
+  ]);
+}
+
 function HistoryTextPreview({
   agentId,
   sequence,
@@ -1715,6 +2260,11 @@ function HistoryTextPreview({
   active?: boolean;
 }) {
   const textKey = `text:${agentId}:${sequence}:${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`;
+  const identity = historyContentIdentity(agentId, sequence, reference);
+  const [savedIdentity, setSavedIdentity] = useWindowState(
+    `${textKey}:identity`,
+    identity,
+  );
   const [text, setText] = useWindowState(textKey, reference.value);
   const [nextOffset, setNextOffset] = useWindowState(
     `${textKey}:offset`,
@@ -1734,12 +2284,20 @@ function HistoryTextPreview({
     nextOffset,
     total: reference.total_bytes,
   });
-  const pathKey = JSON.stringify(reference.path);
+  const currentIdentity = useRef(identity);
+  const matching = savedIdentity === identity;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const current = content.current;
     const compatible = current.value.startsWith(reference.value);
-    if (!compatible || reference.total_bytes < current.nextOffset) {
+    if (
+      currentIdentity.current !== identity ||
+      !matching ||
+      !compatible ||
+      reference.total_bytes < current.nextOffset
+    ) {
+      currentIdentity.current = identity;
+      setSavedIdentity(identity);
       loadGeneration.current += 1;
       textRequest.current = false;
       interruptedOffset.current = null;
@@ -1758,6 +2316,9 @@ function HistoryTextPreview({
     current.total = reference.total_bytes;
     setHasMore(current.nextOffset < current.total);
   }, [
+    identity,
+    matching,
+    setSavedIdentity,
     reference.value,
     reference.next_offset,
     reference.total_bytes,
@@ -1776,7 +2337,11 @@ function HistoryTextPreview({
           ...reference,
           offset,
         });
-        if (generation !== loadGeneration.current) return;
+        if (
+          generation !== loadGeneration.current ||
+          identity !== currentIdentity.current
+        )
+          return;
         if (result.offset !== offset || result.next_offset <= offset)
           throw new Error("Saved text did not advance");
         interruptedOffset.current = null;
@@ -1790,28 +2355,27 @@ function HistoryTextPreview({
         setHasMore(content.current.nextOffset < content.current.total);
         setError(null);
       } catch (failure) {
-        if (generation !== loadGeneration.current) return;
+        if (
+          generation !== loadGeneration.current ||
+          identity !== currentIdentity.current
+        )
+          return;
         const problem = historyFailure(failure);
         if (!isHistoryConnectionFailure(problem)) {
           interruptedOffset.current = null;
           setError(problem);
         }
       } finally {
-        if (generation === loadGeneration.current) {
+        if (
+          generation === loadGeneration.current &&
+          identity === currentIdentity.current
+        ) {
           textRequest.current = false;
           setLoading(false);
         }
       }
     },
-    [
-      active,
-      agentId,
-      pathKey,
-      reference.source,
-      reference.request_ordinal,
-      reference.message_index,
-      sequence,
-    ],
+    [active, agentId, identity, sequence],
   );
 
   useEffect(() => {
@@ -1846,20 +2410,22 @@ function HistoryTextPreview({
         {label} · {formatBytes(reference.total_bytes)}
       </span>
       {markdown ? (
-        <SavedMarkdown>{text}</SavedMarkdown>
+        <SavedMarkdown>{matching ? text : reference.value}</SavedMarkdown>
       ) : (
         <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
-          {text}
+          {matching ? text : reference.value}
         </pre>
       )}
       {error ? (
         <p className="m-0 text-danger text-xs">{error.message}</p>
       ) : null}
-      {hasMore ? (
+      {(matching ? hasMore : reference.has_more) ? (
         <Button
           size="sm"
           disabled={loading}
-          onClick={() => void loadMore(nextOffset)}
+          onClick={() =>
+            void loadMore(matching ? nextOffset : reference.next_offset)
+          }
         >
           {loading
             ? "Loading text..."
@@ -1883,12 +2449,26 @@ function HistoryImagePreview({
   reference: HistoryBinary;
   active?: boolean;
 }) {
-  const [image, setImage] = useState<string | null>(null);
+  const identity = historyContentIdentity(agentId, sequence, reference);
+  const [image, setImage] = useState<{
+    identity: string;
+    url: string;
+  } | null>(null);
   const [error, setError] = useState<BackendError | null>(null);
   const [zoom, setZoom] = useState(false);
   const [loading, setLoading] = useState(false);
   const loadGeneration = useRef(0);
-  const pathKey = JSON.stringify(reference.path);
+  const currentIdentity = useRef(identity);
+  const visibleImage = image?.identity === identity ? image.url : null;
+
+  useLayoutEffect(() => {
+    currentIdentity.current = identity;
+    loadGeneration.current += 1;
+    setImage(null);
+    setError(null);
+    setZoom(false);
+    setLoading(false);
+  }, [identity]);
 
   const load = useCallback(async () => {
     if (!active) return;
@@ -1900,25 +2480,32 @@ function HistoryImagePreview({
         sequence,
         reference,
       );
-      if (generation !== loadGeneration.current) return;
-      setImage(`data:${result.media_type};base64,${result.data}`);
+      if (
+        generation !== loadGeneration.current ||
+        identity !== currentIdentity.current
+      )
+        return;
+      setImage({
+        identity,
+        url: `data:${result.media_type};base64,${result.data}`,
+      });
       setError(null);
     } catch (failure) {
-      if (generation !== loadGeneration.current) return;
+      if (
+        generation !== loadGeneration.current ||
+        identity !== currentIdentity.current
+      )
+        return;
       const problem = historyFailure(failure);
       if (!isHistoryConnectionFailure(problem)) setError(problem);
     } finally {
-      if (generation === loadGeneration.current) setLoading(false);
+      if (
+        generation === loadGeneration.current &&
+        identity === currentIdentity.current
+      )
+        setLoading(false);
     }
-  }, [
-    active,
-    agentId,
-    pathKey,
-    reference.source,
-    reference.request_ordinal,
-    reference.message_index,
-    sequence,
-  ]);
+  }, [active, agentId, identity, sequence]);
 
   useEffect(() => {
     if (active) void load();
@@ -1947,7 +2534,7 @@ function HistoryImagePreview({
       </div>
     );
   }
-  if (!image) {
+  if (!visibleImage) {
     return (
       <span className="text-fg-muted text-xs">
         Loading image ({formatBytes(reference.size)})
@@ -1963,7 +2550,7 @@ function HistoryImagePreview({
         onClick={() => setZoom(true)}
       >
         <img
-          src={image}
+          src={visibleImage}
           alt="Saved model content"
           className="block max-h-[200px] max-w-full object-contain"
           onError={() =>
@@ -1988,7 +2575,7 @@ function HistoryImagePreview({
         footer={<Button onClick={() => setZoom(false)}>Close</Button>}
       >
         <img
-          src={image}
+          src={visibleImage}
           alt="Saved model content"
           className="max-h-[70vh] max-w-full self-center object-contain"
         />
@@ -2043,6 +2630,15 @@ function ActivityCard({
           ) : (
             `${plural(effects.length, "effect")} · ${tools.join(", ")}`
           )}
+          {run.usage_metrics ? (
+            <span>
+              {" "}
+              · {formatInteger(run.usage_metrics.total_tokens)} tokens
+              {run.usage_metrics.total_known < run.usage_metrics.records
+                ? " (partial)"
+                : ""}
+            </span>
+          ) : null}
         </span>
         <Tooltip label={formatTime(run.started_at)}>
           <time

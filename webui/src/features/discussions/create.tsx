@@ -62,7 +62,8 @@ export function CreateDiscussionDialog({
   if (members === null || humanId === null) return null;
 
   const others = members.filter((member) => member.id !== humanId);
-  const ready = topic.trim().length > 0 && chosen.length > 0;
+  const ready =
+    !backend.disconnected && topic.trim().length > 0 && chosen.length > 0;
 
   const create = async () => {
     const operation = session.current;
@@ -124,7 +125,7 @@ export function CreateDiscussionDialog({
         members={others}
         selected={chosen}
         onChange={setChosen}
-        disabled={busy}
+        disabled={busy || backend.disconnected}
       />
     </Modal>
   );

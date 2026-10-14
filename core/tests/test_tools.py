@@ -1433,6 +1433,7 @@ def test_run_records_effects_and_emits_each_changed_library_file(
             {"path": "changed.txt", "hash": tools.read_library("changed.txt")["hash"]},
         ),
         ("library.updated", {"path": "removed.txt", "deleted": True}),
+        ("workspace.changed", {"agent_id": MAIN}),
     ]
     (effect,) = world.history.effects(MAIN, sequences=[1])
     assert effect.tool == "run" and f"exited {exit_code}" in effect.summary
@@ -1526,10 +1527,10 @@ def test_execution_emits_partial_library_changes_on_error(
             "library.updated",
             {"path": "partial.txt", "hash": tools.read_library("partial.txt")["hash"]},
         ),
-    ]
+    ] + ([("workspace.changed", {"agent_id": MAIN})] if operation == "run" else [])
 
 
-def test_edit_emits_library_changes_but_workspace_run_and_edit_do_not(world) -> None:
+def test_edit_and_run_notify_their_own_workspace_and_library(world) -> None:
     emitted = []
     tools = tools_for(
         world, MAIN, on_change=lambda name, payload: emitted.append((name, payload))
@@ -1556,7 +1557,10 @@ def test_edit_emits_library_changes_but_workspace_run_and_edit_do_not(world) -> 
     assert result["exit_code"] == 0
     tools.edit("workspace/note.md", [{"old_text": "private", "new_text": "updated"}])
     assert tools.read_workspace("note.md")["content"] == "updated"
-    assert emitted == []
+    assert emitted == [
+        ("workspace.changed", {"agent_id": MAIN}),
+        ("workspace.changed", {"agent_id": MAIN, "path": "note.md"}),
+    ]
 
 
 @pytest.mark.skipif(

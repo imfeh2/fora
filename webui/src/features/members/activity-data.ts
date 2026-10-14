@@ -7,6 +7,8 @@ import {
   type HistoryReminder,
   type HistoryText,
   type HistoryValue,
+  type LiveTool,
+  type UsageVersion,
 } from "@/lib/backend";
 
 type Part = { [key: string]: HistoryValue };
@@ -16,12 +18,28 @@ export type ActivityPart = {
   messageIndex: number;
   partIndex: number;
   timestamp: string | null;
+  saved?: boolean;
   value: Part;
 };
 export type ActivityAction = ActivityPart & {
   args: HistoryValue;
   results: ActivityPart[];
   sent: (HistoryReminder & { created_at: string }) | null;
+  requestId?: string;
+  observation?: {
+    runtime_epoch: string;
+    live_revision: number;
+    request_id: string;
+  };
+  lifecycle?: Pick<
+    LiveTool,
+    | "status"
+    | "started_at"
+    | "completed_at"
+    | "saved"
+    | "has_result"
+    | "content_version"
+  >;
 };
 export type ActivityData = {
   run: AgentHistoryRun;
@@ -34,7 +52,70 @@ export type ActivityData = {
   final: ActivityPart[];
   complete: boolean;
   missing: string[];
+  usageVersion?: UsageVersion;
+  requestsComplete?: boolean;
 };
+
+export function clearLiveActivity(data: ActivityData): ActivityData {
+  return {
+    ...data,
+    contents: Object.fromEntries(
+      Object.entries(data.contents).map(([ordinal, request]) => [
+        ordinal,
+        {
+          ...request,
+          observation: undefined,
+          response: request.response_saved === false ? null : request.response,
+        },
+      ]),
+    ),
+    actions: data.actions
+      .filter((part) => part.saved !== false)
+      .map((part) => ({ ...part, observation: undefined })),
+    notes: data.notes.filter((part) => part.saved !== false),
+    final: data.final.filter((part) => part.saved !== false),
+  };
+}
+
+export function mergeActivityData(
+  previous: ActivityData | null,
+  data: ActivityData,
+): ActivityData {
+  if (!previous || data.complete) return data;
+  const saved =
+    previous.usageVersion?.runtime_epoch !== data.usageVersion?.runtime_epoch
+      ? clearLiveActivity(previous)
+      : previous;
+  const ready = new Set(Object.keys(data.contents).map(Number));
+  const requests = new Map(
+    (data.requestsComplete ? [] : saved.requests).map((request) => [
+      request.ordinal,
+      request,
+    ]),
+  );
+  for (const request of data.requests) requests.set(request.ordinal, request);
+  const keep = (part: ActivityPart) =>
+    (part.ordinal === 0 || requests.has(part.ordinal)) &&
+    !ready.has(part.ordinal);
+  return {
+    ...data,
+    requests: [...requests.values()].sort(
+      (left, right) => left.ordinal - right.ordinal,
+    ),
+    contents: {
+      ...Object.fromEntries(
+        Object.entries(saved.contents).filter(
+          ([ordinal]) =>
+            requests.has(Number(ordinal)) && !ready.has(Number(ordinal)),
+        ),
+      ),
+      ...data.contents,
+    },
+    actions: [...saved.actions.filter(keep), ...data.actions],
+    notes: [...saved.notes.filter(keep), ...data.notes],
+    final: [...saved.final.filter(keep), ...data.final],
+  };
+}
 
 export function activityRecord(value: HistoryValue): value is Part {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -137,6 +218,7 @@ export function activityParts(
         partIndex,
         timestamp:
           typeof message.timestamp === "string" ? message.timestamp : null,
+        saved: content.saved !== false,
         value,
       };
     });
@@ -243,7 +325,12 @@ async function collectActivity(
   const actions: ActivityAction[] = [];
   const notes: ActivityPart[] = [];
   const responses: ActivityPart[][] = [];
-  const groups = data.requests.length
+  const groups: {
+    parts: ActivityPart[];
+    results: ActivityPart[];
+    content?: NonNullable<AgentHistoryRead["request"]>;
+    observations?: HistoryValue[];
+  }[] = data.requests.length
     ? data.requests.map((summary) => {
         const content = data.contents[summary.ordinal];
         return {
@@ -253,6 +340,26 @@ async function collectActivity(
           results: content
             ? activityParts(content.related, summary.ordinal, "related")
             : [],
+          content,
+          observations:
+            content?.related.messages.flatMap((message) => {
+              if (!activityRecord(message) || !activityRecord(message.metadata))
+                return [];
+              const fora = message.metadata.fora;
+              if (
+                !activityRecord(fora) ||
+                !Array.isArray(fora.tool_observations)
+              )
+                return [];
+              if (
+                fora.request_ordinal !== summary.ordinal ||
+                fora.request_id !== summary.request_id
+              )
+                throw new Error(
+                  "Saved tool observation request does not match",
+                );
+              return fora.tool_observations;
+            }) ?? [],
         };
       })
     : [
@@ -305,7 +412,7 @@ async function collectActivity(
                 candidate.value.tool_call_id === value.tool_call_id,
             )
           : undefined;
-      const results = group.results.filter(
+      let results = group.results.filter(
         (result) =>
           (result.value.part_kind === "tool-return" ||
             result.value.part_kind === "retry-prompt") &&
@@ -315,6 +422,93 @@ async function collectActivity(
             (result.messageIndex > part.messageIndex &&
               (!nextCall || result.messageIndex < nextCall.messageIndex))),
       );
+      let lifecycle: ActivityAction["lifecycle"];
+      const observation = group.observations?.find(
+        (item) => activityRecord(item) && item.part_index === part.partIndex,
+      );
+      if (observation !== undefined) {
+        if (
+          !activityRecord(observation) ||
+          observation.request_ordinal !== part.ordinal ||
+          observation.tool_call_id !== value.tool_call_id ||
+          observation.tool_name !== value.tool_name ||
+          !["queued", "running", "completed", "failed", "cancelled"].includes(
+            String(observation.status),
+          ) ||
+          !(
+            observation.started_at === null ||
+            typeof observation.started_at === "string"
+          ) ||
+          !(
+            observation.completed_at === null ||
+            typeof observation.completed_at === "string"
+          )
+        )
+          throw new Error("Saved tool observation identity is invalid");
+        if (Array.isArray(observation.result_positions)) {
+          results = observation.result_positions.map((position) => {
+            if (
+              !Array.isArray(position) ||
+              position.length !== 2 ||
+              !position.every(
+                (number) =>
+                  typeof number === "number" &&
+                  Number.isSafeInteger(number) &&
+                  number >= 0,
+              )
+            )
+              throw new Error("Saved result position is invalid");
+            const result = group.results.find(
+              (result) =>
+                result.messageIndex === position[0] &&
+                result.partIndex === position[1],
+            );
+            if (!result)
+              throw new Error("Saved result position is unavailable");
+            return result;
+          });
+        }
+        if (observation.has_result === false) results = [];
+        lifecycle = {
+          status: observation.status as LiveTool["status"],
+          started_at: observation.started_at,
+          completed_at: observation.completed_at,
+          saved: true,
+          has_result:
+            typeof observation.has_result === "boolean"
+              ? observation.has_result
+              : results.length > 0,
+          content_version:
+            typeof observation.content_version === "string"
+              ? observation.content_version
+              : null,
+        };
+      } else {
+        const result = results.find((result) =>
+          ["tool-return", "retry-prompt"].includes(
+            String(result.value.part_kind),
+          ),
+        );
+        const outcome = result?.value.outcome;
+        const status: LiveTool["status"] | undefined =
+          result?.value.part_kind === "retry-prompt" ||
+          outcome === "failed" ||
+          outcome === "denied"
+            ? "failed"
+            : outcome === "interrupted"
+              ? "cancelled"
+              : outcome === "success"
+                ? "completed"
+                : undefined;
+        if (status !== undefined)
+          lifecycle = {
+            status,
+            started_at: null,
+            completed_at: null,
+            saved: results.every((result) => result.saved !== false),
+            has_result: true,
+          };
+      }
       let sent: ActivityAction["sent"] = null;
       if (
         value.tool_name === "discussion" &&
@@ -352,7 +546,15 @@ async function collectActivity(
           }
         }
       }
-      actions.push({ ...part, args, results, sent });
+      actions.push({
+        ...part,
+        args,
+        results,
+        sent,
+        lifecycle,
+        requestId: group.content?.summary.request_id,
+        observation: group.content?.observation,
+      });
     }
     const linked = new Set(
       actions.flatMap((action) => action.results.map((result) => result.key)),
@@ -361,7 +563,16 @@ async function collectActivity(
       if (
         (result.value.part_kind === "tool-return" ||
           result.value.part_kind === "retry-prompt") &&
-        !linked.has(result.key)
+        !linked.has(result.key) &&
+        !(
+          result.value.outcome === "interrupted" &&
+          group.observations?.some(
+            (observation) =>
+              activityRecord(observation) &&
+              observation.has_result === false &&
+              observation.tool_call_id === result.value.tool_call_id,
+          )
+        )
       ) {
         actions.push({ ...result, args: null, results: [result], sent: null });
         data.missing = [
@@ -430,6 +641,8 @@ export async function loadActivity(
     final: [],
     complete: false,
     missing: [...first.missing],
+    usageVersion: first.usage_version,
+    requestsComplete: !first.requests_has_more,
   };
   publish({ ...data });
   if (data.run.request_count === 0) {
@@ -514,6 +727,7 @@ export async function loadActivity(
     data.requests.push(...additional);
     data.missing.push(...page.missing);
   }
+  data.requestsComplete = true;
   data.requests.sort((left, right) => left.ordinal - right.ordinal);
   if (data.requests.length !== data.run.request_count)
     throw new Error("Saved request list is incomplete");

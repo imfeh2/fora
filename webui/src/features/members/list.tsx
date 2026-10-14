@@ -40,7 +40,7 @@ import { StatePanel } from "@/components/ui/state-panel";
 import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
 import { backend, type Member } from "@/lib/backend";
-import { plural } from "@/lib/format";
+import { formatInteger, plural } from "@/lib/format";
 
 type Filter = "all" | "agents" | "humans";
 
@@ -98,8 +98,9 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
   const [doomed, setDoomed] = useState<Member | null>(null);
 
   const shown = useMemo(() => {
+    if (members === null) return null;
     const needle = query.trim().toLowerCase();
-    return members?.filter((member) => {
+    return members.filter((member) => {
       if (filter === "agents" && member.type !== "agent") return false;
       if (filter === "humans" && member.type !== "human") return false;
       return !needle || member.name.toLowerCase().includes(needle);
@@ -144,16 +145,16 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
         />
       </div>
       <PageBody>
-        {organizationError ? (
+        {organizationError && !connectionError ? (
           <LoadError
             error={organizationError}
             retry={() => void retry("organization")}
           />
         ) : null}
-        {shown ? (
+        {shown !== null ? (
           <CountPill>{plural(shown.length, COUNTED[filter])}</CountPill>
         ) : null}
-        {shown === undefined ? (
+        {shown === null ? (
           organizationError || connectionError ? null : (
             <LoadingSkeleton label="Loading Members">
               <div className="flex flex-col rounded-md border border-line bg-surface divide-y divide-line">
@@ -294,7 +295,11 @@ export function MemberCard({
   onDelete: () => void;
 }) {
   const agent = member.type === "agent";
-  const tokens = member.tokens ?? 0;
+  const tokens = member.usage_metrics
+    ? member.usage_metrics.total_tokens
+    : member.tokens === undefined
+      ? 0
+      : member.tokens;
 
   return (
     <div className="relative flex flex-col gap-2.5 p-3 border border-line rounded-md bg-app transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50">
@@ -353,15 +358,24 @@ export function MemberCard({
         {agent ? (
           <div className="flex flex-col items-end gap-1">
             <span className="tabular-nums text-fg-muted">
-              {tokens.toLocaleString()}
+              {formatInteger(tokens)}
               {tokenLimit !== null && tokenLimit > 0 ? (
                 <span> / {tokenLimit.toLocaleString()}</span>
               ) : null}
             </span>
-            {tokenLimit !== null && tokenLimit > 0 ? (
+            {member.usage_index_ready === false ? (
+              <span className="text-xs text-fg-muted">
+                Indexing saved usage
+              </span>
+            ) : null}
+            {member.usage_metrics &&
+            member.usage_metrics.total_known < member.usage_metrics.records ? (
+              <span className="text-xs text-fg-muted">Partial usage</span>
+            ) : null}
+            {tokenLimit !== null && tokenLimit > 0 && tokens !== null ? (
               <div className="w-20">
                 <Meter
-                  value={tokens}
+                  value={Math.min(Number(tokens), tokenLimit)}
                   max={tokenLimit}
                   label={`Token spend for ${member.name}`}
                 />
@@ -408,6 +422,9 @@ export function MemberRow({
       setPending(false);
     }
   };
+  const tokens = member.usage_metrics
+    ? member.usage_metrics.total_tokens
+    : member.tokens;
 
   return (
     <li className="relative flex min-w-0 min-h-12 flex-wrap items-center gap-3 px-4 py-2 hover:bg-surface-hover [@media(max-width:640px)]:grid [@media(max-width:640px)]:grid-cols-[auto_minmax(0,1fr)]">
@@ -444,13 +461,21 @@ export function MemberRow({
           ) : null}
           {agent ? (
             <span className="text-fg-muted tabular-nums wrap-anywhere">
-              {member.tokens === undefined
+              {tokens === undefined
                 ? "Token usage unavailable"
-                : `${member.tokens.toLocaleString()} tokens`}
+                : `${formatInteger(tokens)} tokens`}
               {tokenLimit !== null && tokenLimit > 0
                 ? ` / ${tokenLimit.toLocaleString()}`
                 : ""}
             </span>
+          ) : null}
+          {agent && member.usage_index_ready === false ? (
+            <span className="text-fg-muted">Indexing saved usage</span>
+          ) : null}
+          {agent &&
+          member.usage_metrics &&
+          member.usage_metrics.total_known < member.usage_metrics.records ? (
+            <span className="text-fg-muted">Partial usage</span>
           ) : null}
         </div>
       </div>

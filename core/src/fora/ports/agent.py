@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
+from fora.ports.usage import UsageCache, UsageObservation
+
 
 @dataclass(frozen=True)
 class AgentRun:
@@ -196,7 +198,27 @@ class ModelRequestRecorder(Protocol):
 class HistoryStore(Protocol):
     def usage_query(self, params: dict[str, Any]) -> dict[str, Any]: ...
 
-    def usage_read(self, record_id: str) -> dict[str, Any]: ...
+    def usage_advance(self, limit: int = 100) -> dict[str, Any]: ...
+
+    def usage_observe(
+        self,
+        params: dict[str, Any],
+        observation: UsageObservation,
+        cache: UsageCache | None = None,
+    ) -> dict[str, Any]: ...
+
+    def usage_display(
+        self,
+        observation: UsageObservation,
+        *,
+        agent_id: int | None = None,
+        sequences: Sequence[int] = (),
+        cache: UsageCache | None = None,
+    ) -> dict[str, Any]: ...
+
+    def usage_read(
+        self, record_id: str, observation: UsageObservation | None = None
+    ) -> dict[str, Any]: ...
 
     def transaction(self) -> AbstractContextManager[object]: ...
 

@@ -3582,13 +3582,13 @@ def test_sdk_setup_error_after_success_keeps_persistent_streak_clear(
             raise UnexpectedModelBehavior("request setup failed")
         return request_context
 
-    original_run = runner._agent.run
+    original_iter = runner._agent.iter
 
-    async def run_with_hooks(*args, **kwargs):
+    def iter_with_hooks(*args, **kwargs):
         kwargs["capabilities"] = [*kwargs["capabilities"], hooks]
-        return await original_run(*args, **kwargs)
+        return original_iter(*args, **kwargs)
 
-    monkeypatch.setattr(runner._agent, "run", run_with_hooks)
+    monkeypatch.setattr(runner._agent, "iter", iter_with_hooks)
     try:
         for _ in range(2):
             scheduler.resume(MAIN)

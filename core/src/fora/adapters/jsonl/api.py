@@ -15,17 +15,56 @@ from fora.adapters.model.history import (
     render_history,
     text_from_history,
 )
+from fora.adapters.model.runner import live_coverage
 from fora.adapters.voice.config import VoiceConfig
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import idle_streak
 from fora.ports.agent import HistoryWindowFilter
+from fora.ports.usage import UsageCache
 from fora.runtime.scheduler import Scheduler
 from fora.runtime_info import RuntimeInfo
 from fora.tools import AgentTools
 from fora.tools.authorize import Actor
 
 HUMAN_ID = 1
+
+
+def _render_live_page(
+    raw: str,
+    ordinal: int,
+    part_index: int,
+    epoch: str,
+    content_source: str,
+    content_version: str | None,
+    *,
+    offset: int = 0,
+    limit: int = 100,
+) -> dict[str, Any]:
+    rendered = render_history(
+        raw, source="live", request_ordinal=ordinal, offset=offset, limit=limit
+    )
+
+    def identity(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("kind") in ("text", "binary"):
+                value.update(
+                    part_index=part_index,
+                    runtime_epoch=epoch,
+                    content_source=content_source,
+                    content_version=content_version,
+                    saved=False,
+                )
+            for child in value.values():
+                identity(child)
+        elif isinstance(value, list):
+            for child in value:
+                identity(child)
+
+    identity(rendered)
+    rendered["saved"] = False
+    return rendered
+
 
 ModelProbe = Callable[[dict[str, Any], dict[str, Any] | None], dict[str, Any]]
 
@@ -52,6 +91,26 @@ def _required_integer(params: dict[str, Any], name: str) -> int:
     if value is None:
         raise DomainError("invalid_params", f"{name} is required")
     return value
+
+
+def _display_usage(metrics: dict[str, Any]) -> dict[str, int | None]:
+    return {
+        key: int(metrics[key]) if metrics[key] is not None else None
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "requests",
+            "total_tokens",
+        )
+    }
+
+
+def _usage_version(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: result[key]
+        for key in ("dataset_revision", "runtime_epoch", "live_versions", "index")
+    }
 
 
 def _history_run_payload(run: Any) -> dict[str, Any]:
@@ -195,12 +254,29 @@ class Api:
 
         def organization_get(params: dict[str, Any]) -> Any:
             del params
+            observation = self._scheduler.live.usage_capture()
             with self._reading():
                 members = self._human().list_member_records()
+                usage_data = self._scheduler.history.usage_display(
+                    observation, cache=UsageCache.current("organization")
+                )
+                grouped = {
+                    group["agent_id"]: group
+                    for group in usage_data["groups"]["agent_id"]
+                }
                 for member in members:
                     if member["type"] == "agent":
-                        usage = self._scheduler.history.usage_total(int(member["id"]))
-                        member["tokens"] = usage["total_tokens"]
+                        metrics = grouped.get(int(member["id"]))
+                        member["usage_metrics"] = metrics
+                        member["usage_index_ready"] = bool(usage_data["index"]["ready"])
+                        member["tokens"] = (
+                            int(metrics["total_tokens"])
+                            if metrics is not None
+                            and metrics["total_tokens"] is not None
+                            else None
+                            if metrics is not None
+                            else 0
+                        )
                 organization_uuid = self._human().organization_uuid()
                 statistics = self._scheduler.statistics()
             for member in members:
@@ -211,6 +287,7 @@ class Api:
                 "uuid": organization_uuid,
                 "members": members,
                 "human_id": HUMAN_ID,
+                "usage_version": _usage_version(usage_data),
                 **statistics,
             }
 
@@ -561,6 +638,169 @@ class Api:
                 "next_before": windows[-1].number if has_before else None,
             }
 
+        def agent_live(params: dict[str, Any]) -> Any:
+            agent_id = _required_integer(params, "agent_id")
+            captured = self._scheduler.live.capture(agent_id)
+            with self._reading():
+                self._human().authorize_agent_history(agent_id)
+            sequence = _integer_param(params, "sequence")
+            ordinal = _integer_param(params, "ordinal")
+            after = _integer_param(params, "after")
+            tool_after = _integer_param(params, "tool_after")
+            limit = _integer_param(params, "limit", default=30, maximum=30)
+            tool_limit = _integer_param(params, "tool_limit", default=100, maximum=100)
+            if not limit or not tool_limit:
+                raise DomainError("invalid_params", "Live limits must be positive")
+            turn = next(
+                (
+                    item
+                    for item in captured
+                    if sequence is None or item.sequence == sequence
+                ),
+                None,
+            )
+            if turn is None:
+                return {
+                    "runtime_epoch": self._scheduler.live.runtime_epoch,
+                    "turn": None,
+                }
+            candidates = tuple(
+                request
+                for request in turn.requests
+                if (ordinal is None or request.ordinal == ordinal)
+                and (after is None or request.ordinal > after)
+            )
+            selected = candidates[:limit]
+            requests = []
+            for request in selected:
+                tools = tuple(
+                    tool
+                    for tool in request.tools
+                    if tool_after is None or tool.part_index > tool_after
+                )
+                requests.append(
+                    {
+                        "ordinal": request.ordinal,
+                        "request_id": request.request_id,
+                        "started_at": request.started_at,
+                        "response_saved": request.response_saved,
+                        "has_response": request.response_json is not None,
+                        "response_version": request.response_version,
+                        "tools": [
+                            {
+                                "part_index": tool.part_index,
+                                "tool_call_id": tool.tool_call_id,
+                                "tool_name": tool.tool_name,
+                                "status": tool.status,
+                                "started_at": tool.started_at,
+                                "completed_at": tool.completed_at,
+                                "saved": tool.saved,
+                                "has_result": tool.result_json is not None,
+                                "content_version": tool.content_version,
+                            }
+                            for tool in tools[:tool_limit]
+                        ],
+                        "tools_has_more": len(tools) > tool_limit,
+                        "tools_next_after": tools[tool_limit - 1].part_index
+                        if len(tools) > tool_limit
+                        else None,
+                    }
+                )
+            return {
+                "runtime_epoch": turn.runtime_epoch,
+                "turn": {
+                    "agent_id": turn.agent_id,
+                    "sequence": turn.sequence,
+                    "run_id": turn.run_id,
+                    "live_revision": turn.live_revision,
+                    "status": turn.status,
+                    "error": turn.error,
+                    "requests": requests,
+                    "has_more": len(candidates) > limit,
+                    "next_after": selected[-1].ordinal
+                    if len(candidates) > limit
+                    else None,
+                },
+            }
+
+        def live_result(
+            params: dict[str, Any],
+        ) -> tuple[str, int, int, str, str | None]:
+            agent_id = _required_integer(params, "agent_id")
+            sequence = _required_integer(params, "sequence")
+            ordinal = _required_integer(params, "ordinal")
+            part_index = _required_integer(params, "part_index")
+            content_source = params.get("content_source", "tool")
+            if content_source not in ("tool", "response"):
+                raise DomainError("invalid_params", "Invalid live content source")
+            captured = self._scheduler.live.capture(agent_id)
+            with self._reading():
+                self._human().authorize_agent_history(agent_id)
+            epoch = params.get("runtime_epoch")
+            version = params.get("content_version")
+            if version is not None and not isinstance(version, str):
+                raise DomainError("invalid_params", "Invalid live content version")
+            if (
+                not isinstance(epoch, str)
+                or epoch != self._scheduler.live.runtime_epoch
+            ):
+                raise DomainError(
+                    "live_changed", "The runtime instance changed; refresh the Turn"
+                )
+            for turn in captured:
+                if turn.sequence != sequence:
+                    continue
+                for request in turn.requests:
+                    if request.ordinal != ordinal:
+                        continue
+                    if content_source == "response":
+                        if request.response_json is not None:
+                            if (
+                                version is not None
+                                and version != request.response_version
+                            ):
+                                raise DomainError(
+                                    "live_changed", "The response content changed"
+                                )
+                            return (
+                                request.response_json,
+                                ordinal,
+                                part_index,
+                                epoch,
+                                request.response_version,
+                            )
+                        continue
+                    for tool in request.tools:
+                        if (
+                            tool.part_index == part_index
+                            and tool.result_json is not None
+                        ):
+                            if version is not None and version != tool.content_version:
+                                raise DomainError(
+                                    "live_changed", "The tool content changed"
+                                )
+                            return (
+                                tool.result_json,
+                                ordinal,
+                                part_index,
+                                epoch,
+                                tool.content_version,
+                            )
+            raise DomainError(
+                "live_changed", "The temporary result changed; refresh the Turn"
+            )
+
+        def agent_live_read(params: dict[str, Any]) -> Any:
+            raw, ordinal, part_index, epoch, version = live_result(params)
+            return _render_live_page(
+                raw,
+                ordinal,
+                part_index,
+                epoch,
+                params.get("content_source", "tool"),
+                version,
+            )
+
         def agent_history(params: dict[str, Any]) -> Any:
             agent_id = _required_integer(params, "agent_id")
             self._human().authorize_agent_history(agent_id, include_deleted=True)
@@ -585,6 +825,7 @@ class Api:
                         "window_number must be a positive integer or null",
                     )
             filtered = window_number is not HistoryWindowFilter.ALL
+            observation = self._scheduler.live.usage_capture(agent_id)
             with self._reading():
                 self._human().authorize_agent_history(agent_id)
                 run_page = (
@@ -599,20 +840,33 @@ class Api:
                         agent_id, before=before, limit=limit
                     )
                 )
+                runs = run_page[:limit]
                 window_page = self._scheduler.history.window_events(
                     agent_id,
                     after=windows_after,
                     limit=windows_limit + 1,
                     include_context=False,
                 )
+                usage_data = self._scheduler.history.usage_display(
+                    observation,
+                    agent_id=agent_id,
+                    sequences=[run.sequence for run in runs],
+                    cache=UsageCache.current("history"),
+                )
             windows = window_page[:windows_limit]
             has_more_windows = len(window_page) > windows_limit
-            runs = run_page[:limit]
             has_before = len(run_page) > limit if filtered else len(runs) == limit
             return {
                 "agent_id": agent_id,
                 **({"window_number": window_number} if filtered else {}),
-                "runs": [_history_run_payload(run) for run in runs],
+                "runs": [
+                    {
+                        **_history_run_payload(run),
+                        "usage_metrics": usage_data["turns"].get(run.sequence),
+                    }
+                    for run in runs
+                ],
+                "usage_version": _usage_version(usage_data),
                 "windows": [_window_event_payload(event) for event in windows],
                 "has_before": has_before,
                 "next_before": runs[-1].sequence if has_before else None,
@@ -805,16 +1059,85 @@ class Api:
             return result
 
         def agent_history_read(params: dict[str, Any]) -> Any:
+            agent_id = _required_integer(params, "agent_id")
+            sequence = _required_integer(params, "sequence")
+            captured = self._scheduler.live.capture(agent_id)
+            observation = self._scheduler.live.usage_capture(agent_id, turns=captured)
             with self._reading():
                 result = agent_history_read_data(params)
+                usage_data = self._scheduler.history.usage_display(
+                    observation,
+                    agent_id=agent_id,
+                    sequences=[sequence],
+                    cache=UsageCache.current("history"),
+                )
+            result["run"]["usage_metrics"] = usage_data["turns"].get(sequence)
+            result["usage_version"] = _usage_version(usage_data)
             request = result.get("request")
             if request is not None:
                 ordinal = request["summary"]["ordinal"]
+                turn = next(
+                    (item for item in captured if item.sequence == sequence), None
+                )
+                live_request = (
+                    next(
+                        (
+                            item
+                            for item in turn.requests
+                            if item.ordinal == ordinal
+                            and item.request_id == request["summary"]["request_id"]
+                        ),
+                        None,
+                    )
+                    if turn is not None
+                    else None
+                )
+                response_saved = request["response"] is not None
+                if live_request is not None and turn is not None:
+                    stored = tuple(
+                        raw
+                        for source in ("response", "related")
+                        if request[source] is not None and request[source].offset == 0
+                        for raw in request[source].messages
+                    )
+                    coverage = live_coverage(stored, turn)
+                    response_saved = live_request.response_saved or any(
+                        item.handle.ordinal == ordinal
+                        and item.handle.request_id == live_request.request_id
+                        and item.response_version is not None
+                        and item.response_version == live_request.response_version
+                        for item in coverage
+                    )
+                    request["observation"] = {
+                        "runtime_epoch": turn.runtime_epoch,
+                        "live_revision": turn.live_revision,
+                        "request_id": live_request.request_id,
+                    }
                 for source in ("input", "response", "related"):
                     if request[source] is not None:
                         request[source] = _render_message_page(
                             request[source], source, ordinal
                         )
+                request["response_saved"] = response_saved
+                if (
+                    live_request is not None
+                    and turn is not None
+                    and not response_saved
+                    and live_request.response_json is not None
+                ):
+                    request["response"] = _render_live_page(
+                        live_request.response_json,
+                        ordinal,
+                        0,
+                        turn.runtime_epoch,
+                        "response",
+                        live_request.response_version,
+                        offset=int(params.get("response_offset", 0)),
+                        limit=int(params.get("response_limit", 100)),
+                    )
+                    result["missing"] = [
+                        item for item in result["missing"] if item != "model_response"
+                    ]
                 for source in ("parameters", "settings", "model"):
                     request[source] = _render_model_field_page(
                         request[source], source, ordinal
@@ -831,6 +1154,7 @@ class Api:
                 "input",
                 "response",
                 "related",
+                "live",
                 "parameters",
                 "settings",
                 "model",
@@ -859,6 +1183,11 @@ class Api:
                     agent_id, sequence, ordinal, source, offset, limit
                 )
                 return partial(_render_model_field_page, page, source, ordinal)
+            if source == "live":
+                live_raw, _, _, _, _ = live_result(params)
+                return partial(
+                    text_from_history, live_raw, message_index, path, offset, limit
+                )
             raw = (
                 self._scheduler.history.run_messages(agent_id, sequence)
                 if source == "run"
@@ -878,6 +1207,8 @@ class Api:
             return partial(text_from_history, raw, index, path, offset, limit)
 
         def agent_history_text(params: dict[str, Any]) -> Any:
+            if params.get("source") == "live":
+                return agent_history_text_data(params)()
             with self._reading():
                 render = agent_history_text_data(params)
             return render()
@@ -887,7 +1218,7 @@ class Api:
             self._human().authorize_agent_history(agent_id, include_deleted=True)
             sequence = _required_integer(params, "sequence")
             source = params.get("source")
-            if source not in ("run", "input", "response", "related"):
+            if source not in ("run", "input", "response", "related", "live"):
                 raise DomainError("invalid_params", "source is invalid")
             message_index = _required_integer(params, "message_index")
             path = params.get("path")
@@ -897,6 +1228,9 @@ class Api:
             ):
                 raise DomainError("invalid_params", "path must be a list")
             ordinal = _integer_param(params, "ordinal")
+            if source == "live":
+                live_raw, _, _, _, _ = live_result(params)
+                return live_raw, message_index, path
             raw = (
                 self._scheduler.history.run_messages(agent_id, sequence)
                 if source == "run"
@@ -919,8 +1253,11 @@ class Api:
             )
 
         def agent_history_image(params: dict[str, Any]) -> Any:
-            with self._reading():
+            if params.get("source") == "live":
                 data = agent_history_image_data(params)
+            else:
+                with self._reading():
+                    data = agent_history_image_data(params)
             image = binary_from_history(*data)
             return {
                 "media_type": image.media_type,
@@ -931,6 +1268,7 @@ class Api:
 
         def agent_detail(params: dict[str, Any]) -> Any:
             agent_id = int(params["agent_id"])
+            observation = self._scheduler.live.usage_capture(agent_id)
             status = self._scheduler.agent_status(agent_id)
             with self._reading():
                 self._human().authorize_agent_history(agent_id)
@@ -943,7 +1281,13 @@ class Api:
                     else ()
                 )
                 window = self._scheduler.history.window(agent_id)
-                usage = self._scheduler.history.usage_total(agent_id)
+                usage_data = self._scheduler.history.usage_display(
+                    observation,
+                    agent_id=agent_id,
+                    sequences=[run.sequence for run in runs],
+                    cache=UsageCache.current("detail"),
+                )
+                usage = _display_usage(usage_data["summary"])
                 pause_reason = self._scheduler.history.pause_reason(agent_id)
                 no_tool_streak = self._scheduler.history.no_tool_streak(agent_id)
             produced: dict[int, list[dict[str, Any]]] = {}
@@ -970,6 +1314,8 @@ class Api:
                 "window": _window_event_payload(window),
                 "workspace": self._human().list_workspace(agent_id=agent_id),
                 "usage": usage,
+                "usage_metrics": usage_data["summary"],
+                "usage_version": _usage_version(usage_data),
                 **statistics,
                 "pause_reason": pause_reason,
                 "no_tool_streak": no_tool_streak,
@@ -987,6 +1333,7 @@ class Api:
                         "window_reason": run.window_reason,
                         "request_count": run.request_count,
                         "usage": run.usage_json,
+                        "usage_metrics": usage_data["turns"].get(run.sequence),
                         "error": run.error,
                         "effects": produced.get(run.sequence, []),
                         "reminded": [
@@ -997,6 +1344,26 @@ class Api:
                     for run in runs
                 ],
             }
+
+        def usage_query(params: dict[str, Any]) -> Any:
+            observation = self._scheduler.live.usage_capture()
+            with self._reading():
+                return self._human().usage_query(
+                    params, observation, UsageCache.current("usage")
+                )
+
+        def usage_read(params: dict[str, Any]) -> Any:
+            observation = self._scheduler.live.usage_capture()
+            with self._reading():
+                return self._human().usage_read(params["record_id"], observation)
+
+        def usage_advance(params: dict[str, Any]) -> Any:
+            result = self._human().usage_advance(params.get("limit", 100))
+            self._dispatcher.emit(
+                "usage.index_updated",
+                {"dataset_revision": result["revision"], "ready": result["ready"]},
+            )
+            return result
 
         def settings_get(params: dict[str, Any]) -> Any:
             section = str(params.get("section", "model"))
@@ -1052,6 +1419,7 @@ class Api:
                 reads=(
                     member_set,
                     model_settings,
+                    Resource("history"),
                     Resource("settings", "agent"),
                     Resource("settings", "execution"),
                 )
@@ -1169,14 +1537,23 @@ class Api:
         )
         register(
             "usage.query",
-            lambda params: self._human().usage_query(params),
+            usage_query,
             scope=lambda params: RequestScope(reads=(member_set, Resource("history"))),
         )
         register(
             "usage.read",
-            lambda params: self._human().usage_read(params["record_id"]),
+            usage_read,
             scope=lambda params: RequestScope(reads=(member_set, Resource("history"))),
         )
+        register(
+            "usage.advance",
+            usage_advance,
+            scope=lambda params: RequestScope(
+                reads=(member_set,), writes=(Resource("history"),)
+            ),
+        )
+        register("agent.live", agent_live, scope=agent_query)
+        register("agent.live.read", agent_live_read, scope=agent_query)
         register("agent.detail", agent_detail, scope=detail_scope)
         register("agent.history", agent_history, scope=agent_query)
         register("agent.history.windows", agent_history_windows, scope=agent_query)

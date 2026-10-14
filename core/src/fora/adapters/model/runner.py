@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -11,6 +12,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequen
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
+from datetime import UTC, datetime
 from functools import wraps
 from traceback import walk_tb
 from typing import Any, Literal, NotRequired, TypedDict, cast, get_type_hints
@@ -34,6 +36,7 @@ from pydantic_ai.capabilities import (
     AgentNode,
     Hooks,
     NodeResult,
+    WrapNodeRunHandler,
     WrapToolExecuteHandler,
 )
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
@@ -48,6 +51,7 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 from pydantic_ai.messages import (
+    FunctionToolResultEvent,
     InstructionPart,
     ModelMessage,
     ModelRequest,
@@ -80,6 +84,7 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.run import AgentRun
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
@@ -102,6 +107,7 @@ from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, bounded_text
 from fora.ports.agent import ModelRequestHandle, ModelRequestRecorder, SettingsStore
+from fora.ports.live import LiveRequestCoverage, LiveTool, LiveTurn, LiveTurnObserver
 from fora.runtime.reminder import (
     HistoryPersistenceError,
     HistoryValidationError,
@@ -432,6 +438,7 @@ class LiveModel(WrapperModel):
         agents_instructions: str | None = None,
         request_recorder: ModelRequestRecorder | None = None,
         model_snapshot: dict[str, Any] | None = None,
+        live_observer: LiveTurnObserver | None = None,
     ) -> None:
         self._resolve = resolve
         self._ephemeral = ephemeral
@@ -439,6 +446,9 @@ class LiveModel(WrapperModel):
         self._agents_instructions = agents_instructions
         self._request_recorder = request_recorder
         self._model_snapshot = model_snapshot or {}
+        self._live_observer = live_observer
+        self._tools: dict[int, LiveTool] = {}
+        self._response_version: str | None = None
         self._last_request_handle: ModelRequestHandle | None = None
         self._last_response: ModelResponse | None = None
         self.current_request_handle: ModelRequestHandle | None = None
@@ -544,6 +554,60 @@ class LiveModel(WrapperModel):
         if not related:
             return
         assert handle is not None
+        result_positions: dict[int, list[tuple[int, int]]] = {}
+        used_positions: set[tuple[int, int]] = set()
+        for tool in self._tools.values():
+            positions = []
+            if tool.result_json is not None:
+                result = ModelMessagesTypeAdapter.validate_json(tool.result_json)[0]
+                for expected in result.parts:
+                    position = next(
+                        (
+                            (message_index, part_index)
+                            for message_index, message in enumerate(related)
+                            for part_index, part in enumerate(message.parts)
+                            if (message_index, part_index) not in used_positions
+                            and _part_content(part) == _part_content(expected)
+                        ),
+                        None,
+                    )
+                    if position is None:
+                        break
+                    positions.append(position)
+                    used_positions.add(position)
+                else:
+                    result_positions[tool.part_index] = positions
+            else:
+                result_positions[tool.part_index] = positions
+        observations = [
+            {
+                "request_ordinal": handle.ordinal,
+                "part_index": tool.part_index,
+                "tool_call_id": tool.tool_call_id,
+                "tool_name": tool.tool_name,
+                "started_at": tool.started_at,
+                "completed_at": tool.completed_at,
+                "status": tool.status,
+                "content_version": tool.content_version,
+                "result_positions": result_positions[tool.part_index],
+                "has_result": tool.result_json is not None,
+            }
+            for tool in self._tools.values()
+            if tool.part_index in result_positions
+            and (tool.started_at is not None or tool.completed_at is not None)
+        ]
+        first = related[0]
+        metadata = dict(first.metadata or {})
+        fora = dict(metadata.get("fora") or {})
+        first.metadata = {
+            **metadata,
+            "fora": {
+                **fora,
+                "request_id": handle.request_id,
+                "request_ordinal": handle.ordinal,
+                "tool_observations": observations,
+            },
+        }
         try:
             self._request_recorder.related(
                 handle,
@@ -556,8 +620,72 @@ class LiveModel(WrapperModel):
                 "Could not save the related tool results"
             ) from error
 
+        if self._live_observer is not None:
+            self._live_observer.saved(_related_coverage(handle, related))
+        self._tools.clear()
+
     def finalize(self, messages: list[ModelMessage]) -> None:
+        self.cancel_tools()
         self._link_related(messages)
+
+    def _publish_tool(self, tool: LiveTool) -> None:
+        tool = replace(tool, content_version=_tool_version(tool))
+        self._tools[tool.part_index] = tool
+        if self._live_observer is not None and self.current_request_handle is not None:
+            self._live_observer.tool(self.current_request_handle, tool)
+
+    def tool_started(self, call: ToolCallPart) -> None:
+        response = self.current_response
+        if response is None or self.current_request_handle is None:
+            return
+        index = next(index for index, part in enumerate(response.parts) if part is call)
+        tool = self._tools[index]
+        self._publish_tool(
+            replace(tool, status="running", started_at=datetime.now(UTC).isoformat())
+        )
+
+    def tool_result(self, event: FunctionToolResultEvent) -> None:
+        if self.current_request_handle is None:
+            return
+        tool = next(
+            tool
+            for tool in self._tools.values()
+            if tool.tool_call_id == event.tool_call_id
+            and tool.tool_name == event.part.tool_name
+            and tool.status in ("queued", "running")
+        )
+        part = event.part
+        status: Literal["completed", "failed", "cancelled"] = (
+            "failed"
+            if isinstance(part, RetryPromptPart)
+            or isinstance(part, ToolReturnPart)
+            and part.outcome in ("failed", "denied")
+            else "cancelled"
+            if isinstance(part, ToolReturnPart) and part.outcome == "interrupted"
+            else "completed"
+        )
+        result_parts: list[ToolReturnPart | RetryPromptPart | UserPromptPart] = [part]
+        if event.content is not None:
+            result_parts.append(UserPromptPart(event.content))
+        self._publish_tool(
+            replace(
+                tool,
+                status=status,
+                completed_at=datetime.now(UTC).isoformat(),
+                result_json=_encode_history([ModelRequest(parts=result_parts)]),
+            )
+        )
+
+    def cancel_tools(self) -> None:
+        for tool in tuple(self._tools.values()):
+            if tool.status in ("queued", "running"):
+                self._publish_tool(
+                    replace(
+                        tool,
+                        status="cancelled",
+                        completed_at=datetime.now(UTC).isoformat(),
+                    )
+                )
 
     def _start_request(
         self,
@@ -577,13 +705,19 @@ class LiveModel(WrapperModel):
             "provider": wrapped.system,
         }
         try:
-            return self._request_recorder.start(
+            model_json = _encode_json(model_snapshot)
+            handle = self._request_recorder.start(
                 _encode_messages(messages),
                 _encode_request_parameters(parameters),
                 _encode_json(model_settings or {}),
-                _encode_json(model_snapshot),
+                model_json,
                 streaming,
             )
+            if self._live_observer is not None:
+                self._live_observer.started(
+                    handle, datetime.now(UTC).isoformat(), model_json
+                )
+            return handle
         except HistoryPersistenceError:
             raise
         except Exception as error:
@@ -609,16 +743,59 @@ class LiveModel(WrapperModel):
         }
         if handle is None or self._request_recorder is None:
             return
+        self._tools = {
+            index: LiveTool(index, part.tool_call_id, part.tool_name)
+            for index, part in enumerate(response.parts)
+            if isinstance(part, ToolCallPart)
+        }
+        metadata = dict(response.metadata or {})
+        response.metadata = {
+            **metadata,
+            "fora": {
+                **dict(metadata.get("fora") or {}),
+                "request_id": handle.request_id,
+                "request_ordinal": handle.ordinal,
+            },
+        }
+        self.observe_response(response)
+        response_json = _encode_history([response])
+        response_version = _response_version(response)
         try:
-            self._request_recorder.response(handle, _encode_messages([response]))
+            self._request_recorder.response(handle, (response_json,))
         except HistoryPersistenceError:
             raise
         except Exception as error:
             raise HistoryPersistenceError(
                 "Could not save the model response snapshot"
             ) from error
+        if self._live_observer is not None:
+            self._live_observer.saved((LiveRequestCoverage(handle, response_version),))
         self._last_request_handle = handle
         self._last_response = response
+
+    def observe_response(self, response: ModelResponse) -> None:
+        handle = self.current_request_handle
+        if handle is None or self._live_observer is None:
+            return
+        version = _response_version(response)
+        if version != self._response_version:
+            self._response_version = version
+            self._live_observer.response(
+                handle,
+                _encode_json(response.usage),
+                tuple(self._tools.values()),
+                _encode_history([response]),
+                version,
+                _encode_json((response.metadata or {}).get("fora_usage", {})),
+                response.timestamp.isoformat(),
+            )
+
+    def response_checkpoint(self, response: ModelResponse) -> None:
+        handle = self.current_request_handle
+        if handle is not None and self._live_observer is not None:
+            self._live_observer.saved(
+                (LiveRequestCoverage(handle, _response_version(response)),)
+            )
 
     def _record_error(
         self, handle: ModelRequestHandle | None, error: BaseException
@@ -674,6 +851,7 @@ class LiveModel(WrapperModel):
         settings = self._caching(wrapped, model_settings)
         handle = self._start_request(wrapped, outgoing, settings, parameters, False)
         self.current_request_handle = handle
+        self._response_version = None
         self.current_response = None
         self.model_failure = None
         try:
@@ -699,6 +877,7 @@ class LiveModel(WrapperModel):
         settings = self._caching(wrapped, model_settings)
         handle = self._start_request(wrapped, outgoing, settings, parameters, True)
         self.current_request_handle = handle
+        self._response_version = None
         self.current_response = None
         self.model_failure = None
         try:
@@ -718,7 +897,40 @@ class LiveModel(WrapperModel):
             self._record_response(handle, completed)
 
 
+def live_coverage(
+    raw: str | Sequence[str], turn: LiveTurn
+) -> tuple[LiveRequestCoverage, ...]:
+    messages = [
+        message
+        for value in ((raw,) if isinstance(raw, str) else raw)
+        for message in ModelMessagesTypeAdapter.validate_json(value)
+    ]
+    identities = {(request.ordinal, request.request_id) for request in turn.requests}
+    coverage = []
+    for index, message in enumerate(messages):
+        fora = (message.metadata or {}).get("fora") or {}
+        identity = (fora.get("request_ordinal"), fora.get("request_id"))
+        if identity not in identities:
+            continue
+        handle = ModelRequestHandle(*identity)
+        if isinstance(message, ModelResponse):
+            coverage.append(LiveRequestCoverage(handle, _response_version(message)))
+        elif isinstance(message, ModelRequest):
+            related = []
+            for following in messages[index:]:
+                if not isinstance(following, ModelRequest):
+                    break
+                related.append(following)
+            coverage.extend(_related_coverage(handle, related))
+    return tuple(coverage)
+
+
 class PydanticModelRunner:
+    def live_coverage(
+        self, raw: str, turn: LiveTurn
+    ) -> tuple[LiveRequestCoverage, ...]:
+        return live_coverage(raw, turn)
+
     def __init__(
         self,
         settings: SettingsStore,
@@ -997,18 +1209,20 @@ class PydanticModelRunner:
         ) -> Any:
             return _guard(lambda: ctx.deps.run(argv, cwd, timeout))
 
-        @tool(sequential=True)
+        @tool(
+            sequential=True,
+            description=(
+                "Edit one file using one or more replacements from its original content. "
+                "For creation, pass create=true with one edits item whose old_text is empty. "
+                "The sole edit's new_text is the complete file body."
+            ),
+        )
         def edit(
             ctx: RunContext[AgentTools],
             path: str,
             edits: list[EditOperation],
             create: bool = False,
         ) -> Any:
-            """Edit one file using one or more replacements from its original content.
-
-            For creation, pass create=true with one edits item whose old_text is empty.
-            The sole edit's new_text is the complete file body.
-            """
             return _guard(lambda: ctx.deps.edit(path, edits, create))
 
         @tool(sequential=True)
@@ -1114,6 +1328,7 @@ class PydanticModelRunner:
         if agents_instructions is not None and not isinstance(agents_instructions, str):
             raise ValueError("Invalid AGENTS.md snapshot in resident history")
         hooks: Hooks[AgentTools] = Hooks()
+        agent_run: AgentRun[AgentTools, str] | None = None
 
         @hooks.on.tool_execute
         async def tool_context(
@@ -1126,6 +1341,8 @@ class PydanticModelRunner:
         ) -> Any:
             token = _tool_call.set((request.agent_id, request.sequence, call))
             try:
+                if live_model is not None:
+                    live_model.tool_started(call)
                 return await handler(args)
             finally:
                 _tool_call.reset(token)
@@ -1160,7 +1377,7 @@ class PydanticModelRunner:
                     for message in reversed(request_context.messages)
                     if isinstance(message, ModelRequest)
                     and message.metadata is not None
-                    and "fora" in message.metadata
+                    and "environment" in message.metadata.get("fora", {})
                 ),
                 None,
             )
@@ -1188,12 +1405,43 @@ class PydanticModelRunner:
             request_context: ModelRequestContext,
             response: ModelResponse,
         ) -> ModelResponse:
+            if live_model is not None:
+                live_model.observe_response(response)
             _persist_history(request, _settle_tool_calls([*ctx.messages, response]))
+            if live_model is not None:
+                live_model.response_checkpoint(response)
             return response
 
         counted = RunUsage()
         live_model: LiveModel | None = None
         node_request_handle: ModelRequestHandle | None = None
+
+        @hooks.on.node_run
+        async def observe_tools(
+            ctx: RunContext[AgentTools],
+            *,
+            node: AgentNode[AgentTools],
+            handler: WrapNodeRunHandler[AgentTools],
+        ) -> NodeResult[AgentTools]:
+            if isinstance(node, CallToolsNode):
+                assert agent_run is not None
+                try:
+                    _validate_tool_call_ids(
+                        node.model_response,
+                        live_model.current_request_handle
+                        if live_model is not None
+                        else None,
+                    )
+                    async with node.stream(agent_run.ctx) as events:
+                        async for event in events:
+                            if isinstance(event, FunctionToolResultEvent):
+                                assert live_model is not None
+                                live_model.tool_result(event)
+                except BaseException:
+                    if live_model is not None:
+                        live_model.cancel_tools()
+                    raise
+            return await handler(node)
 
         @hooks.on.before_node_run
         async def track_node(
@@ -1245,7 +1493,7 @@ class PydanticModelRunner:
             raise error
 
         async def once() -> Any:
-            nonlocal live_model
+            nonlocal live_model, agent_run
             async with AsyncExitStack() as resources:
                 model = await resources.enter_async_context(self._build_model(config))
                 wrapper = LiveModel(
@@ -1264,10 +1512,11 @@ class PydanticModelRunner:
                         "thinking": config.thinking,
                         "thinking_budget_tokens": config.thinking_budget_tokens,
                     },
+                    request.live_observer,
                 )
                 live_model = wrapper
 
-                return await self._agent.run(
+                async with self._agent.iter(
                     request.prompt,
                     usage=counted,
                     usage_limits=usage_limits,
@@ -1282,7 +1531,12 @@ class PydanticModelRunner:
                             else []
                         ),
                     ],
-                )
+                ) as active_run:
+                    agent_run = active_run
+                    async for _node in active_run:
+                        pass
+                    assert active_run.result is not None
+                    return active_run.result
 
         trace = TurnTrace.of(request)
         history_length = len(history)
@@ -1381,6 +1635,34 @@ def _cache_key(history: list[ModelMessage]) -> str:
     return uuid.uuid4().hex
 
 
+def _validate_tool_call_ids(
+    response: ModelResponse, handle: ModelRequestHandle | None
+) -> None:
+    positions: dict[str, list[int]] = {}
+    for index, part in enumerate(response.parts):
+        if isinstance(part, ToolCallPart):
+            positions.setdefault(part.tool_call_id, []).append(index)
+    conflicts = {
+        call_id: indexes for call_id, indexes in positions.items() if len(indexes) > 1
+    }
+    if not conflicts:
+        return
+    metadata = dict(response.metadata or {})
+    response.metadata = {
+        **metadata,
+        "fora": {**dict(metadata.get("fora") or {}), "tool_batch_rejected": True},
+    }
+    diagnostic = "; ".join(
+        f"diagnostic_id={call_id!r}, part_indexes={indexes}"
+        for call_id, indexes in conflicts.items()
+    )
+    raise UnexpectedModelBehavior(
+        "Duplicate tool_call_id in a model response; "
+        f"request_id={handle.request_id if handle is not None else None}, "
+        f"request_ordinal={handle.ordinal if handle is not None else None}; {diagnostic}"
+    )
+
+
 def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
     if not messages:
         return messages
@@ -1399,7 +1681,10 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
         ToolReturnPart(
             tool_name=call.tool_name,
             tool_call_id=call.tool_call_id,
-            content="The Turn ended without a confirmed result for this call. It may have executed; check the outcome before retrying.",
+            content="The tool batch was rejected because the response contains duplicate tool_call_id values. No tool was started."
+            if (response.metadata or {}).get("fora", {}).get("tool_batch_rejected")
+            else "The Turn ended without a confirmed result for this call. It may have executed; check the outcome before retrying.",
+            outcome="interrupted",
         )
         for call in response.parts
         if isinstance(call, ToolCallPart) and call.tool_call_id not in answered
@@ -1416,6 +1701,85 @@ def _decode_history(raw: str) -> list[ModelMessage]:
         return ModelMessagesTypeAdapter.validate_json(raw)
     except ValueError as error:
         raise HistoryValidationError("Stored model history is invalid") from error
+
+
+def _content_version(value: Any) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _part_content(part: Any) -> Any:
+    message = ModelRequest(parts=[part])
+    value = json.loads(_encode_history([message]))[0]["parts"][0]
+    if isinstance(part, UserPromptPart):
+        value.pop("timestamp", None)
+    return value
+
+
+def _response_version(response: ModelResponse) -> str:
+    value = json.loads(_encode_history([response]))[0]
+    value.pop("metadata", None)
+    value.pop("run_id", None)
+    value.pop("conversation_id", None)
+    return _content_version(value)
+
+
+def _tool_version(tool: LiveTool) -> str:
+    parts = None
+    if tool.result_json is not None:
+        result = ModelMessagesTypeAdapter.validate_json(tool.result_json)[0]
+        parts = [_part_content(part) for part in result.parts]
+    return _content_version(
+        {
+            "tool_call_id": tool.tool_call_id,
+            "tool_name": tool.tool_name,
+            "status": tool.status,
+            "started_at": tool.started_at,
+            "completed_at": tool.completed_at,
+            "parts": parts,
+        }
+    )
+
+
+def _related_coverage(
+    handle: ModelRequestHandle, related: Sequence[ModelRequest]
+) -> tuple[LiveRequestCoverage, ...]:
+    fora = (related[0].metadata or {}).get("fora") or {}
+    if (fora.get("request_ordinal"), fora.get("request_id")) != (
+        handle.ordinal,
+        handle.request_id,
+    ):
+        return ()
+    versions = []
+    for observation in fora.get("tool_observations", []):
+        positions = observation["result_positions"]
+        if any(
+            message_index < 0
+            or message_index >= len(related)
+            or part_index < 0
+            or part_index >= len(related[message_index].parts)
+            for message_index, part_index in positions
+        ):
+            continue
+        parts = [
+            related[message_index].parts[part_index]
+            for message_index, part_index in positions
+        ]
+        tool = LiveTool(
+            part_index=observation["part_index"],
+            tool_call_id=observation["tool_call_id"],
+            tool_name=observation["tool_name"],
+            status=observation["status"],
+            started_at=observation["started_at"],
+            completed_at=observation["completed_at"],
+            result_json=_encode_history([ModelRequest(parts=parts)])
+            if observation["has_result"]
+            else None,
+        )
+        version = _tool_version(tool)
+        if version == observation["content_version"]:
+            versions.append((tool.part_index, version))
+    return (LiveRequestCoverage(handle, tools=tuple(versions)),)
 
 
 def _encode_json(value: Any) -> str:

@@ -54,6 +54,8 @@ import { UsagePage } from "@/features/usage";
 import { BackendError, backend } from "@/lib/backend";
 import "@/styles/App.css";
 
+type ApplicationResource = "organization" | "discussions";
+
 function View({
   route,
   tokenLimit,
@@ -230,7 +232,7 @@ function Chrome({
         open: drawerOpen,
         onOpenChange: setDrawerOpen,
         onClosed: drawerClosed,
-        unread,
+        unread: unread ?? 0,
         trigger: menuTrigger,
         desktop: desktopNavigation,
         restoreFocus: restoreNavigationFocus,
@@ -298,11 +300,12 @@ function Chrome({
                   ))}
                 </li>
               ) : null}
-              {discussions.error && route.name !== "discussions" ? (
+              {discussions.error && !failure && route.name !== "discussions" ? (
                 <li className="px-4 py-2 text-xs">
                   <p>{discussions.error.message}</p>
                   <Button
                     size="sm"
+                    disabled={discussions.refreshing}
                     onClick={() =>
                       void application.retryResource("discussions")
                     }
@@ -356,7 +359,10 @@ function Chrome({
         </Sidebar>
       }
     >
-      {organization.error && route.name !== "members" && !regionError ? (
+      {organization.error &&
+      !failure &&
+      route.name !== "members" &&
+      !regionError ? (
         <div className="px-8">
           <LoadError
             error={organization.error}
@@ -388,7 +394,7 @@ function Chrome({
             reconnect={() => void retry()}
             waiting={reconnecting || loading}
           />
-        ) : regionError ? (
+        ) : regionError && !failure ? (
           <AccessError
             error={regionError}
             loadingData
@@ -422,15 +428,61 @@ export function useApplication() {
   } = useResource(discussionsRead);
   const [failure, setFailure] = useState<BackendError | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
-  const loading = organization.refreshing || discussions.refreshing;
+  const [indexError, setIndexError] = useState<BackendError | null>(null);
   const booted = useRef(false);
   const live = useRef(false);
   const generation = useRef(0);
+  const timers = useRef<
+    Partial<Record<ApplicationResource, ReturnType<typeof setTimeout>>>
+  >({});
+  const pending = useRef<Partial<Record<ApplicationResource, Promise<void>>>>(
+    {},
+  );
+  const joined = useRef<Promise<void> | null>(null);
   const automaticRecovery = useRef(false);
+  const loading = organization.refreshing || discussions.refreshing;
 
-  const refresh = useCallback(async () => {
-    await Promise.all([refreshOrganization(), refreshDiscussions()]);
-  }, [refreshOrganization, refreshDiscussions]);
+  const refreshResource = useCallback(
+    (resource: ApplicationResource, changed = false) => {
+      const timer = timers.current[resource];
+      if (timer !== undefined) clearTimeout(timer);
+      delete timers.current[resource];
+      const operation =
+        resource === "organization"
+          ? refreshOrganization(changed)
+          : refreshDiscussions(changed);
+      pending.current[resource] = operation;
+      void operation.finally(() => {
+        if (pending.current[resource] === operation)
+          delete pending.current[resource];
+      });
+      return operation;
+    },
+    [refreshOrganization, refreshDiscussions],
+  );
+
+  const refreshOrganizationResource = useCallback(
+    (changed = false) => refreshResource("organization", changed),
+    [refreshResource],
+  );
+  const refreshDiscussionsResource = useCallback(
+    (changed = false) => refreshResource("discussions", changed),
+    [refreshResource],
+  );
+
+  const refresh = useCallback(() => {
+    if (joined.current) return joined.current;
+    const operation = Promise.all([
+      refreshResource("organization"),
+      refreshResource("discussions"),
+    ])
+      .then(() => {})
+      .finally(() => {
+        if (joined.current === operation) joined.current = null;
+      });
+    joined.current = operation;
+    return operation;
+  }, [refreshResource]);
 
   const retry = useCallback((): Promise<void> => {
     if (backend.disconnected)
@@ -439,19 +491,22 @@ export function useApplication() {
   }, [refresh]);
 
   const retryResource = useCallback(
-    (resource: "organization" | "discussions") => {
+    (resource: ApplicationResource) => {
       if (backend.disconnected) return retry();
-      return resource === "organization"
-        ? refreshOrganization()
-        : refreshDiscussions();
+      if (resource === "organization") setIndexError(null);
+      return refreshResource(resource);
     },
-    [retry, refreshOrganization, refreshDiscussions],
+    [refreshResource, retry],
   );
 
   useEffect(() => {
     live.current = true;
     const invalidate = () => {
       generation.current += 1;
+      pending.current = {};
+      for (const timer of Object.values(timers.current)) clearTimeout(timer);
+      timers.current = {};
+      joined.current = null;
       invalidateOrganization(false);
       invalidateDiscussions(false);
     };
@@ -470,7 +525,8 @@ export function useApplication() {
         error.operation !== null &&
         (REGION_READ_OPERATIONS.has(error.operation) ||
           error.operation === "organization.get" ||
-          error.operation === "discussion.list")
+          error.operation === "discussion.list" ||
+          error.operation === "usage.advance")
       )
         return;
       if (
@@ -512,25 +568,41 @@ export function useApplication() {
         dismissToast(CONNECTION_TOAST);
         setReconnecting(false);
         setFailure(null);
+        setIndexError(null);
         invalidateOrganization(true);
         invalidateDiscussions(true);
         void refresh();
         return;
       }
+      if (backend.disconnected) return;
+      const resources: ApplicationResource[] = [];
       if (
         event.type === "organization.changed" ||
         event.type === "settings.updated" ||
         event.type.startsWith("member.") ||
-        event.type.startsWith("turn.") ||
+        event.type === "usage.updated" ||
+        event.type === "usage.index_updated" ||
+        event.type === "turn.started" ||
+        event.type === "turn.finished"
+      )
+        resources.push("organization");
+      if (
         event.type === "message.created" ||
         event.type === "discussion.read_updated" ||
         event.type === "mention.acked" ||
         event.type === "mention.revoked" ||
         event.type === "discussion.created" ||
         event.type === "discussion.updated"
-      ) {
-        void refreshOrganization(true);
-        void refreshDiscussions(true);
+      )
+        resources.push("discussions");
+      for (const resource of resources) {
+        if (pending.current[resource] || event.type === "turn.finished")
+          void refreshResource(resource, true);
+        else if (timers.current[resource] === undefined)
+          timers.current[resource] = setTimeout(() => {
+            delete timers.current[resource];
+            void refreshResource(resource, true);
+          }, 150);
       }
     });
     window.addEventListener("online", recover);
@@ -565,19 +637,48 @@ export function useApplication() {
       offFailure();
       window.removeEventListener("online", recover);
       document.removeEventListener("visibilitychange", recover);
-      dismissToast("application-data");
       dismissToast(CONNECTION_TOAST);
     };
-  }, [
-    refresh,
-    refreshOrganization,
-    refreshDiscussions,
-    invalidateOrganization,
-    invalidateDiscussions,
-  ]);
+  }, [refresh, refreshResource, invalidateOrganization, invalidateDiscussions]);
+
+  useEffect(() => {
+    if (
+      !organization.data?.usage_version ||
+      organization.data.usage_version.index.ready ||
+      organization.error ||
+      indexError ||
+      backend.disconnected
+    )
+      return;
+    let active = true;
+    const epoch = generation.current;
+    void backend.usageAdvance().then(
+      () => {
+        if (active && live.current && epoch === generation.current)
+          void refreshResource("organization", true);
+      },
+      (error: unknown) => {
+        if (active && live.current && epoch === generation.current)
+          setIndexError(
+            error instanceof BackendError
+              ? error
+              : new BackendError(
+                  "request_failed",
+                  error instanceof Error ? error.message : String(error),
+                ),
+          );
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [organization.data, organization.error, indexError, refreshResource]);
 
   return {
-    organization,
+    organization:
+      indexError && organization.status === "ready"
+        ? { ...organization, error: organization.error ?? indexError }
+        : organization,
     discussions,
     failure,
     reconnecting,
@@ -586,8 +687,8 @@ export function useApplication() {
     refresh,
     retry,
     retryResource,
-    refreshOrganization,
-    refreshDiscussions,
+    refreshOrganization: refreshOrganizationResource,
+    refreshDiscussions: refreshDiscussionsResource,
   };
 }
 

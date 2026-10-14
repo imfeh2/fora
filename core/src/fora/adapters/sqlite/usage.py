@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import MAX_PREC, Decimal, localcontext
 from typing import Any, Literal
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fora.adapters.sqlite.store import LockedConnection, first
 from fora.core.errors import DomainError
+from fora.ports.usage import UsageCache, UsageObservation
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage_index_state (
@@ -101,6 +103,8 @@ class UsageCursor(BaseModel):
     started_at: str
     record_id: str
     direction: Literal["older", "newer"] = "older"
+    runtime_epoch: str | None = None
+    live_versions: list[tuple[int, int, int]] = Field(default_factory=list)
 
 
 class DecimalSum:
@@ -119,6 +123,114 @@ class DecimalSum:
 
     def finalize(self) -> str | None:
         return str(self.total) if self.total is not None else None
+
+
+NUMERIC_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "requests",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
+KNOWN_FIELDS = (
+    "records",
+    "input_known",
+    "output_known",
+    "total_known",
+    "requests_known",
+    "cache_read_known",
+    "cache_write_known",
+    "cost_known",
+)
+METRICS = (
+    "COUNT(*) AS records, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,"
+    " SUM(total_tokens) AS total_tokens, SUM(requests) AS requests,"
+    " COUNT(input_tokens) AS input_known, COUNT(output_tokens) AS output_known,"
+    " COUNT(total_tokens) AS total_known, COUNT(requests) AS requests_known,"
+    " SUM(json_extract(payload_json, '$.usage.cache_read_tokens')) AS cache_read_tokens,"
+    " SUM(json_extract(payload_json, '$.usage.cache_write_tokens')) AS cache_write_tokens,"
+    " COUNT(json_extract(payload_json, '$.usage.cache_read_tokens')) AS cache_read_known,"
+    " COUNT(json_extract(payload_json, '$.usage.cache_write_tokens')) AS cache_write_known,"
+    " usage_decimal_sum(CASE WHEN json_extract(payload_json, '$.cost_source') = 'genai-prices'"
+    " THEN json_extract(payload_json, '$.cost') END) AS estimated_cost,"
+    " COUNT(CASE WHEN json_extract(payload_json, '$.cost_source') = 'genai-prices'"
+    " THEN json_extract(payload_json, '$.cost') END) AS cost_known,"
+    " MAX(started_at) AS last_active, json_group_array(DISTINCT model_key) AS model_keys"
+)
+
+
+def merge_metrics(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    result = dict(left)
+    for key in KNOWN_FIELDS:
+        result[key] = left[key] + right[key]
+    for key in NUMERIC_FIELDS:
+        known = [int(value) for value in (left[key], right[key]) if value is not None]
+        result[key] = sum(known) if known else None
+    costs = [
+        Decimal(value)
+        for value in (left["estimated_cost"], right["estimated_cost"])
+        if value is not None
+    ]
+    with localcontext() as context:
+        context.prec = MAX_PREC
+        result["estimated_cost"] = str(sum(costs, Decimal(0))) if costs else None
+    dates = [
+        value
+        for value in (left["last_active"], right["last_active"])
+        if value is not None
+    ]
+    result["last_active"] = max(dates) if dates else None
+    result["model_keys"] = encode(
+        sorted(
+            set(json.loads(left["model_keys"])) | set(json.loads(right["model_keys"]))
+        )
+    )
+    return result
+
+
+def format_metrics(value: dict[str, Any], *, summary: bool = False) -> dict[str, Any]:
+    result = dict(value)
+    result["model_count"] = len(json.loads(result.pop("model_keys")))
+    for key in NUMERIC_FIELDS:
+        result[key] = (
+            str(result[key])
+            if result[key] is not None
+            else "0"
+            if summary and not result["records"]
+            else None
+        )
+    return result
+
+
+def combine_aggregates(saved: dict[str, Any], live: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "summary": format_metrics(
+            merge_metrics(saved["summary"], live["summary"]), summary=True
+        ),
+        "coverage": {
+            key: saved["coverage"].get(key, 0) + live["coverage"].get(key, 0)
+            for key in saved["coverage"].keys() | live["coverage"].keys()
+        },
+        "groups": {},
+    }
+    for dimension in ("agent_id", "model_key", "date"):
+        saved_rows = (
+            saved["daily"] if dimension == "date" else saved["groups"][dimension]
+        )
+        live_rows = live["daily"] if dimension == "date" else live["groups"][dimension]
+        merged = {row[dimension]: row for row in saved_rows}
+        for row in live_rows:
+            identity = row[dimension]
+            merged[identity] = (
+                merge_metrics(merged[identity], row) if identity in merged else row
+            )
+        rows = [format_metrics(merged[key]) for key in sorted(merged)]
+        if dimension == "date":
+            result["daily"] = rows
+        else:
+            result["groups"][dimension] = rows
+    return result
 
 
 class UsageIndex:
@@ -385,11 +497,20 @@ class UsageIndex:
             self.db.execute("UPDATE usage_index_state SET error = NULL WHERE id = 1")
             return self.state()
 
-    def _record(self, row: Any, *, detail: bool = False) -> dict[str, Any]:
+    def _record(
+        self,
+        row: Any,
+        *,
+        detail: bool = False,
+        execute: Callable[[str, Sequence[Any]], list[Any]] | None = None,
+        table: str = "usage_records",
+    ) -> dict[str, Any]:
         payload = json.loads(row["payload_json"])
         payload["agent_name"] = row["agent_name"]
         payload["agent_deleted"] = bool(row["agent_deleted"])
         payload["agent_name_source"] = "retained_member"
+        payload.setdefault("saved", True)
+        payload.setdefault("observation_source", "persisted")
         for key in ("input_tokens", "output_tokens", "total_tokens", "requests"):
             if payload[key] is not None:
                 payload[key] = str(payload[key])
@@ -405,10 +526,10 @@ class UsageIndex:
             payload["turn_summary_json"] = row["turn_usage"]
             payload["traceable_requests"] = row["request_count"]
             totals = first(
-                self.db.execute(
+                (execute or self.db.execute)(
                     "SELECT SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,"
                     " COUNT(input_tokens) AS input_known, COUNT(output_tokens) AS output_known"
-                    " FROM usage_records WHERE agent_id = ? AND sequence = ? AND source_kind = 'request'",
+                    f" FROM {table} WHERE agent_id = ? AND sequence = ? AND source_kind = 'request'",
                     (payload["agent_id"], payload["sequence"]),
                 )
             )
@@ -434,30 +555,347 @@ class UsageIndex:
             payload.pop("usage")
         return payload
 
-    def _select(self) -> str:
+    def _live_records(
+        self, observation: UsageObservation | None
+    ) -> list[dict[str, Any]]:
+        if observation is None:
+            return []
+        records = []
+        for turn in observation.turns:
+            rows = {
+                (row["ordinal"], row["request_id"]): row
+                for row in self.db.execute(
+                    "SELECT ordinal, request_id, started_at FROM agent_model_requests"
+                    " WHERE agent_id = ? AND sequence = ?",
+                    (turn.agent_id, turn.sequence),
+                )
+            }
+            for request in turn.requests:
+                row = rows.get((request.ordinal, request.request_id))
+                if row is None:
+                    raise DomainError(
+                        "usage_invalid", "Live request has no saved identity"
+                    )
+                raw_model = json.loads(request.model_json)
+                model = {
+                    key: raw_model[key]
+                    for key in PUBLIC_MODEL_FIELDS
+                    if key in raw_model
+                }
+                identity = (
+                    [
+                        "configuration",
+                        model["provider_id"],
+                        model["registered_model_id"],
+                    ]
+                    if model.get("provider_id") and model.get("registered_model_id")
+                    else [
+                        "remote",
+                        model.get("api_type"),
+                        model.get("provider"),
+                        model.get("model_name"),
+                        model.get("model"),
+                    ]
+                )
+                usage = (
+                    json.loads(request.usage_json, parse_float=Decimal)
+                    if request.usage_json is not None
+                    else None
+                )
+                metadata = json.loads(request.metadata_json)
+                status = (
+                    "completed"
+                    if request.usage_json is not None
+                    else "pending"
+                    if turn.status == "running"
+                    else "failed"
+                )
+                coverage = (
+                    "in_progress"
+                    if status == "pending"
+                    else "no_response"
+                    if request.usage_json is None
+                    else "missing_usage"
+                    if usage is None
+                    else "field_missing"
+                    if number(usage, "input_tokens") is None
+                    or number(usage, "output_tokens") is None
+                    else "recorded"
+                )
+                input_tokens = number(usage, "input_tokens")
+                output_tokens = number(usage, "output_tokens")
+                records.append(
+                    {
+                        "record_id": f"request:{turn.agent_id}:{turn.sequence}:{request.ordinal}",
+                        "source_kind": "request",
+                        "agent_id": turn.agent_id,
+                        "sequence": turn.sequence,
+                        "ordinal": request.ordinal,
+                        "request_id": request.request_id,
+                        "status": status,
+                        "started_at": utc(row["started_at"]),
+                        "completed_at": request.completed_at,
+                        "model": model,
+                        "model_key": hashlib.sha256(
+                            encode(identity).encode()
+                        ).hexdigest(),
+                        "model_identity_source": identity[0],
+                        "usage": usage,
+                        "coverage": coverage,
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": input_tokens + output_tokens
+                        if input_tokens is not None and output_tokens is not None
+                        else None,
+                        "requests": 1,
+                        "cost": str(usage["cost"])
+                        if usage is not None and usage.get("cost") is not None
+                        else None,
+                        "cost_source": metadata.get(
+                            "cost_source", "historical_response"
+                        ),
+                        "currency": metadata.get("currency", "USD"),
+                        "field_source": metadata.get("field_source", "saved_response"),
+                        "provider_field_presence": "unknown",
+                        "saved": request.saved,
+                        "observation_source": "runtime",
+                    }
+                )
+        return records
+
+    def _sources(
+        self, observation: UsageObservation | None
+    ) -> tuple[str, tuple[str, str]]:
+        columns = (
+            "record_id",
+            "source_kind",
+            "agent_id",
+            "sequence",
+            "ordinal",
+            "started_at",
+            "model_key",
+            "coverage",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "requests",
+        )
+        projection = ", ".join(
+            f"json_extract(value, '$.{column}') AS {column}" for column in columns
+        )
+        prefix = (
+            "WITH live_usage AS (SELECT "
+            + projection
+            + ", value AS payload_json FROM json_each(?)),"
+            " persisted_usage AS (SELECT u.* FROM usage_records u WHERE NOT EXISTS"
+            " (SELECT 1 FROM json_each(?) a WHERE json_extract(a.value, '$[0]') = u.agent_id"
+            " AND json_extract(a.value, '$[1]') = u.sequence)),"
+            " observed_usage AS (SELECT * FROM persisted_usage UNION ALL SELECT * FROM live_usage) "
+        )
+        excluded = (
+            [(turn.agent_id, turn.sequence) for turn in observation.turns]
+            if observation is not None
+            else []
+        )
+        return prefix, (
+            encode(self._live_records(observation)),
+            encode(sorted(excluded)),
+        )
+
+    def _aggregates(
+        self,
+        execute: Callable[[str, Sequence[Any]], list[Any]],
+        table: str,
+        where: str,
+        values: Sequence[Any],
+    ) -> dict[str, Any]:
+        source = f" FROM {table} u"
+        totals = first(execute("SELECT " + METRICS + source + where, values))
+        assert totals is not None
+        coverage = {
+            row["coverage"]: row["count"]
+            for row in execute(
+                "SELECT coverage, COUNT(*) AS count"
+                + source
+                + where
+                + " GROUP BY coverage",
+                values,
+            )
+        }
+        partial = first(
+            execute(
+                "SELECT COUNT(*) AS count" + source + where + " AND " + PARTIAL_HISTORY,
+                values,
+            )
+        )
+        if partial is not None and partial["count"]:
+            coverage["partial_history"] = partial["count"]
+        groups = {
+            dimension: [
+                dict(row)
+                for row in execute(
+                    "SELECT "
+                    + dimension
+                    + ", "
+                    + METRICS
+                    + source
+                    + where
+                    + " GROUP BY "
+                    + dimension,
+                    values,
+                )
+            ]
+            for dimension in ("agent_id", "model_key")
+        }
+        daily = [
+            dict(row)
+            for row in execute(
+                "SELECT substr(started_at, 1, 10) AS date, "
+                + METRICS
+                + source
+                + where
+                + " GROUP BY date ORDER BY date",
+                values,
+            )
+        ]
+        return {
+            "summary": dict(totals),
+            "coverage": coverage,
+            "groups": groups,
+            "daily": daily,
+        }
+
+    def _select(self, table: str = "usage_records") -> str:
         return (
             "SELECT u.*, m.name AS agent_name, m.deleted AS agent_deleted,"
             " t.usage_json AS turn_usage, (SELECT COUNT(*) FROM agent_model_requests r"
             " WHERE r.agent_id = u.agent_id AND r.sequence = u.sequence) AS request_count"
-            " FROM usage_records u JOIN members m ON m.id = u.agent_id"
+            f" FROM {table} u JOIN members m ON m.id = u.agent_id"
             " JOIN agent_runs t ON t.agent_id = u.agent_id AND t.sequence = u.sequence"
         )
 
-    def read(self, record_id: str) -> dict[str, Any]:
+    def read(
+        self, record_id: str, *, observation: UsageObservation | None = None
+    ) -> dict[str, Any]:
         if not isinstance(record_id, str) or not record_id:
             raise DomainError("invalid_params", "Usage record_id must be a string")
-        with self.db:
+        with self.db.read():
+            prefix, source_values = self._sources(observation)
+
+            def execute(sql: str, parameters: Sequence[Any] = ()) -> list[Any]:
+                return self.db.execute(prefix + sql, (*source_values, *parameters))
+
             row = first(
-                self.db.execute(self._select() + " WHERE u.record_id = ?", (record_id,))
+                execute(
+                    self._select("observed_usage") + " WHERE u.record_id = ?",
+                    (record_id,),
+                )
             )
             if row is None:
                 raise DomainError("not_found", "Usage record does not exist")
             return {
                 "dataset_revision": self.state()["revision"],
-                **self._record(row, detail=True),
+                "runtime_epoch": observation.runtime_epoch
+                if observation is not None
+                else None,
+                "live_versions": list(observation.versions)
+                if observation is not None
+                else [],
+                **self._record(
+                    row, detail=True, execute=execute, table="observed_usage"
+                ),
             }
 
-    def query(self, params: dict[str, Any]) -> dict[str, Any]:
+    def display(
+        self,
+        observation: UsageObservation,
+        *,
+        agent_id: int | None = None,
+        sequences: Sequence[int] = (),
+        cache: UsageCache | None = None,
+    ) -> dict[str, Any]:
+        with self.db.read():
+            self.db.current.create_aggregate("usage_decimal_sum", 1, DecimalSum)
+            state = self.state()
+            prefix, source_values = self._sources(observation)
+            where = " WHERE coverage IN ('recorded', 'field_missing', 'missing_usage', 'legacy')"
+            values: tuple[int, ...] = ()
+            if agent_id is not None:
+                where += " AND agent_id = ?"
+                values = (agent_id,)
+            cache_key = encode(
+                ("display", agent_id, state["revision"], source_values[1])
+            )
+
+            def groups(table: str) -> list[dict[str, Any]]:
+                return [
+                    dict(row)
+                    for row in self.db.execute(
+                        prefix
+                        + "SELECT agent_id, "
+                        + METRICS
+                        + f" FROM {table} u"
+                        + where
+                        + " GROUP BY agent_id",
+                        (*source_values, *values),
+                    )
+                ]
+
+            def build_saved() -> str:
+                return encode(groups("persisted_usage"))
+
+            saved = json.loads(
+                cache.obtain(cache_key, build_saved)
+                if cache is not None
+                else build_saved()
+            )
+            merged = {row["agent_id"]: row for row in saved}
+            for row in groups("live_usage"):
+                identity = row["agent_id"]
+                merged[identity] = (
+                    merge_metrics(merged[identity], row) if identity in merged else row
+                )
+            empty = first(
+                self.db.execute("SELECT " + METRICS + " FROM usage_records WHERE 0")
+            )
+            assert empty is not None
+            totals = dict(empty)
+            for row in merged.values():
+                totals = merge_metrics(totals, row)
+            turns = {}
+            if sequences:
+                assert agent_id is not None
+                placeholders = ",".join("?" for _ in sequences)
+                for turn_row in self.db.execute(
+                    prefix
+                    + "SELECT sequence, "
+                    + METRICS
+                    + " FROM observed_usage u"
+                    + where
+                    + f" AND sequence IN ({placeholders}) GROUP BY sequence",
+                    (*source_values, *values, *sequences),
+                ):
+                    turns[turn_row["sequence"]] = format_metrics(dict(turn_row))
+            return {
+                "summary": format_metrics(totals, summary=True),
+                "groups": {
+                    "agent_id": [format_metrics(merged[key]) for key in sorted(merged)]
+                },
+                "dataset_revision": state["revision"],
+                "runtime_epoch": observation.runtime_epoch,
+                "live_versions": list(observation.versions),
+                "index": state,
+                "turns": turns,
+            }
+
+    def query(
+        self,
+        params: dict[str, Any],
+        *,
+        observation: UsageObservation | None = None,
+        cache: UsageCache | None = None,
+        advance: bool = True,
+    ) -> dict[str, Any]:
         limit = params.get("limit", 20)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise DomainError("invalid_params", "Usage limit must be between 1 and 100")
@@ -525,10 +963,28 @@ class UsageIndex:
             )
         where = " WHERE " + " AND ".join(clauses) if clauses else " WHERE 1"
         signature = hashlib.sha256(encode(filters).encode()).hexdigest()
-        self.advance()
-        with self.db:
+        if advance:
+            self.advance()
+        with self.db if advance else self.db.read():
+            self.db.current.create_aggregate("usage_decimal_sum", 1, DecimalSum)
             state = self.state()
             revision = state["revision"]
+            epoch = observation.runtime_epoch if observation is not None else None
+            versions = list(observation.versions) if observation is not None else []
+            prefix, source_values = self._sources(observation)
+
+            def execute(sql: str, parameters: Sequence[Any] = ()) -> list[Any]:
+                return self.db.execute(prefix + sql, (*source_values, *parameters))
+
+            for key, actual in (("runtime_epoch", epoch), ("live_versions", versions)):
+                if (
+                    key in params
+                    and params[key] != actual
+                    and params[key] != json.loads(encode(actual))
+                ):
+                    raise DomainError(
+                        "usage_changed", "Usage observation changed; refresh this range"
+                    )
             expected = params.get("dataset_revision")
             if expected is not None and expected != revision:
                 raise DomainError(
@@ -545,7 +1001,11 @@ class UsageIndex:
                     raise DomainError(
                         "invalid_params", "Usage cursor belongs to another range"
                     )
-                if position.get("revision") != revision:
+                if (
+                    position.get("revision") != revision
+                    or position["runtime_epoch"] != epoch
+                    or position["live_versions"] != versions
+                ):
                     raise DomainError(
                         "usage_changed", "Usage data changed; refresh this range"
                     )
@@ -559,8 +1019,8 @@ class UsageIndex:
                 page_values = [position["started_at"], position["record_id"]]
             elif params.get("anchor"):
                 anchor = first(
-                    self.db.execute(
-                        "SELECT started_at, record_id FROM usage_records u"
+                    execute(
+                        "SELECT started_at, record_id FROM observed_usage u"
                         + where
                         + " AND record_id = ?",
                         (*values, params["anchor"]),
@@ -569,114 +1029,37 @@ class UsageIndex:
                 if anchor is not None:
                     page_clause = " AND (u.started_at, u.record_id) <= (?, ?)"
                     page_values = [anchor["started_at"], anchor["record_id"]]
-            metrics = (
-                "COUNT(*) AS records, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,"
-                " SUM(total_tokens) AS total_tokens, SUM(requests) AS requests,"
-                " COUNT(input_tokens) AS input_known, COUNT(output_tokens) AS output_known,"
-                " COUNT(total_tokens) AS total_known, COUNT(requests) AS requests_known,"
-                " SUM(json_extract(payload_json, '$.usage.cache_read_tokens')) AS cache_read_tokens,"
-                " SUM(json_extract(payload_json, '$.usage.cache_write_tokens')) AS cache_write_tokens,"
-                " COUNT(json_extract(payload_json, '$.usage.cache_read_tokens')) AS cache_read_known,"
-                " COUNT(json_extract(payload_json, '$.usage.cache_write_tokens')) AS cache_write_known,"
-                " usage_decimal_sum(CASE WHEN json_extract(payload_json, '$.cost_source') = 'genai-prices'"
-                " THEN json_extract(payload_json, '$.cost') END) AS estimated_cost,"
-                " COUNT(CASE WHEN json_extract(payload_json, '$.cost_source') = 'genai-prices'"
-                " THEN json_extract(payload_json, '$.cost') END) AS cost_known,"
-                " MAX(started_at) AS last_active, COUNT(DISTINCT model_key) AS model_count"
+            cache_key = encode((signature, revision, source_values[1]))
+
+            def build_saved() -> str:
+                return encode(
+                    self._aggregates(execute, "persisted_usage", where, values)
+                )
+
+            saved = json.loads(
+                cache.obtain(cache_key, build_saved)
+                if cache is not None
+                else build_saved()
             )
-            totals = first(
-                self.db.execute(
-                    "SELECT " + metrics + " FROM usage_records u" + where, values
-                )
-            )
-            assert totals is not None
-            summary = dict(totals)
-            for key in (
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "requests",
-                "cache_read_tokens",
-                "cache_write_tokens",
-            ):
-                summary[key] = (
-                    str(summary[key])
-                    if summary[key] is not None
-                    else ("0" if summary["records"] == 0 else None)
-                )
-            coverage = {
-                row["coverage"]: row["count"]
-                for row in self.db.execute(
-                    "SELECT coverage, COUNT(*) AS count FROM usage_records u"
-                    + where
-                    + " GROUP BY coverage",
-                    values,
-                )
-            }
-            partial = first(
-                self.db.execute(
-                    "SELECT COUNT(*) AS count FROM usage_records u"
-                    + where
-                    + " AND "
-                    + PARTIAL_HISTORY,
-                    values,
-                )
-            )
-            if partial is not None and partial["count"]:
-                coverage["partial_history"] = partial["count"]
-            groups: dict[str, list[dict[str, Any]]] = {}
-            for dimension in ("agent_id", "model_key"):
-                result = []
-                for row in self.db.execute(
-                    "SELECT "
-                    + dimension
-                    + ", "
-                    + metrics
-                    + " FROM usage_records u"
-                    + where
-                    + " GROUP BY "
-                    + dimension,
-                    values,
-                ):
-                    group = dict(row)
-                    for key in (
-                        "input_tokens",
-                        "output_tokens",
-                        "total_tokens",
-                        "requests",
-                        "cache_read_tokens",
-                        "cache_write_tokens",
-                    ):
-                        group[key] = str(group[key]) if group[key] is not None else None
-                    result.append(group)
-                groups[dimension] = result
-            daily = []
-            for row in self.db.execute(
-                "SELECT substr(started_at, 1, 10) AS date, "
-                + metrics
-                + " FROM usage_records u"
-                + where
-                + " GROUP BY date ORDER BY date",
-                values,
-            ):
-                day = dict(row)
-                for key in (
-                    "input_tokens",
-                    "output_tokens",
-                    "total_tokens",
-                    "requests",
-                ):
-                    day[key] = str(day[key]) if day[key] is not None else None
-                daily.append(day)
+            live = self._aggregates(execute, "live_usage", where, values)
+            aggregates = combine_aggregates(saved, live)
             order = "ASC" if direction == "newer" else "DESC"
-            rows = self.db.execute(
-                self._select()
-                + where
-                + page_clause
-                + f" ORDER BY u.started_at {order}, u.record_id {order} LIMIT ?",
-                (*values, *page_values, limit),
+            rows = [
+                row
+                for table in ("persisted_usage", "live_usage")
+                for row in execute(
+                    self._select(table)
+                    + where
+                    + page_clause
+                    + f" ORDER BY u.started_at {order}, u.record_id {order} LIMIT ?",
+                    (*values, *page_values, limit),
+                )
+            ]
+            rows.sort(
+                key=lambda row: (row["started_at"], row["record_id"]),
+                reverse=direction == "older",
             )
-            records = [self._record(row) for row in rows]
+            records = [self._record(row) for row in rows[:limit]]
             if direction == "newer":
                 records.reverse()
             cursors = {}
@@ -684,8 +1067,8 @@ class UsageIndex:
                 ("older", records[-1] if records else None, "<"),
                 ("newer", records[0] if records else None, ">"),
             ):
-                exists = record is not None and self.db.execute(
-                    "SELECT 1 FROM usage_records u"
+                exists = record is not None and execute(
+                    "SELECT 1 FROM observed_usage u"
                     + where
                     + f" AND (u.started_at, u.record_id) {comparison} (?, ?) LIMIT 1",
                     (*values, record["started_at"], record["record_id"]),
@@ -695,6 +1078,8 @@ class UsageIndex:
                         {
                             "filters": signature,
                             "revision": revision,
+                            "runtime_epoch": epoch,
+                            "live_versions": versions,
                             "direction": name,
                             "started_at": record["started_at"],
                             "record_id": record["record_id"],
@@ -707,8 +1092,8 @@ class UsageIndex:
             has_more = next_cursor is not None
             agents = [
                 dict(row)
-                for row in self.db.execute(
-                    "SELECT DISTINCT m.id, m.name, m.deleted FROM usage_records u JOIN members m ON m.id = u.agent_id ORDER BY m.name"
+                for row in execute(
+                    "SELECT DISTINCT m.id, m.name, m.deleted FROM observed_usage u JOIN members m ON m.id = u.agent_id ORDER BY m.name"
                 )
             ]
             models = [
@@ -716,18 +1101,17 @@ class UsageIndex:
                     "key": row["model_key"],
                     "model": json.loads(row["payload_json"])["model"],
                 }
-                for row in self.db.execute(
-                    "SELECT model_key, payload_json FROM usage_records GROUP BY model_key ORDER BY model_key"
+                for row in execute(
+                    "SELECT model_key, payload_json FROM observed_usage GROUP BY model_key ORDER BY model_key"
                 )
             ]
             return {
                 "filters": filters,
                 "dataset_revision": revision,
                 "index": state,
-                "summary": summary,
-                "daily": daily,
-                "coverage": coverage,
-                "groups": groups,
+                "runtime_epoch": epoch,
+                "live_versions": versions,
+                **aggregates,
                 "records": records,
                 "has_more": has_more,
                 "next_cursor": next_cursor,

@@ -1,3 +1,10 @@
+export function formatInteger(value: string | number | null): string {
+  if (value === null) return "Unavailable";
+  return (typeof value === "string" ? BigInt(value) : value).toLocaleString(
+    "en-US",
+  );
+}
+
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }

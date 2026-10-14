@@ -20,6 +20,7 @@ from fora.ports.agent import (
 )
 from fora.ports.execution import ExecutionControl
 from fora.ports.store import OrganizationStore
+from fora.runtime.live import LiveSnapshots
 from fora.runtime.reminder import (
     PREPARATION_PROMPT,
     HistoryValidationError,
@@ -156,6 +157,7 @@ class Scheduler:
         self._wake = threading.Event()
         self._loop: threading.Thread | None = None
         self._on_event = on_event or (lambda name, payload: None)
+        self.live = LiveSnapshots(self.emit)
 
     @property
     def store(self) -> OrganizationStore:
@@ -247,6 +249,7 @@ class Scheduler:
                 continue
             thread.join(timeout=5)
         self._reap_threads()
+        self.live.close()
 
     def _reap_threads(self) -> None:
         with self._lock:
@@ -271,6 +274,7 @@ class Scheduler:
             self._failures.pop(agent_id, None)
             self._blocked.pop(agent_id, None)
             self._pause_requested.discard(agent_id)
+        self.live.remove(agent_id, saved=False)
 
     def _require_agent(self, agent_id: int) -> None:
         member = self.store.get_member(agent_id)
@@ -397,6 +401,7 @@ class Scheduler:
         return self.agent_status(agent_id)
 
     def resume(self, agent_id: int, is_agent: bool = False) -> dict[str, Any]:
+        recovered: tuple[int, str] | None = None
         with self.member_lock(agent_id):
             self._require_agent(agent_id)
             if is_agent and (
@@ -439,6 +444,7 @@ class Scheduler:
                             usage_json=failure.usage,
                             error=failure.error,
                         )
+                        recovered = (failure.sequence, messages)
                     else:
                         runs = self.history.runs(agent_id, limit=1)
                         if runs and runs[0].status == "running":
@@ -462,8 +468,18 @@ class Scheduler:
                 self._failures.pop(agent_id, None)
             self._blocked.pop(agent_id, None)
             self._pause_requested.discard(agent_id)
+        if recovered is not None:
+            sequence, messages = recovered
+            self._confirm_live(agent_id, sequence, messages)
+            self.live.finish(agent_id, sequence, None)
         self._changed("organization.changed", {"id": agent_id})
         return self.agent_status(agent_id)
+
+    def _confirm_live(self, agent_id: int, sequence: int, messages: str) -> None:
+        turn = next(iter(self.live.capture(agent_id)), None)
+        if turn is not None and turn.sequence == sequence and turn.requests:
+            coverage = self._runner.live_coverage(messages, turn)
+            self.live.saved(agent_id, sequence, coverage)
 
     def statistics(
         self, agent_id: int | None = None, *, idle_streak: int = 0
@@ -696,6 +712,7 @@ class Scheduler:
         reminder = prepared.reminder
         prompt = prepared.prompt
         items = reminder.items if reminder is not None else ()
+        live_observer = self.live.begin(run)
         self.emit(
             "turn.started",
             {
@@ -741,6 +758,7 @@ class Scheduler:
             environment=lambda: self.environment_facts(agent_id),
             persist=persist,
             request_recorder=request_recorder,
+            live_observer=live_observer,
             ephemeral=lambda: exchange_nudge(
                 self.store,
                 agent_id,
@@ -793,6 +811,7 @@ class Scheduler:
                     self._blocked[agent_id] = "history_invalid"
             logger.exception("turn failed for agent %s", agent_id)
         window = None
+        finalized = False
         threshold = None
         parameter_error = None
         if status == "completed":
@@ -817,6 +836,7 @@ class Scheduler:
                             error=error,
                         )
                         persisted_history = messages
+                        finalized = True
                         raise parameter_error
                     with self.history.transaction():
                         self.history.finish_run(
@@ -901,6 +921,7 @@ class Scheduler:
                             else "idle",
                         )
                     persisted_history = messages
+                    finalized = True
                 except Exception as failure:
                     window = None
                     logger.exception("Turn finalization failed for agent %s", agent_id)
@@ -927,6 +948,7 @@ class Scheduler:
                         self.store.set_agent_state(
                             agent_id, "paused" if requested else "error"
                         )
+                    finalized = True
                 if self._blocked.get(agent_id) == "storage_unavailable":
                     self._blocked.pop(agent_id)
         except Exception as failure:
@@ -944,10 +966,19 @@ class Scheduler:
                 raise failure from run_failure
             raise
         finally:
-            with self.member_lock(agent_id):
-                self._active.pop(agent_id, None)
-                with self._lock:
-                    self._reserved.discard(agent_id)
+            try:
+                if finalized:
+                    self._confirm_live(agent_id, run.sequence, persisted_history)
+                    self.live.finish(agent_id, run.sequence, error)
+                else:
+                    self.live.failed(
+                        agent_id, run.sequence, error or "Turn save failed"
+                    )
+            finally:
+                with self.member_lock(agent_id):
+                    self._active.pop(agent_id, None)
+                    with self._lock:
+                        self._reserved.discard(agent_id)
             if window is not None:
                 self.emit(
                     "window.reset",

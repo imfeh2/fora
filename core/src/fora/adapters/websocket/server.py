@@ -32,6 +32,7 @@ from fora.adapters.websocket.address import (
 )
 from fora.core.attachment import Upload
 from fora.core.errors import DomainError
+from fora.ports.usage import usage_session
 from fora.services.uploads import Uploads
 
 SocketHandler = Callable[[web.WebSocketResponse], Awaitable[None]]
@@ -700,6 +701,10 @@ class WebServer:
             transport.abort()
 
     async def _control(self, connection: web.WebSocketResponse) -> None:
+        with usage_session():
+            await self._control_session(connection)
+
+    async def _control_session(self, connection: web.WebSocketResponse) -> None:
         outbox = ControlOutbox()
         records: set[ControlRequest] = set()
         identifiers: dict[int, ControlRequest] = {}

@@ -86,66 +86,134 @@ export function DocumentPage({ path }: { path: string }) {
   const editing = useRef({ loaded, draft });
   editing.current = { loaded, draft };
   const loadRevision = useRef(0);
+  const refreshing = useRef<Promise<void> | null>(null);
+  const refreshDirty = useRef(false);
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connected = useRef(true);
+  const clearTimer = useCallback(() => {
+    if (refreshTimer.current !== null) clearTimeout(refreshTimer.current);
+    refreshTimer.current = null;
+  }, []);
 
   const load = useCallback(
-    async (preserve = false) => {
-      const revision = ++loadRevision.current;
+    (preserve = false): Promise<void> => {
+      if (!connected.current) return Promise.resolve();
+      clearTimer();
+      if (preserve && refreshing.current) {
+        refreshDirty.current = true;
+        return refreshing.current;
+      }
+      if (!preserve) loadRevision.current += 1;
       setLoadError(null);
       if (editing.current.loaded === null) {
         setFailed(false);
         setUnavailable(null);
       }
-      try {
-        const document = await backend.readLibrary(path);
+      const revision = loadRevision.current;
+      const operation = Promise.resolve().then(async () => {
         if (revision !== loadRevision.current) return;
-        const current = editing.current;
-        if (
-          preserve &&
-          current.loaded &&
-          current.draft !== current.loaded.content
-        ) {
-          if (document.hash !== current.loaded.hash)
-            toast({
-              id: conflictToastId(path),
-              tone: "danger",
-              title: "Saved elsewhere",
-              description: conflictDescription,
-              duration: null,
-              action: { label: "Reopen", onClick: () => void load() },
-            });
-        } else {
-          setLoaded({ content: document.content, hash: document.hash });
-          setDraft(document.content);
-          dismissToast(conflictToastId(path));
+        let keepDraft = preserve;
+        try {
+          do {
+            refreshDirty.current = false;
+            try {
+              const document = await backend.readLibrary(path);
+              if (revision !== loadRevision.current) return;
+              const current = editing.current;
+              if (
+                keepDraft &&
+                current.loaded &&
+                current.draft !== current.loaded.content
+              ) {
+                if (document.hash !== current.loaded.hash)
+                  toast({
+                    id: conflictToastId(path),
+                    tone: "danger",
+                    title: "Saved elsewhere",
+                    description: conflictDescription,
+                    duration: null,
+                    action: { label: "Reopen", onClick: () => void load() },
+                  });
+              } else {
+                const value = {
+                  content: document.content,
+                  hash: document.hash,
+                };
+                editing.current = { loaded: value, draft: document.content };
+                setLoaded(value);
+                setDraft(document.content);
+                dismissToast(conflictToastId(path));
+              }
+              setUnavailable(null);
+              setFailed(false);
+              setLoadError(null);
+            } catch (failure) {
+              if (revision !== loadRevision.current) return;
+              setFailed(true);
+              if (
+                failure instanceof BackendError &&
+                (failure.code === "not_found" ||
+                  failure.code === "not_readable")
+              ) {
+                setUnavailable(failure.code);
+              } else {
+                setLoadError(reportLoadFailure(failure));
+              }
+            }
+            keepDraft = true;
+          } while (refreshDirty.current && revision === loadRevision.current);
+        } finally {
+          if (refreshing.current === operation) refreshing.current = null;
         }
-        setUnavailable(null);
-        setFailed(false);
-      } catch (failure) {
-        if (revision !== loadRevision.current) return;
-        setFailed(true);
-        if (
-          failure instanceof BackendError &&
-          (failure.code === "not_found" || failure.code === "not_readable")
-        ) {
-          setUnavailable(failure.code);
-        } else {
-          setLoadError(reportLoadFailure(failure));
-        }
-      }
+      });
+      refreshing.current = operation;
+      return operation;
     },
-    [path],
+    [clearTimer, path],
   );
 
   useEffect(() => {
-    void load();
+    connected.current = true;
+    const schedule = () => {
+      if (!connected.current) return;
+      if (refreshing.current) {
+        refreshDirty.current = true;
+      } else if (refreshTimer.current === null) {
+        refreshTimer.current = setTimeout(() => {
+          refreshTimer.current = null;
+          void load(true);
+        }, 150);
+      }
+    };
     const off = backend.onEvent((event) => {
-      if (event.type === "connection.restored") void load(true);
+      if (event.type === "connection.closed") {
+        connected.current = false;
+        clearTimer();
+        loadRevision.current += 1;
+        refreshing.current = null;
+        refreshDirty.current = false;
+      }
+      if (event.type === "connection.restored") {
+        connected.current = true;
+        void load(true);
+      }
+      if (event.type === "library.updated" && event.path === path) schedule();
+      if (
+        event.type === "turn.finished" &&
+        (refreshTimer.current !== null || refreshing.current !== null)
+      )
+        void load(true);
     });
+    void load();
     return () => {
+      connected.current = false;
+      clearTimer();
       loadRevision.current += 1;
+      refreshing.current = null;
+      refreshDirty.current = false;
       off();
     };
-  }, [load, path]);
+  }, [clearTimer, load, path]);
 
   useEffect(() => () => dismissToast(conflictToastId(path)), [path]);
 
@@ -169,7 +237,13 @@ export function DocumentPage({ path }: { path: string }) {
         });
         return;
       }
-      setLoaded({ content: draft, hash: result.hash });
+      clearTimer();
+      loadRevision.current += 1;
+      refreshing.current = null;
+      refreshDirty.current = false;
+      const value = { content: draft, hash: result.hash };
+      editing.current = { ...editing.current, loaded: value };
+      setLoaded(value);
     } catch (failure) {
       if (failure instanceof BackendError && failure.transport)
         backend.reportFailure(failure);
@@ -268,6 +342,7 @@ export function DocumentPage({ path }: { path: string }) {
                 value={draft}
                 spellCheck={false}
                 onChange={(event) => {
+                  editing.current.draft = event.target.value;
                   setDraft(event.target.value);
                 }}
               />

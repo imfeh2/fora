@@ -24,6 +24,7 @@ export function historyRun(run: AgentRun): AgentHistoryRun {
     window_reason: run.window_reason ?? null,
     request_count: requestCount,
     usage: run.usage,
+    usage_metrics: run.usage_metrics,
     error: run.error,
     legacy: requestCount === 0,
     reminded: run.reminded,

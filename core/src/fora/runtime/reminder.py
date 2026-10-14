@@ -9,6 +9,7 @@ from fora.core.mention import Mention
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, OVERFLOW_NOTICE_BYTES, bounded_text
 from fora.ports.agent import HistoryStore, ModelRequestRecorder, WindowState
 from fora.ports.files import FileTree
+from fora.ports.live import LiveRequestCoverage, LiveTurn, LiveTurnObserver
 from fora.ports.store import OrganizationStore
 from fora.tools import AgentTools
 
@@ -216,6 +217,7 @@ class TurnRequest:
     persist: Callable[[str], None]
     agents_instructions: str | None = None
     request_recorder: ModelRequestRecorder | None = None
+    live_observer: LiveTurnObserver | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,10 @@ class TurnOutcome:
 
 
 class ModelRunner(Protocol):
+    def live_coverage(
+        self, raw: str, turn: LiveTurn
+    ) -> tuple[LiveRequestCoverage, ...]: ...
+
     def validate_history(self, raw: str) -> None: ...
 
     def check_available(self, agent_id: int) -> None: ...

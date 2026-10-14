@@ -71,11 +71,39 @@ describe("history state", () => {
       window_reset_at: "2026-10-13T00:00:20Z",
       window_reason: "prepared",
       usage: "{}",
+      usage_metrics: {
+        records: 2,
+        input_tokens: "12",
+        output_tokens: null,
+        total_tokens: "12",
+        requests: "2",
+        input_known: 2,
+        output_known: 1,
+        total_known: 1,
+        requests_known: 2,
+        cache_read_tokens: "0",
+        cache_write_tokens: null,
+        cache_read_known: 2,
+        cache_write_known: 0,
+        estimated_cost: "0.00001",
+        cost_known: 1,
+        last_active: run.started_at,
+        model_count: 1,
+      },
       error: "saved error",
       reminded: [],
     };
     const { effects, ...fields } = detailed;
     expect(historyRun(detailed)).toEqual({ ...fields, legacy: false });
+    const initial = createWindowHistory(1, [detailed]);
+    expect(initial.runs[0].usage_metrics).toBe(detailed.usage_metrics);
+    const updated = {
+      ...detailed,
+      usage_metrics: { ...detailed.usage_metrics, total_tokens: "24" },
+    };
+    const refreshed = mergeWindowSummary(initial, 1, [updated]);
+    expect(refreshed.runs[0].usage_metrics).toBe(updated.usage_metrics);
+    expect(initial.runs[0].usage_metrics?.total_tokens).toBe("12");
     expect(historyRun(detailed)).not.toHaveProperty("effects");
     expect(effects).toEqual([]);
   });

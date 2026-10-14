@@ -27,6 +27,13 @@ export type UsageMetrics = {
   model_count: number;
 };
 
+export type UsageVersion = {
+  runtime_epoch?: string | null;
+  live_versions?: [number, number, number][];
+};
+
+export type UsageIndexState = { ready: number; revision: number };
+
 export type UsageRecord = {
   record_id: string;
   source_kind: "request" | "turn_summary";
@@ -53,19 +60,22 @@ export type UsageRecord = {
   cost_source: string;
   currency: string;
   partial_history: boolean;
+  saved?: boolean;
+  observation_source?: "runtime" | "persisted";
 };
 
-export type UsageQuery = UsageFilters & {
-  limit?: number;
-  cursor?: string | null;
-  dataset_revision?: number;
-  anchor?: string;
-};
+export type UsageQuery = UsageFilters &
+  UsageVersion & {
+    limit?: number;
+    cursor?: string | null;
+    dataset_revision?: number;
+    anchor?: string;
+  };
 
-export type UsageResult = {
+export type UsageResult = UsageVersion & {
   filters: UsageFilters;
   dataset_revision: number;
-  index: { ready: number; revision: number };
+  index: UsageIndexState;
   summary: UsageMetrics;
   daily: (Pick<
     UsageMetrics,
@@ -92,15 +102,16 @@ export type UsageResult = {
   models: { key: string; model: UsageRecord["model"] }[];
 };
 
-export type UsageDetail = UsageRecord & {
-  dataset_revision: number;
-  usage_json: string;
-  turn_summary: Record<string, unknown> | null;
-  turn_summary_json: string | null;
-  summary_mismatch: boolean;
-  traceable_requests: number;
-  provider_field_presence: string;
-};
+export type UsageDetail = UsageRecord &
+  UsageVersion & {
+    dataset_revision: number;
+    usage_json: string;
+    turn_summary: Record<string, unknown> | null;
+    turn_summary_json: string | null;
+    summary_mismatch: boolean;
+    traceable_requests: number;
+    provider_field_presence: string;
+  };
 
 export type Thinking =
   | "default"
@@ -159,7 +170,9 @@ export type Member = AgentStatus & {
   id: number;
   type: "human" | "agent";
   name: string;
-  tokens?: number;
+  tokens?: number | null;
+  usage_metrics?: UsageMetrics | null;
+  usage_index_ready?: boolean;
 };
 
 export type DiscussionSummary = {
@@ -356,6 +369,7 @@ export type AgentRun = {
   window_reason?: string | null;
   request_count?: number;
   usage: string | null;
+  usage_metrics?: UsageMetrics | null;
   error: string | null;
   effects: TurnEffect[];
 };
@@ -375,12 +389,54 @@ export type HistoryMessages = {
   total_bytes?: number;
   next_offset?: number;
   has_more: boolean;
+  saved?: boolean;
+};
+
+export type LiveTool = {
+  part_index: number;
+  tool_call_id: string;
+  tool_name: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  started_at: string | null;
+  completed_at: string | null;
+  saved: boolean;
+  has_result: boolean;
+  content_version?: string | null;
+};
+
+export type LivePage = {
+  runtime_epoch: string;
+  turn: {
+    agent_id: number;
+    sequence: number;
+    run_id: string;
+    live_revision: number;
+    status: string;
+    error: string | null;
+    requests: {
+      ordinal: number;
+      request_id: string;
+      started_at: string;
+      response_saved?: boolean;
+      has_response?: boolean;
+      response_version?: string | null;
+      tools: LiveTool[];
+      tools_has_more: boolean;
+      tools_next_after: number | null;
+    }[];
+    has_more: boolean;
+    next_after: number | null;
+  } | null;
 };
 
 export type HistoryBinary = {
   kind: "binary";
-  source: "run" | "input" | "response" | "related";
+  source: "run" | "input" | "response" | "related" | "live";
   request_ordinal?: number;
+  part_index?: number;
+  runtime_epoch?: string;
+  content_source?: "tool" | "response";
+  content_version?: string | null;
   message_index: number;
   path: (string | number)[];
   media_type: string;
@@ -396,10 +452,15 @@ export type HistoryText = {
     | "input"
     | "response"
     | "related"
+    | "live"
     | "parameters"
     | "settings"
     | "model";
   request_ordinal?: number;
+  part_index?: number;
+  runtime_epoch?: string;
+  content_source?: "tool" | "response";
+  content_version?: string | null;
   message_index: number;
   path: (string | number)[];
   offset: number;
@@ -422,6 +483,7 @@ export type AgentHistoryRun = {
   window_reason: string | null;
   request_count: number;
   usage: string | null;
+  usage_metrics?: UsageMetrics | null;
   error: string | null;
   legacy: boolean;
 };
@@ -494,6 +556,10 @@ export type AgentHistoryRead = {
   requests_next_after: number | null;
   messages: HistoryMessages;
   missing: string[];
+  usage_version?: UsageVersion & {
+    dataset_revision: number;
+    index: UsageIndexState;
+  };
   request?: {
     summary: AgentHistoryRequestSummary;
     input: HistoryMessages;
@@ -501,6 +567,12 @@ export type AgentHistoryRead = {
     settings: HistoryText;
     model: HistoryText;
     response: HistoryMessages | null;
+    response_saved?: boolean;
+    observation?: {
+      runtime_epoch: string;
+      live_revision: number;
+      request_id: string;
+    };
     related: HistoryMessages;
   };
 };
@@ -525,6 +597,11 @@ export type AgentDetail = Partial<AgentStatus> & {
   workspace: LibraryEntry[];
   runs: AgentRun[];
   usage: Usage;
+  usage_metrics?: UsageMetrics;
+  usage_version?: UsageVersion & {
+    dataset_revision: number;
+    index: UsageIndexState;
+  };
   token_limit: number | null;
   over_token_limit: boolean | null;
   idle: boolean | null;
@@ -614,6 +691,8 @@ const READ_METHODS = new Set([
   "agent.detail",
   "usage.query",
   "usage.read",
+  "agent.live",
+  "agent.live.read",
   "agent.history",
   "agent.history.windows",
   "agent.history.read",
@@ -804,6 +883,11 @@ export class Backend {
   #closed: BackendError | null = null;
   #rejectConnection: ((error: BackendError) => void) | null = null;
   #failures = new Set<(error: BackendError) => void>();
+  #usageIndex: { generation: number; value: UsageIndexState } | null = null;
+  #usageAdvancing: {
+    generation: number;
+    operation: Promise<UsageIndexState>;
+  } | null = null;
 
   constructor(
     locate: () => Connection = pageConnection,
@@ -1128,6 +1212,10 @@ export class Backend {
       members: Member[];
       human_id: number;
       token_limit: number | null;
+      usage_version?: UsageVersion & {
+        dataset_revision: number;
+        index: UsageIndexState;
+      };
     }>("organization.get");
   }
 
@@ -1399,12 +1487,71 @@ export class Backend {
     return this.call<FoundMessage[]>("discussion.search", { query });
   }
 
+  usageAdvance(): Promise<UsageIndexState> {
+    const generation = this.#generation;
+    if (
+      this.#usageIndex?.generation === generation &&
+      this.#usageIndex.value.ready
+    )
+      return Promise.resolve(this.#usageIndex.value);
+    if (this.#usageAdvancing?.generation === generation)
+      return this.#usageAdvancing.operation;
+    const operation = this.call<UsageIndexState>("usage.advance")
+      .then((value) => {
+        if (generation === this.#generation)
+          this.#usageIndex = { generation, value };
+        return value;
+      })
+      .finally(() => {
+        if (this.#usageAdvancing?.operation === operation)
+          this.#usageAdvancing = null;
+      });
+    this.#usageAdvancing = { generation, operation };
+    return operation;
+  }
+
   usageQuery(params: UsageQuery) {
     return this.call<UsageResult>("usage.query", params);
   }
 
   usageRead(record_id: string) {
     return this.call<UsageDetail>("usage.read", { record_id });
+  }
+
+  agentLive(
+    agent_id: number,
+    sequence: number,
+    ordinal: number,
+    tool_after?: number,
+    tool_limit?: number,
+  ) {
+    return this.call<LivePage>("agent.live", {
+      agent_id,
+      sequence,
+      ordinal,
+      tool_after,
+      tool_limit,
+    });
+  }
+
+  agentLiveRead(
+    agent_id: number,
+    sequence: number,
+    ordinal: number,
+    part_index: number,
+    runtime_epoch: string,
+    content_source?: "tool" | "response",
+    content_version?: string | null,
+  ) {
+    return this.call<HistoryMessages>("agent.live.read", {
+      agent_id,
+      sequence,
+      ordinal,
+      part_index,
+      runtime_epoch,
+      content_source,
+      content_version,
+    });
   }
 
   agentDetail(agent_id: number) {
@@ -1481,6 +1628,10 @@ export class Backend {
     sequence: number,
     text: Pick<HistoryText, "source" | "message_index" | "path"> & {
       request_ordinal?: number;
+      part_index?: number;
+      runtime_epoch?: string;
+      content_source?: "tool" | "response";
+      content_version?: string | null;
       offset: number;
     },
   ) {
@@ -1491,6 +1642,10 @@ export class Backend {
       sequence,
       source: text.source,
       ordinal: text.request_ordinal,
+      part_index: text.part_index,
+      runtime_epoch: text.runtime_epoch,
+      content_source: text.content_source,
+      content_version: text.content_version,
       message_index: text.message_index,
       path: text.path,
       offset: text.offset,
@@ -1503,6 +1658,10 @@ export class Backend {
     sequence: number,
     image: Pick<HistoryBinary, "source" | "message_index" | "path"> & {
       request_ordinal?: number;
+      part_index?: number;
+      runtime_epoch?: string;
+      content_source?: "tool" | "response";
+      content_version?: string | null;
     },
   ) {
     return this.call<HistoryImage>("agent.history.image", {
@@ -1510,6 +1669,10 @@ export class Backend {
       sequence,
       source: image.source,
       ordinal: image.request_ordinal,
+      part_index: image.part_index,
+      runtime_epoch: image.runtime_epoch,
+      content_source: image.content_source,
+      content_version: image.content_version,
       message_index: image.message_index,
       path: image.path,
     });

@@ -42,6 +42,10 @@ import {
   type UsageResult,
 } from "@/lib/backend";
 
+import { formatInteger } from "@/lib/format";
+
+export { formatInteger } from "@/lib/format";
+
 type RangeName = "7" | "30" | "90" | "all" | "custom";
 type Range = { name: RangeName; filters: UsageFilters };
 type Group =
@@ -74,10 +78,6 @@ const recordColumns: Column[] = [
   { key: "total", label: "Total", align: "end" },
   { key: "cost", label: "Cost", align: "end" },
 ];
-
-export function formatInteger(value: string | null): string {
-  return value === null ? "Unavailable" : BigInt(value).toLocaleString("en-US");
-}
 
 export function formatCost(value: string | null, currency = "USD"): string {
   if (value === null) return "Unavailable";
@@ -234,7 +234,6 @@ function useSavedRead<T>(read: () => Promise<T>) {
   const { resource, refresh, invalidate } = useResource(read);
   useEffect(() => {
     invalidate(!backend.disconnected);
-    void refresh();
     let debounce: ReturnType<typeof setTimeout> | undefined;
     const off = backend.onEvent((event) => {
       if (event.type === "connection.closed") {
@@ -253,15 +252,22 @@ function useSavedRead<T>(read: () => Promise<T>) {
         event.type.startsWith("agent.") ||
         event.type.startsWith("member.") ||
         event.type.startsWith("turn.") ||
+        event.type.startsWith("usage.") ||
+        event.type === "tool.updated" ||
         event.type === "organization.changed"
       ) {
-        if (debounce === undefined)
+        if (event.type === "turn.finished") {
+          if (debounce !== undefined) clearTimeout(debounce);
+          debounce = undefined;
+          void refresh(true);
+        } else if (debounce === undefined)
           debounce = setTimeout(() => {
             debounce = undefined;
             void refresh(true);
           }, 150);
       }
     });
+    void refresh();
     const poll = setInterval(() => {
       void refresh(true);
     }, 5000);
@@ -596,8 +602,8 @@ function GroupTable({
         </p>
       ) : null}
       <p className="border-t border-line px-4 py-3 text-xs text-fg-muted">
-        Totals include saved requests and earlier saved usage; requests still in
-        progress are not counted.
+        Totals include usage already received for requests still running and
+        earlier saved usage; a running request can add more before it finishes.
       </p>
     </section>
   );
@@ -647,6 +653,9 @@ function Records({
                   .slice(0, 19)}{" "}
                 UTC
               </Button>
+              {record.saved === false ? (
+                <Chip tone="danger">Not saved</Chip>
+              ) : null}
             </td>
             {group.dimension !== "agent_id" ? (
               <td>
@@ -734,12 +743,22 @@ function QueryView({
   const read = useCallback(async () => {
     const target = query.current;
     try {
-      return { result: await backend.usageQuery(target), target };
+      const result = await backend.usageQuery(target);
+      if (!result.index.ready) await backend.usageAdvance();
+      return { result, target };
     } catch (error) {
       if (!(error instanceof BackendError) || error.code !== "usage_changed")
         throw error;
-      const next = { ...target, cursor: null, dataset_revision: undefined };
-      return { result: await backend.usageQuery(next), target: next };
+      const next = {
+        ...target,
+        cursor: null,
+        dataset_revision: undefined,
+        runtime_epoch: undefined,
+        live_versions: undefined,
+      };
+      const result = await backend.usageQuery(next);
+      if (!result.index.ready) await backend.usageAdvance();
+      return { result, target: next };
     }
   }, []);
   const { resource, refresh, invalidate, retry } = useSavedRead(read);
@@ -757,6 +776,12 @@ function QueryView({
     query.current = {
       ...response.target,
       dataset_revision: data.dataset_revision,
+      ...(data.runtime_epoch !== undefined
+        ? {
+            runtime_epoch: data.runtime_epoch,
+            live_versions: data.live_versions,
+          }
+        : {}),
       anchor: data.records[0]?.record_id,
     };
     onRevision(data.dataset_revision);
@@ -775,6 +800,12 @@ function QueryView({
       limit: 20,
       cursor,
       dataset_revision: data.dataset_revision,
+      ...(data.runtime_epoch !== undefined
+        ? {
+            runtime_epoch: data.runtime_epoch,
+            live_versions: data.live_versions,
+          }
+        : {}),
       anchor: data.records[0]?.record_id,
     };
     invalidate(!backend.disconnected);
@@ -867,6 +898,9 @@ function DetailContent({
               Copy JSON
             </Button>
             <Button onClick={() => onContext(detail)}>View Turn context</Button>
+            {detail.saved === false ? (
+              <Chip tone="danger">Not saved</Chip>
+            ) : null}
           </div>
           <dl className="grid grid-cols-[minmax(100px,1fr)_minmax(0,2fr)] gap-3 text-xs">
             {Object.entries(detail)

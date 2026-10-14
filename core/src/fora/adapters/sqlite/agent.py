@@ -46,6 +46,7 @@ from fora.ports.agent import (
     WindowEvent,
     WindowState,
 )
+from fora.ports.usage import UsageCache, UsageObservation
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_safety (
@@ -219,8 +220,35 @@ class SqliteAgentStore:
     def usage_query(self, params: dict[str, Any]) -> dict[str, Any]:
         return self._usage.query(params)
 
-    def usage_read(self, record_id: str) -> dict[str, Any]:
-        return self._usage.read(record_id)
+    def usage_advance(self, limit: int = 100) -> dict[str, Any]:
+        return self._usage.advance(limit)
+
+    def usage_observe(
+        self,
+        params: dict[str, Any],
+        observation: UsageObservation,
+        cache: UsageCache | None = None,
+    ) -> dict[str, Any]:
+        return self._usage.query(
+            params, observation=observation, cache=cache, advance=False
+        )
+
+    def usage_display(
+        self,
+        observation: UsageObservation,
+        *,
+        agent_id: int | None = None,
+        sequences: Sequence[int] = (),
+        cache: UsageCache | None = None,
+    ) -> dict[str, Any]:
+        return self._usage.display(
+            observation, agent_id=agent_id, sequences=sequences, cache=cache
+        )
+
+    def usage_read(
+        self, record_id: str, observation: UsageObservation | None = None
+    ) -> dict[str, Any]:
+        return self._usage.read(record_id, observation=observation)
 
     def transaction(self) -> LockedConnection:
         return self._db

@@ -31,11 +31,15 @@ import { MessageAttachment } from "@/features/discussions/attachments";
 import {
   type ActivityAction,
   type ActivityData,
+  activityParts,
   activityRecord,
   activityText,
+  clearLiveActivity,
   loadActivity,
+  mergeActivityData,
   readableResult,
 } from "@/features/members/activity-data";
+import { useLiveTool } from "@/features/members/live-tool";
 import { useWindowState } from "@/features/members/window-cache";
 import {
   type AgentHistoryRun,
@@ -64,6 +68,7 @@ type ConversationUnit = {
   source?: HistoryReminder;
   action?: ActivityAction;
   text?: HistoryValue;
+  saved?: boolean;
   state?: ReadState;
   notice?: string;
   workRecord?: boolean;
@@ -95,60 +100,159 @@ function ActivityReader({
   register: (sequence: number, retry: (() => void) | null) => void;
 }) {
   const request = useRef<AbortController | null>(null);
-  const load = useCallback(async () => {
-    request.current?.abort();
+  const pending = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
+  const connected = useRef(true);
+  const generation = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confirmed = useRef<{ epoch: string | null; revision: number }>({
+    epoch: null,
+    revision: 0,
+  });
+  const clearTimer = useCallback(() => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+  const load = useCallback((): Promise<void> => {
+    if (!connected.current) return Promise.resolve();
+    clearTimer();
+    if (pending.current) {
+      dirty.current = true;
+      return pending.current;
+    }
+    const current = generation.current;
     const abort = new AbortController();
     request.current = abort;
+    dirty.current = false;
     onChange(run.sequence, (saved) => ({ ...saved, loading: true }));
-    try {
-      await loadActivity(agentId, run.sequence, abort.signal, (data) => {
-        if (abort.signal.aborted) return;
-        onChange(run.sequence, (saved) => ({
-          ...saved,
-          data: saved.data?.complete && !data.complete ? saved.data : data,
-        }));
-      });
-      if (!abort.signal.aborted)
-        onChange(run.sequence, (saved) => ({ ...saved, error: null }));
-    } catch (error) {
-      if (!abort.signal.aborted)
-        onChange(run.sequence, (saved) => ({
-          ...saved,
-          error: problem(error),
-        }));
-    } finally {
-      if (!abort.signal.aborted)
-        onChange(run.sequence, (saved) => ({ ...saved, loading: false }));
-    }
-  }, [agentId, run.sequence, onChange]);
+    const operation = Promise.resolve().then(async () => {
+      if (abort.signal.aborted || current !== generation.current) return;
+      try {
+        for (;;) {
+          try {
+            await loadActivity(agentId, run.sequence, abort.signal, (data) => {
+              if (abort.signal.aborted || current !== generation.current)
+                return;
+              const version = data.usageVersion;
+              const revision = version?.live_versions?.find(
+                ([id, sequence]) => id === agentId && sequence === run.sequence,
+              )?.[2];
+              if (
+                version?.runtime_epoch === confirmed.current.epoch &&
+                revision !== undefined &&
+                revision < confirmed.current.revision
+              ) {
+                dirty.current = true;
+                return;
+              }
+              onChange(run.sequence, (saved) => ({
+                ...saved,
+                data: mergeActivityData(saved.data, data),
+                error: null,
+              }));
+            });
+            if (abort.signal.aborted || current !== generation.current) return;
+            onChange(run.sequence, (saved) => ({ ...saved, error: null }));
+          } catch (error) {
+            if (abort.signal.aborted || current !== generation.current) return;
+            onChange(run.sequence, (saved) => ({
+              ...saved,
+              error: problem(error),
+            }));
+          }
+          if (
+            !dirty.current ||
+            abort.signal.aborted ||
+            current !== generation.current
+          )
+            return;
+          dirty.current = false;
+        }
+      } finally {
+        if (
+          !abort.signal.aborted &&
+          current === generation.current &&
+          pending.current === operation
+        ) {
+          pending.current = null;
+          onChange(run.sequence, (saved) => ({ ...saved, loading: false }));
+        }
+      }
+    });
+    pending.current = operation;
+    return operation;
+  }, [agentId, clearTimer, run.sequence, onChange]);
   useEffect(() => {
-    void load();
+    connected.current = true;
+    const schedule = (immediate = false) => {
+      if (!connected.current) return;
+      if (pending.current || immediate) void load();
+      else if (timer.current === null)
+        timer.current = setTimeout(() => {
+          timer.current = null;
+          void load();
+        }, 150);
+    };
     const off = backend.onEvent((event) => {
       if (event.type === "connection.closed") {
+        connected.current = false;
+        generation.current += 1;
         request.current?.abort();
-        onChange(run.sequence, (saved) => ({ ...saved, loading: false }));
+        pending.current = null;
+        dirty.current = false;
+        clearTimer();
+        confirmed.current = { epoch: null, revision: 0 };
+        onChange(run.sequence, (saved) => ({
+          ...saved,
+          loading: false,
+          data: saved.data ? clearLiveActivity(saved.data) : null,
+        }));
+        return;
+      }
+      if (event.type === "connection.restored") {
+        connected.current = true;
+        generation.current += 1;
+        void load();
+        return;
       }
       if (
-        event.type === "connection.restored" ||
-        (event.type.startsWith("turn.") &&
-          event.agent_id === agentId &&
-          event.sequence === run.sequence)
-      )
-        void load();
+        (event.type.startsWith("turn.") ||
+          event.type === "tool.updated" ||
+          event.type === "usage.updated") &&
+        event.agent_id === agentId &&
+        event.sequence === run.sequence
+      ) {
+        if (
+          event.saved === true &&
+          typeof event.runtime_epoch === "string" &&
+          typeof event.live_revision === "number"
+        ) {
+          confirmed.current = {
+            epoch: event.runtime_epoch,
+            revision: Math.max(
+              confirmed.current.epoch === event.runtime_epoch
+                ? confirmed.current.revision
+                : 0,
+              event.live_revision,
+            ),
+          };
+        }
+        schedule(event.type === "turn.finished");
+      }
     });
     return () => {
+      connected.current = false;
+      generation.current += 1;
       request.current?.abort();
+      pending.current = null;
+      dirty.current = false;
+      clearTimer();
       off();
     };
-  }, [
-    agentId,
-    run.sequence,
-    run.status,
-    run.last_saved_at,
-    run.request_count,
-    load,
-    onChange,
-  ]);
+  }, [agentId, clearTimer, run.sequence, load, onChange]);
+  useEffect(() => {
+    void load();
+  }, [run.status, run.last_saved_at, run.request_count, load]);
   useEffect(() => {
     register(run.sequence, () => void load());
     return () => register(run.sequence, null);
@@ -277,6 +381,7 @@ export function ConversationFeed({
         senderId: agentId,
         timestamp: part.timestamp ?? run.started_at,
         text: part.value.content,
+        saved: part.saved,
         order: [part.ordinal, part.messageIndex, part.partIndex],
       });
     }
@@ -371,6 +476,7 @@ export function ConversationFeed({
             notice={unit.notice}
             workRecord={unit.workRecord}
             grouped={grouped}
+            saved={unit.saved}
             agentId={agentId}
             name={unit.side === "agent" ? name : undefined}
             complete={reads[unit.sequence]?.data?.complete ?? false}
@@ -394,6 +500,7 @@ const ConversationEntry = memo(function ConversationEntry({
   source,
   action,
   text,
+  saved,
   state,
   notice,
   workRecord,
@@ -442,6 +549,9 @@ const ConversationEntry = memo(function ConversationEntry({
           complete={complete}
           running={running}
         />
+      ) : null}
+      {saved === false ? (
+        <p className="m-0 text-xs text-danger">Not saved</p>
       ) : null}
       {text !== undefined ? (
         <Content
@@ -960,26 +1070,32 @@ function ToolAction({
     false,
   );
   const tool = String(action.value.tool_name);
-  const [outcomes, setOutcomes] = useWindowState<
-    Record<string, { signature: string; failed: boolean }>
-  >(`outcomes:${sequence}:${action.key}`, {});
-  const onResult = useCallback(
-    (identity: string, signature: string, value: HistoryValue) => {
-      setOutcomes((saved) => ({
-        ...saved,
-        [identity]: { signature, failed: failedOutput(value) },
-      }));
-    },
-    [setOutcomes],
-  );
-  const failed = action.results.some(
-    (result) =>
-      result.value.part_kind === "retry-prompt" ||
-      failedOutput(result.value.content) ||
-      (outcomes[result.key]?.signature ===
-        JSON.stringify(result.value.content) &&
-        outcomes[result.key].failed),
-  );
+  const observing =
+    action.ordinal > 0 && (running || action.observation !== undefined);
+  const live = useLiveTool({
+    agentId,
+    sequence,
+    ordinal: action.ordinal,
+    partIndex: action.partIndex,
+    toolCallId: String(action.value.tool_call_id),
+    requestId: action.requestId,
+    enabled: observing,
+    opened,
+  });
+  const observed = observing ? live.observed : null;
+  const lifecycle = observed?.tool ?? action.lifecycle;
+  const results =
+    observed?.content && (!observed.tool.saved || !action.results.length)
+      ? activityParts(observed.content, action.ordinal, "live")
+      : action.results;
+  const failed =
+    lifecycle?.status === "failed" ||
+    (!lifecycle &&
+      results.some(
+        (result) =>
+          result.value.part_kind === "retry-prompt" ||
+          ["failed", "denied"].includes(String(result.value.outcome)),
+      ));
   const Icon =
     tool === "run"
       ? Terminal
@@ -988,15 +1104,23 @@ function ToolAction({
         : tool === "web_search"
           ? Search
           : FileText;
-  const status = failed
-    ? "Failed"
-    : action.results.length
-      ? "Result saved"
-      : !complete
-        ? "Loading result"
-        : running
-          ? "Waiting for result"
-          : "No saved result";
+  const status = lifecycle
+    ? {
+        queued: "Queued",
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+        cancelled: "Cancelled",
+      }[lifecycle.status]
+    : failed
+      ? "Failed"
+      : results.length
+        ? "Result saved"
+        : !complete
+          ? "Loading result"
+          : running
+            ? "Waiting for result"
+            : "No saved result";
   return (
     <div className="min-w-0">
       <button
@@ -1029,7 +1153,29 @@ function ToolAction({
             identity={`${action.key}:parameters`}
             value={toolDisplay(tool, action.args, true)}
           />
-          {action.results.map((result) => (
+          {(lifecycle?.has_result && lifecycle.saved === false) ||
+          action.saved === false ? (
+            <p className="m-0 text-xs text-danger">Not saved</p>
+          ) : null}
+          {lifecycle?.started_at ? (
+            <p className="m-0 text-fg-muted">
+              Started {formatTime(lifecycle.started_at)}
+            </p>
+          ) : null}
+          {lifecycle?.completed_at ? (
+            <p className="m-0 text-fg-muted">
+              Finished {formatTime(lifecycle.completed_at)}
+            </p>
+          ) : null}
+          {live.error && !(live.error.transport && backend.disconnected) ? (
+            <Retry
+              error={live.error.message}
+              loading={live.loading}
+              label="Retry result"
+              onRetry={live.retry}
+            />
+          ) : null}
+          {results.map((result) => (
             <ToolResult
               key={result.key}
               agentId={agentId}
@@ -1037,7 +1183,6 @@ function ToolAction({
               identity={result.key}
               tool={tool}
               value={result.value.content}
-              onResult={onResult}
               structured={
                 result.value.part_kind === "tool-return" &&
                 [
@@ -1053,20 +1198,12 @@ function ToolAction({
               }
             />
           ))}
-          {!action.results.length ? (
+          {!results.length ? (
             <p className="m-0 text-fg-muted">{status}</p>
           ) : null}
         </div>
       ) : null}
     </div>
-  );
-}
-
-function failedOutput(value: HistoryValue): boolean {
-  return (
-    activityRecord(value) &&
-    ((value.error !== undefined && value.error !== null) ||
-      (typeof value.exit_code === "number" && value.exit_code !== 0))
   );
 }
 
@@ -1082,7 +1219,6 @@ function ToolResult({
   tool,
   value,
   structured,
-  onResult,
 }: {
   agentId: number;
   sequence: number;
@@ -1090,7 +1226,6 @@ function ToolResult({
   tool: string;
   value: HistoryValue;
   structured: boolean;
-  onResult: (identity: string, signature: string, value: HistoryValue) => void;
 }) {
   const signature = JSON.stringify(value);
   const [saved, setSaved] = useWindowState<ResultState>(
@@ -1127,24 +1262,13 @@ function ToolResult({
       if (abort.signal.aborted) return;
       current.current = { signature, reading: current.current.reading, parsed };
       setSaved(current.current);
-      onResult(identity, signature, parsed);
       setError(null);
     } catch (error) {
       if (!abort.signal.aborted) setError(problem(error));
     } finally {
       if (!abort.signal.aborted) setLoading(false);
     }
-  }, [
-    agentId,
-    sequence,
-    signature,
-    value,
-    read,
-    ready,
-    setSaved,
-    identity,
-    onResult,
-  ]);
+  }, [agentId, sequence, signature, value, read, ready, setSaved, identity]);
   useEffect(() => {
     void load();
     const off = backend.onEvent((event) => {
@@ -1356,6 +1480,17 @@ const Content = memo(function Content({
   );
 });
 
+function liveSignature(reference: HistoryText | HistoryBinary): string | null {
+  return reference.source === "live"
+    ? JSON.stringify([
+        reference.runtime_epoch,
+        reference.part_index,
+        reference.content_source,
+        reference.content_version,
+      ])
+    : null;
+}
+
 function TextContent({
   agentId,
   sequence,
@@ -1369,7 +1504,13 @@ function TextContent({
 }) {
   const key = `text:${sequence}:${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`;
   const [saved, setSaved] = useWindowState(key, reference);
-  const current = useRef(saved);
+  const signature = liveSignature(reference);
+  const [savedSignature, setSavedSignature] = useWindowState<string | null>(
+    `${key}:version`,
+    null,
+  );
+  const visible = savedSignature === signature ? saved : reference;
+  const current = useRef(visible);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<BackendError | null>(null);
   const generation = useRef(0);
@@ -1415,6 +1556,7 @@ function TextContent({
   useEffect(() => {
     const previous = current.current;
     if (
+      savedSignature !== signature ||
       !previous.value.startsWith(reference.value) ||
       previous.next_offset > reference.total_bytes
     ) {
@@ -1423,6 +1565,7 @@ function TextContent({
       interrupted.current = null;
       current.current = reference;
       setSaved(reference);
+      setSavedSignature(signature);
       setLoading(false);
       setError(null);
     } else if (reference.total_bytes !== previous.total_bytes) {
@@ -1433,7 +1576,7 @@ function TextContent({
       };
       setSaved(current.current);
     }
-  }, [reference, setSaved]);
+  }, [reference, setSaved, signature, savedSignature, setSavedSignature]);
   useEffect(() => {
     const off = backend.onEvent((event) => {
       if (event.type === "connection.closed") {
@@ -1453,10 +1596,10 @@ function TextContent({
   return (
     <div className="flex min-w-0 flex-col items-start gap-2">
       {markdown ? (
-        <Prose>{saved.value}</Prose>
+        <Prose>{visible.value}</Prose>
       ) : (
         <pre className="m-0 max-w-full overflow-x-auto text-xs leading-5 whitespace-pre-wrap wrap-anywhere">
-          {saved.value}
+          {visible.value}
         </pre>
       )}
       {error ? (
@@ -1466,7 +1609,7 @@ function TextContent({
           label="Retry text"
           onRetry={() => void load()}
         />
-      ) : saved.has_more ? (
+      ) : visible.has_more ? (
         <Button size="sm" disabled={loading} onClick={() => void load()}>
           {loading ? <Spinner label="Loading text" /> : null}
           Load more text
@@ -1487,6 +1630,14 @@ function ImageContent({
 }) {
   const key = `image:${sequence}:${reference.source}:${reference.request_ordinal}:${reference.message_index}:${JSON.stringify(reference.path)}`;
   const [url, setUrl] = useWindowState<string | null>(key, null);
+  const signature = liveSignature(reference);
+  const [savedSignature, setSavedSignature] = useWindowState<string | null>(
+    `${key}:version`,
+    null,
+  );
+  const visibleUrl = savedSignature === signature ? url : null;
+  const address = useRef(reference);
+  address.current = reference;
   const [error, setError] = useState<BackendError | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
@@ -1498,19 +1649,20 @@ function ImageContent({
       const image = await backend.agentHistoryImage(
         agentId,
         sequence,
-        reference,
+        address.current,
       );
       if (token !== generation.current) return;
       setUrl(`data:${image.media_type};base64,${image.data}`);
+      setSavedSignature(signature);
       setError(null);
     } catch (error) {
       if (token === generation.current) setError(problem(error));
     } finally {
       if (token === generation.current) setLoading(false);
     }
-  }, [agentId, sequence, reference, setUrl]);
+  }, [agentId, sequence, key, signature, setUrl, setSavedSignature]);
   useEffect(() => {
-    if (!url) void load();
+    if (!visibleUrl) void load();
     const off = backend.onEvent((event) => {
       if (event.type === "connection.closed") {
         generation.current += 1;
@@ -1522,7 +1674,7 @@ function ImageContent({
       generation.current += 1;
       off();
     };
-  }, [load, url]);
+  }, [load, visibleUrl]);
   return (
     <div className="flex min-w-0 flex-col items-start gap-2">
       {loading ? <Spinner label="Loading image" /> : null}
@@ -1534,7 +1686,7 @@ function ImageContent({
           onRetry={() => void load()}
         />
       ) : null}
-      {url && !error ? (
+      {visibleUrl && !error ? (
         <button
           type="button"
           aria-label="Open history image"
@@ -1542,7 +1694,7 @@ function ImageContent({
           onClick={() => setOpen(true)}
         >
           <img
-            src={url}
+            src={visibleUrl}
             alt="Saved model content"
             className="block max-h-[200px] max-w-full object-contain"
             onError={() =>
@@ -1563,9 +1715,9 @@ function ImageContent({
         wide
         footer={<Button onClick={() => setOpen(false)}>Close</Button>}
       >
-        {url ? (
+        {visibleUrl ? (
           <img
-            src={url}
+            src={visibleUrl}
             alt="Saved model content"
             className="max-h-[70vh] max-w-full object-contain"
           />

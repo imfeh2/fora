@@ -122,6 +122,74 @@ describe("window history requests", () => {
   });
 });
 
+describe("usage index preparation", () => {
+  it("merges preparation across readers and keeps completed readiness within the connection", async () => {
+    const { backend, socket, connected } = harness();
+    const connection = await connected();
+    const first = backend.usageAdvance();
+    const joined = backend.usageAdvance();
+    expect(joined).toBe(first);
+    await vi.waitFor(() => expect(connection.sent).toHaveLength(1));
+    connection.reply({
+      type: "response",
+      id: connection.sent[0].id,
+      result: { ready: 0, revision: 1 },
+    });
+    await Promise.all([first, joined]);
+    const next = backend.usageAdvance();
+    await vi.waitFor(() => expect(connection.sent).toHaveLength(2));
+    connection.reply({
+      type: "response",
+      id: connection.sent[1].id,
+      result: { ready: 1, revision: 2 },
+    });
+    await next;
+    await expect(backend.usageAdvance()).resolves.toEqual({
+      ready: 1,
+      revision: 2,
+    });
+    expect(connection.sent).toHaveLength(2);
+    connection.fail();
+    const reconnect = backend.reconnect();
+    await vi.waitFor(() => expect(socket()).not.toBe(connection));
+    socket().open();
+    await reconnect;
+    const restored = backend.usageAdvance();
+    await vi.waitFor(() => expect(socket().sent).toHaveLength(1));
+    expect(socket().sent[0].method).toBe("usage.advance");
+    socket().reply({
+      type: "response",
+      id: socket().sent[0].id,
+      result: { ready: 1, revision: 3 },
+    });
+    await restored;
+  });
+
+  it("keeps an unsuccessful preparation available for explicit retry", async () => {
+    const { backend, connected } = harness();
+    const connection = await connected();
+    const first = backend.usageAdvance();
+    const joined = backend.usageAdvance();
+    const outcomes = Promise.allSettled([first, joined]);
+    await vi.waitFor(() => expect(connection.sent).toHaveLength(1));
+    connection.reply({
+      type: "response",
+      id: connection.sent[0].id,
+      error: { code: "usage_index_failed", message: "Invalid saved usage" },
+    });
+    const results = await outcomes;
+    expect(results.every((result) => result.status === "rejected")).toBe(true);
+    const retry = backend.usageAdvance();
+    await vi.waitFor(() => expect(connection.sent).toHaveLength(2));
+    connection.reply({
+      type: "response",
+      id: connection.sent[1].id,
+      result: { ready: 1, revision: 2 },
+    });
+    await expect(retry).resolves.toEqual({ ready: 1, revision: 2 });
+  });
+});
+
 describe("connectionFrom", () => {
   it("derives the same-origin socket for the full-stack page", () => {
     expect(connectionFrom("?token=abc", "http://127.0.0.1:8000")).toEqual({
