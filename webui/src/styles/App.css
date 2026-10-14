@@ -1,6 +1,90 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 @import "@/styles/tokens.css";
+@source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/code/dist/*.js";
+
+.markdown-content {
+  --background: var(--color-surface);
+  --foreground: var(--color-fg);
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-fg-muted);
+  --border: var(--color-line);
+  --primary: var(--color-primary);
+  --radius: var(--radius-sm);
+}
+
+.markdown-content [data-streamdown="code-block"] {
+  min-width: 0;
+  max-width: 100%;
+  border-color: var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.markdown-content [data-streamdown="code-block"] pre {
+  max-width: 100%;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+}
+
+.markdown-content [data-streamdown="code-block-header"],
+.markdown-content blockquote {
+  color: var(--color-fg-muted);
+}
+
+.markdown-content blockquote {
+  border-color: var(--color-primary);
+}
+
+:where(.markdown-content) table {
+  width: max-content;
+  min-width: 100%;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border-bottom: 1px solid var(--color-line);
+}
+
+.markdown-content mark {
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-blue-500) 25%, transparent);
+  color: var(--color-blue-100);
+  padding: 0 3px;
+  font-weight: var(--font-weight-medium);
+}
+
+.markdown-content .markdown-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .message-row .message-copy,
+  .history-text .message-copy {
+    opacity: 0;
+  }
+
+  .message-row:hover .message-copy,
+  .message-row:focus-within .message-copy,
+  .history-text:hover .message-copy,
+  .history-text:focus-within .message-copy {
+    opacity: 1;
+  }
+
+  .markdown-content [data-streamdown="code-block"] .markdown-copy {
+    opacity: 0;
+  }
+
+  .markdown-content [data-streamdown="code-block"]:hover .markdown-copy,
+  .markdown-content [data-streamdown="code-block"]:focus-within .markdown-copy {
+    opacity: 1;
+  }
+}
 
 @custom-variant narrow (@media (max-width: 640px));
 @custom-variant touch (@media (pointer: coarse));

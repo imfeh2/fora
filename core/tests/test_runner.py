@@ -10,6 +10,7 @@ from itertools import pairwise
 from typing import Any
 
 import pytest
+from model_fixtures import GenerationRecorderStub
 from pydantic_ai import (
     BinaryContent,
     ModelMessagesTypeAdapter,
@@ -358,12 +359,18 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     ]
     assert (responses[0].usage.cost is not None) == priced
     assert_settlement(first[-1], responses[0].parts)
-    assert first[-2] == responses[0]
+    assert first[-2] == replace(
+        responses[0], run_id=first[-2].run_id, conversation_id=first[-2].conversation_id
+    )
     assert first[-3].parts[0].content == original.prompt
     assert second == ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
     assert second[: len(first) - 1] == first[:-1]
     assert "without a confirmed result" not in persisted[-1]
-    assert second[-1] == responses[1]
+    assert second[-1] == replace(
+        responses[1],
+        run_id=second[-1].run_id,
+        conversation_id=second[-1].conversation_id,
+    )
     assert ContextSources(2, 1).restore([second[-2]])[0].metadata == {
         "fora": {"block": "durable", "environment": "environment B"}
     }
@@ -1805,7 +1812,7 @@ def test_execution_domain_failures_do_not_replay_writes(settings, code):
     received = []
 
     class Tools:
-        def send_message(self, discussion_id, body):
+        def send_message(self, discussion_id, body, *, generation_key=None):
             writes.append(body)
             raise DomainError(code, "private execution diagnostic")
 
@@ -2235,13 +2242,28 @@ def test_failed_model_creation_keeps_snapshot_for_restart(settings):
 def test_provider_wire_preserves_raw_snapshot_across_tools_turns_and_restart(
     settings, monkeypatch, kind, switch
 ):
+    from contextlib import asynccontextmanager
+
     import httpx
     import httpx2
     from anthropic import AsyncAnthropic
     from openai import AsyncOpenAI
+    from pydantic_ai.models import CompletedStreamedResponse
     from pydantic_ai.models.google import GoogleModel
     from pydantic_ai.providers.google import GoogleProvider
 
+    @asynccontextmanager
+    async def completed_request(self, messages, settings, parameters, run_context=None):
+        response = await self.request(messages, settings, parameters)
+        yield CompletedStreamedResponse(response, model_request_parameters=parameters)
+
+    for provider_model in (
+        OpenAIChatModel,
+        OpenAIResponsesModel,
+        AnthropicModel,
+        GoogleModel,
+    ):
+        monkeypatch.setattr(provider_model, "request_stream", completed_request)
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
     wire = []
     wire_kinds = []
@@ -2592,7 +2614,7 @@ def test_live_model_records_the_provider_boundary_after_outgoing_changes(setting
     started = []
     responses = []
 
-    class Recorder:
+    class Recorder(GenerationRecorderStub):
         def start(
             self, messages_json, parameters_json, settings_json, model_json, streaming
         ):
@@ -2645,7 +2667,7 @@ def test_live_model_links_tool_results_to_the_current_request(settings):
     related = []
     starts = 0
 
-    class Recorder:
+    class Recorder(GenerationRecorderStub):
         def start(
             self, messages_json, parameters_json, settings_json, model_json, streaming
         ):
@@ -2694,7 +2716,7 @@ def test_live_model_links_tool_results_to_the_current_request(settings):
 def test_live_model_finalizes_tool_results_without_following_request(settings):
     related = []
 
-    class Recorder:
+    class Recorder(GenerationRecorderStub):
         def start(
             self, messages_json, parameters_json, settings_json, model_json, streaming
         ):
@@ -2739,7 +2761,7 @@ def test_live_model_finalizes_tool_results_without_following_request(settings):
 def test_live_model_request_snapshot_failure_prevents_provider_call(settings):
     calls = []
 
-    class Recorder:
+    class Recorder(GenerationRecorderStub):
         def start(
             self, messages_json, parameters_json, settings_json, model_json, streaming
         ):
@@ -2773,7 +2795,7 @@ def test_live_model_request_snapshot_failure_prevents_provider_call(settings):
     assert calls == []
 
 
-class FinalResultRecorder:
+class FinalResultRecorder(GenerationRecorderStub):
     def __init__(self):
         self.started = []
         self.responses = []

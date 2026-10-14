@@ -134,6 +134,12 @@ beforeEach(() => {
     token_limit: null,
   });
   vi.spyOn(backend, "discussions").mockResolvedValue([discussion]);
+  vi.spyOn(backend, "discussionPreviews").mockImplementation(async (id) => ({
+    discussion_id: id,
+    previews: [],
+    has_more: false,
+    next_before: null,
+  }));
   vi.spyOn(backend, "modelCatalog").mockResolvedValue({
     version: 2,
     providers: [],

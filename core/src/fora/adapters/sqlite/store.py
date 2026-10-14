@@ -26,6 +26,7 @@ from fora.core.errors import DomainError
 from fora.core.member import AgentState, Member, MemberType, name_key
 from fora.core.mention import Mention, build_mentions
 from fora.locking import LockLevel, OrderedRLock
+from fora.ports.agent import GenerationKey, GenerationStore
 from fora.ports.store import DiscussionPage, PendingAcknowledgement, ReadSummary
 
 SCHEMA = """
@@ -1090,6 +1091,7 @@ class SqliteStore:
         attachment_ids: Sequence[str] = (),
         client_message_id: str | None = None,
         mark_read: bool = False,
+        generation_key: GenerationKey | None = None,
     ) -> tuple[Message, tuple[Mention, ...], bool]:
         validate_body(body, has_attachments=bool(attachment_ids))
         if client_message_id is not None:
@@ -1100,6 +1102,34 @@ class SqliteStore:
             identifier(upload_id)
         with self._write() as db:
             discussion = self._member_discussion(discussion_id, sender_id)
+            generation_store: GenerationStore | None = None
+            if generation_key is not None:
+                from fora.adapters.sqlite.generation import SqliteGenerationStore
+
+                if generation_key.agent_id != sender_id:
+                    raise DomainError("invalid_generation", "Generation sender differs")
+                generation_store = SqliteGenerationStore(db)
+                preview = generation_store.preview(generation_key)
+                if preview is None:
+                    raise DomainError("not_found", "Generation preview does not exist")
+                if preview.status == "sent":
+                    if preview.discussion_id != discussion_id:
+                        raise DomainError(
+                            "message_conflict",
+                            "Generation was sent in another Discussion",
+                        )
+                    assert preview.message_id is not None
+                    mapped_message = self.read_message(
+                        discussion_id, preview.message_id
+                    )
+                    if mapped_message.body != body or tuple(
+                        item.id for item in mapped_message.attachments
+                    ) != tuple(attachment_ids):
+                        raise DomainError(
+                            "message_conflict",
+                            "Generation has different message content",
+                        )
+                    return mapped_message, (), False
             if client_message_id is not None:
                 state, previous = self.send_outcome(
                     discussion_id, sender_id, client_message_id
@@ -1116,6 +1146,9 @@ class SqliteStore:
                             "message_conflict",
                             "This send ID has different message content",
                         )
+                    if generation_store is not None:
+                        assert generation_key is not None
+                        generation_store.link(generation_key, previous)
                     return previous, (), False
             attachments = []
             for upload_id in attachment_ids:
@@ -1209,6 +1242,9 @@ class SqliteStore:
                     "INSERT INTO message_receipts(discussion_id, owner_id, client_message_id, message_id) VALUES (?, ?, ?, ?)",
                     (discussion_id, sender_id, client_message_id, message_id),
                 )
+            if generation_store is not None:
+                assert generation_key is not None
+                generation_store.link(generation_key, message)
             if mark_read:
                 self._advance_read(discussion_id, sender_id, message_id)
             return message, mentions, True

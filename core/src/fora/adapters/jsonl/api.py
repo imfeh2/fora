@@ -20,7 +20,7 @@ from fora.adapters.voice.config import VoiceConfig
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import idle_streak
-from fora.ports.agent import HistoryWindowFilter
+from fora.ports.agent import GenerationKey, HistoryWindowFilter
 from fora.ports.usage import UsageCache
 from fora.runtime.scheduler import Scheduler
 from fora.runtime_info import RuntimeInfo
@@ -111,6 +111,23 @@ def _usage_version(result: dict[str, Any]) -> dict[str, Any]:
         key: result[key]
         for key in ("dataset_revision", "runtime_epoch", "live_versions", "index")
     }
+
+
+def _required_string(params: dict[str, Any], name: str) -> str:
+    value = params.get(name)
+    if not isinstance(value, str) or not value or len(value) > 256:
+        raise DomainError("invalid_params", f"{name} must be a non-empty string")
+    return value
+
+
+def _generation_bounds(params: dict[str, Any]) -> tuple[int, int, int]:
+    revision = _required_integer(params, "revision")
+    offset = _integer_param(params, "offset", default=0, maximum=2**63 - 1)
+    limit = _integer_param(params, "limit", default=16384, maximum=65536)
+    assert offset is not None and limit is not None
+    if revision == 0 or limit == 0:
+        raise DomainError("invalid_params", "revision and limit must be positive")
+    return revision, offset, limit
 
 
 def _history_run_payload(run: Any) -> dict[str, Any]:
@@ -349,6 +366,117 @@ class Api:
                 after=params.get("after"),
                 metadata=params.get("metadata", False),
             )
+
+        def discussion_previews(params: dict[str, Any]) -> Any:
+            discussion_id = _required_integer(params, "discussion_id")
+            limit = _integer_param(params, "limit", default=30, maximum=50)
+            assert limit is not None
+            if limit == 0:
+                raise DomainError("invalid_params", "limit must be positive")
+            before = params.get("before")
+            if before is not None and (
+                not isinstance(before, list)
+                or len(before) != 2
+                or any(not isinstance(item, str) or not item for item in before)
+            ):
+                raise DomainError("invalid_params", "before must be a sort key")
+            with self._reading():
+                page = self._scheduler.history.generation.previews(
+                    discussion_id,
+                    HUMAN_ID,
+                    before=(before[0], before[1]) if before is not None else None,
+                    limit=limit + 1,
+                    include_sent=True,
+                )
+            previews = page[:limit]
+            has_more = len(page) > limit
+            return {
+                "discussion_id": discussion_id,
+                "previews": [asdict(item) for item in previews],
+                "has_more": has_more,
+                "next_before": [previews[-1].created_at, previews[-1].preview_id]
+                if previews and has_more
+                else None,
+            }
+
+        def discussion_preview(params: dict[str, Any]) -> Any:
+            discussion_id = _required_integer(params, "discussion_id")
+            preview_id = _required_string(params, "preview_id")
+            with self._reading():
+                preview = self._scheduler.history.generation.visible_preview(
+                    preview_id, discussion_id, HUMAN_ID
+                )
+                body = self._scheduler.history.generation.preview_text(
+                    preview_id, discussion_id, HUMAN_ID, preview.revision
+                )
+            return {"preview": asdict(preview), "body": asdict(body)}
+
+        def discussion_preview_text(params: dict[str, Any]) -> Any:
+            discussion_id = _required_integer(params, "discussion_id")
+            preview_id = _required_string(params, "preview_id")
+            revision, offset, limit = _generation_bounds(params)
+            with self._reading():
+                page = self._scheduler.history.generation.preview_text(
+                    preview_id, discussion_id, HUMAN_ID, revision, offset, limit
+                )
+            return asdict(page)
+
+        def agent_generation_parts(params: dict[str, Any]) -> Any:
+            agent_id = _required_integer(params, "agent_id")
+            sequence = _required_integer(params, "sequence")
+            ordinal = _required_integer(params, "ordinal")
+            after = _integer_param(params, "after", maximum=2**63 - 1)
+            limit = _integer_param(params, "limit", default=30, maximum=50)
+            assert limit is not None
+            if limit == 0:
+                raise DomainError("invalid_params", "limit must be positive")
+            with self._reading():
+                self._human().authorize_agent_history(agent_id)
+                page = self._scheduler.history.generation.parts(
+                    agent_id,
+                    sequence,
+                    ordinal,
+                    after=after if after is not None else -1,
+                    limit=limit + 1,
+                )
+            parts = page[:limit]
+            has_more = len(page) > limit
+            return {
+                "agent_id": agent_id,
+                "sequence": sequence,
+                "ordinal": ordinal,
+                "parts": [asdict(item) for item in parts],
+                "has_more": has_more,
+                "next_after": parts[-1].key.part_index if parts and has_more else None,
+            }
+
+        def agent_generation_text(params: dict[str, Any]) -> Any:
+            agent_id = _required_integer(params, "agent_id")
+            sequence = _required_integer(params, "sequence")
+            ordinal = _required_integer(params, "ordinal")
+            part_index = _required_integer(params, "part_index")
+            request_id = _required_string(params, "request_id")
+            field = params.get("field", "json")
+            revision, offset, limit = _generation_bounds(params)
+            with self._reading():
+                self._human().authorize_agent_history(agent_id)
+                summary = self._scheduler.history.model_request_summary(
+                    agent_id, sequence, ordinal
+                )
+                if summary is None:
+                    raise DomainError("not_found", "Model request does not exist")
+                key = GenerationKey(
+                    agent_id,
+                    sequence,
+                    ordinal,
+                    part_index,
+                    request_id,
+                    summary.run_id,
+                )
+                page = self._scheduler.history.generation.part_text(
+                    key, revision, offset, limit, field=field
+                )
+            return {"key": asdict(key), "field": field, **asdict(page)}
 
         def discussion_mark_read(params: dict[str, Any]) -> Any:
             result = self._human().mark_read(
@@ -1475,6 +1603,11 @@ class Api:
         )
         register("discussion.read", discussion_read, scope=discussion_change)
         register("discussion.page", discussion_page, scope=discussion_query)
+        register("discussion.previews", discussion_previews, scope=discussion_query)
+        register("discussion.preview", discussion_preview, scope=discussion_query)
+        register(
+            "discussion.preview.text", discussion_preview_text, scope=discussion_query
+        )
         register("discussion.mark_read", discussion_mark_read, scope=discussion_change)
         register(
             "discussion.ack_pending", discussion_ack_pending, scope=discussion_change
@@ -1570,6 +1703,8 @@ class Api:
         register("agent.history.read", agent_history_read, scope=agent_query)
         register("agent.history.text", agent_history_text, scope=agent_query)
         register("agent.history.image", agent_history_image, scope=agent_query)
+        register("agent.generation.parts", agent_generation_parts, scope=agent_query)
+        register("agent.generation.text", agent_generation_text, scope=agent_query)
         register("settings.get", settings_get, scope=setting_query)
         register("settings.update", settings_update, scope=setting_change)
         register(

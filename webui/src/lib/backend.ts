@@ -371,6 +371,76 @@ export type PageRequest = {
   metadata?: boolean;
 };
 
+export type GenerationKey = {
+  agent_id: number;
+  sequence: number;
+  ordinal: number;
+  part_index: number;
+  request_id: string;
+  run_id: string;
+};
+
+export type GenerationPart = {
+  tool_name?: string | null;
+  tool_call_id?: string | null;
+  key: GenerationKey;
+  part_kind: string;
+  revision: number;
+  status: "generating" | "completed" | "failed" | "interrupted";
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DiscussionPreview = {
+  preview_id: string;
+  key: GenerationKey;
+  discussion_id: number | null;
+  revision: number;
+  status: "generating" | "sending" | "sent" | "failed" | "interrupted";
+  error: string | null;
+  message_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GenerationTextPage = {
+  revision: number;
+  offset: number;
+  next_offset: number;
+  total_bytes: number;
+  value: string;
+  has_more: boolean;
+};
+
+export type DiscussionPreviewPage = {
+  discussion_id: number;
+  previews: DiscussionPreview[];
+  has_more: boolean;
+  next_before: [string, string] | null;
+};
+
+export type DiscussionPreviewRead = {
+  preview: DiscussionPreview;
+  body: GenerationTextPage;
+};
+
+export type GenerationPartPage = {
+  agent_id: number;
+  sequence: number;
+  ordinal: number;
+  parts: GenerationPart[];
+  has_more: boolean;
+  next_after: number | null;
+};
+
+export type GenerationField = "json" | "content" | "args";
+
+export type GenerationPartText = GenerationTextPage & {
+  key: GenerationKey;
+  field: GenerationField;
+};
+
 export type TurnEffect = { ordinal: number; tool: string; summary: string };
 
 export type HistoryReminder = { discussion_id: number; message_id: number };
@@ -706,6 +776,9 @@ const READ_METHODS = new Set([
   "organization.get",
   "discussion.list",
   "discussion.page",
+  "discussion.previews",
+  "discussion.preview",
+  "discussion.preview.text",
   "discussion.search",
   "agent.detail",
   "usage.query",
@@ -717,6 +790,8 @@ const READ_METHODS = new Set([
   "agent.history.read",
   "agent.history.text",
   "agent.history.image",
+  "agent.generation.parts",
+  "agent.generation.text",
   "library.list",
   "library.read",
   "workspace.list",
@@ -1308,6 +1383,40 @@ export class Backend {
     });
   }
 
+  discussionPreviews(
+    discussion_id: number,
+    before?: [string, string],
+    limit = 30,
+  ) {
+    return this.call<DiscussionPreviewPage>("discussion.previews", {
+      discussion_id,
+      before,
+      limit,
+    });
+  }
+
+  discussionPreview(discussion_id: number, preview_id: string) {
+    return this.call<DiscussionPreviewRead>("discussion.preview", {
+      discussion_id,
+      preview_id,
+    });
+  }
+
+  discussionPreviewText(
+    discussion_id: number,
+    preview_id: string,
+    revision: number,
+    offset: number,
+  ) {
+    return this.call<GenerationTextPage>("discussion.preview.text", {
+      discussion_id,
+      preview_id,
+      revision,
+      offset,
+      limit: 16 * 1024,
+    });
+  }
+
   markRead(discussion_id: number, message_id: number) {
     return this.call<{ read_through: number }>("discussion.mark_read", {
       discussion_id,
@@ -1679,6 +1788,41 @@ export class Backend {
       message_index: text.message_index,
       path: text.path,
       offset: text.offset,
+      limit: 16 * 1024,
+    });
+  }
+
+  agentGenerationParts(
+    agent_id: number,
+    sequence: number,
+    ordinal: number,
+    after?: number,
+    limit = 30,
+  ) {
+    return this.call<GenerationPartPage>("agent.generation.parts", {
+      agent_id,
+      sequence,
+      ordinal,
+      after,
+      limit,
+    });
+  }
+
+  agentGenerationText(
+    key: GenerationKey,
+    revision: number,
+    field: GenerationField,
+    offset = 0,
+  ) {
+    return this.call<GenerationPartText>("agent.generation.text", {
+      agent_id: key.agent_id,
+      sequence: key.sequence,
+      ordinal: key.ordinal,
+      part_index: key.part_index,
+      request_id: key.request_id,
+      revision,
+      field,
+      offset,
       limit: 16 * 1024,
     });
   }

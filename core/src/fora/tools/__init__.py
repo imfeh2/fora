@@ -16,7 +16,7 @@ from fora.core.attachment import (
 from fora.core.discussion import Discussion, Message, validate_body, validate_topic
 from fora.core.errors import DomainError
 from fora.core.member import validate_name
-from fora.ports.agent import HistoryStore, SettingsStore
+from fora.ports.agent import GenerationKey, HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
 from fora.ports.files import ConflictError, FileTree
 from fora.ports.store import OrganizationStore
@@ -589,9 +589,20 @@ class AgentTools:
         mark_read: bool = True,
         attachment_ids: Sequence[str] = (),
         client_message_id: str | None = None,
+        generation_key: GenerationKey | None = None,
     ) -> dict[str, Any]:
         self._check("discussion.send", discussion_id)
         self._require_membership(discussion_id)
+        if generation_key is not None and (
+            not self._actor.is_agent
+            or self._turn is None
+            or generation_key.agent_id != self._actor.member_id
+            or generation_key.agent_id != self._turn.agent_id
+            or generation_key.sequence != self._turn.sequence
+        ):
+            raise DomainError(
+                "invalid_generation", "Generation does not belong to this Turn"
+            )
         if type(mark_read) is not bool or (self._actor.is_agent and not mark_read):
             raise DomainError(
                 "not_permitted",
@@ -625,20 +636,31 @@ class AgentTools:
                             "send_cancelled", "This send attempt was cancelled"
                         ) from None
                 raise
+        options: dict[str, Any] = {
+            "attachment_ids": attachment_ids,
+            "client_message_id": client_message_id,
+            "mark_read": mark_read,
+        }
+        if generation_key is not None:
+            options["generation_key"] = generation_key
         message, mentions, created = self._deps.store.submit_message(
-            discussion_id,
-            self._actor.member_id,
-            validated,
-            attachment_ids=attachment_ids,
-            client_message_id=client_message_id,
-            mark_read=mark_read,
+            discussion_id, self._actor.member_id, validated, **options
         )
+        mapping: dict[str, Any] = {}
+        if generation_key is not None:
+            preview = self._deps.history.generation.preview(generation_key)
+            assert preview is not None and preview.status == "sent"
+            mapping = {
+                "preview_id": preview.preview_id,
+                "preview_revision": preview.revision,
+            }
         if not created:
             return {
                 "discussion_id": discussion_id,
                 "id": message.id,
                 "created_at": message.created_at,
                 "mentioned": [],
+                **mapping,
             }
         self._record(
             "send",
@@ -652,6 +674,7 @@ class AgentTools:
                 "id": message.id,
                 "created_at": message.created_at,
                 "mentioned": [item.member_id for item in mentions],
+                **mapping,
             },
         )
 

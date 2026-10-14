@@ -6,6 +6,7 @@ import threading
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
+from model_fixtures import GenerationRecorderStub
 from pydantic_ai import BinaryContent, ModelMessagesTypeAdapter, ToolReturn
 from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -162,7 +163,7 @@ class Settings:
         return None
 
 
-class Recorder:
+class Recorder(GenerationRecorderStub):
     def __init__(self, snapshots):
         self.snapshots = snapshots
         self.requests = 0
@@ -173,7 +174,7 @@ class Recorder:
     def start(
         self, messages_json, parameters_json, settings_json, model_json, streaming
     ):
-        assert not streaming
+        assert streaming
         self.requests += 1
         return ModelRequestHandle(self.requests, f"request-{self.requests}")
 

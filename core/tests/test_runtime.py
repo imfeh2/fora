@@ -1867,7 +1867,11 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
     saved = ModelMessagesTypeAdapter.validate_json(persisted[1])
     run = world.history.runs(MAIN)[0]
     captured = ModelMessagesTypeAdapter.validate_json(run.messages_json)
-    assert captured[:-1] == saved[:-1]
+    assert captured[:-2] == saved[:-1]
+    assert isinstance(captured[-1], ModelResponse)
+    assert captured[-1].state == "interrupted"
+    assert captured[-1].parts == []
+    assert captured[-1].usage.input_tokens == captured[-1].usage.output_tokens == 0
     assert isinstance(saved[-1], ModelRequest)
     assert isinstance(saved[-1].parts[0], ToolReturnPart)
     assert saved[-1].parts[0].tool_call_id == "read"
@@ -1875,9 +1879,9 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
         "The Turn ended without a confirmed result for this call. "
         "It may have executed; check the outcome before retrying."
     )
-    assert isinstance(captured[-1], ModelRequest)
-    assert len(captured[-1].parts) == 1
-    returned = captured[-1].parts[0]
+    assert isinstance(captured[-2], ModelRequest)
+    assert len(captured[-2].parts) == 1
+    returned = captured[-2].parts[0]
     assert isinstance(returned, ToolReturnPart)
     assert returned.tool_call_id == "read"
     assert returned.content["messages"][0]["body"] == "@Main please help"
@@ -3104,9 +3108,10 @@ def test_process_interruption_before_response_recovers_saved_window_snapshot(
         request = TurnRequest(agent_id=2, sequence=run.sequence, agent_name="Main", prompt="work", reminder=None,
             history_json="[]", resident="resident", environment=lambda: None, ephemeral=lambda: "",
             persist=lambda raw: history.save_progress(2, run.sequence, raw), agents_instructions="snapshot\\n ")
-        def interrupt(messages, info):
+        async def interrupt(messages, info):
             os._exit(77)
-        PydanticModelRunner(history, build_model=lambda config: FunctionModel(interrupt)).run(request, None)
+            yield ""
+        PydanticModelRunner(history, build_model=lambda config: FunctionModel(stream_function=interrupt)).run(request, None)
     """)
     result = subprocess.run(
         [sys.executable, "-c", child, str(tmp_path / "fora.sqlite3")],
@@ -3323,6 +3328,15 @@ def test_preparation_model_failure_streak_resets_and_tick_reminds(
             assert summary.response_count == 1 and summary.response_length > 0
         if restart == "legacy":
             with world.history.transaction():
+                world.store._db.execute("PRAGMA defer_foreign_keys = ON")
+                world.store._db.execute(
+                    "UPDATE discussion_previews SET sequence = sequence + 419 WHERE agent_id = ?",
+                    (MAIN,),
+                )
+                world.store._db.execute(
+                    "UPDATE agent_generation_parts SET sequence = sequence + 419 WHERE agent_id = ?",
+                    (MAIN,),
+                )
                 world.store._db.execute(
                     "INSERT INTO agent_windows (agent_id, number, since_sequence) VALUES (?, 89, 420)",
                     (MAIN,),
@@ -3676,7 +3690,7 @@ def test_missing_usage_preserves_stage_and_actual_calls(
             usage = json.loads(saved.usage_json)
             assert usage["last_input_tokens"] is None
             assert usage["input_tokens"] == usage["output_tokens"] == 0
-            assert usage["requests"] == (0 if kind == "http" else 1)
+            assert usage["requests"] == 1
             summary = world.history.model_request_summaries(MAIN, failed.sequence)[0]
             assert summary.status == "failed" and summary.error == failed.error
             assert summary.response_count == (0 if kind == "http" else 1)
@@ -3785,5 +3799,96 @@ def test_persistent_lifecycle_save_failure_preserves_window_and_suppresses_reset
         assert world.history.window(MAIN) == window
         assert world.store.pending(MAIN) == pending
         assert not any(name == "window.reset" for name, _ in events)
+    finally:
+        scheduler.stop()
+
+
+@pytest.mark.parametrize("ending", ["completed", "failed", "exception"])
+def test_turn_finalization_saves_the_last_generation_and_releases_ownership(
+    world, ending
+):
+    from fora.ports.agent import GenerationUpdate, SendPreviewCandidate
+
+    room = mention(world)
+    identity = []
+    events = []
+
+    def model(request, tools):
+        recorder = request.request_recorder
+        handle = recorder.start((), "{}", "{}", "{}", True)
+        identity.append(recorder.generation_key(handle, 0))
+        for text in ("first", "received"):
+            recorder.generation(
+                handle,
+                0,
+                GenerationUpdate(
+                    "tool-call",
+                    json.dumps({"content": text}),
+                    preview=SendPreviewCandidate(room, text),
+                ),
+            )
+        if ending == "exception":
+            raise RuntimeError("Model interrupted")
+        return TurnOutcome(
+            messages_json="[]",
+            error="Model failed" if ending == "failed" else None,
+        )
+
+    scheduler = Scheduler(
+        world,
+        RecordingRunner(model),
+        on_event=lambda name, payload: events.append((name, payload)),
+    )
+    try:
+        record = scheduler.run_turn(MAIN)
+        assert record.status == ("completed" if ending == "completed" else "failed")
+        part = world.history.generation.part(identity[0])
+        preview = world.history.generation.preview(identity[0])
+        assert part.status == preview.status == "failed"
+        assert (
+            world.history.generation.preview_text(
+                preview.preview_id, room, HUMAN, preview.revision
+            ).value
+            == "received"
+        )
+        assert MAIN not in scheduler._active and MAIN not in scheduler._reserved
+        assert world.history.runs(MAIN)[0].status == record.status
+        assert any(name == "discussion.preview" for name, _payload in events)
+        assert sum(name == "turn.finished" for name, _payload in events) == 1
+    finally:
+        scheduler.stop()
+
+
+def test_generation_finalization_failure_does_not_complete_the_turn(world, monkeypatch):
+    from fora.ports.agent import GenerationUpdate
+
+    mention(world)
+    identities = []
+    save = world.history.generation.save
+
+    def unavailable(key, update):
+        if update.status != "generating":
+            raise sqlite3.OperationalError("Generation storage unavailable")
+        return save(key, update)
+
+    monkeypatch.setattr(world.history.generation, "save", unavailable)
+
+    def model(request, tools):
+        recorder = request.request_recorder
+        handle = recorder.start((), "{}", "{}", "{}", True)
+        identities.append(recorder.generation_key(handle, 0))
+        recorder.generation(
+            handle, 0, GenerationUpdate("text", '{"content":"received"}')
+        )
+        return TurnOutcome(messages_json="[]")
+
+    scheduler = Scheduler(world, RecordingRunner(model))
+    try:
+        result = scheduler.run_turn(MAIN)
+        assert result.status == "failed"
+        assert "HistoryPersistenceError" in result.error
+        assert world.history.runs(MAIN)[0].status == "failed"
+        assert world.history.generation.part(identities[0]).status == "generating"
+        assert MAIN not in scheduler._active and MAIN not in scheduler._reserved
     finally:
         scheduler.stop()

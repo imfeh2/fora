@@ -191,6 +191,7 @@ export function useConversationHistory({
         if (
           isCurrent &&
           event.type.startsWith("turn.") &&
+          event.type !== "turn.generation" &&
           event.agent_id === agentId
         )
           void currentLoads.current.loadLatest();

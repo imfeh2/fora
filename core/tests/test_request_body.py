@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import httpx2
 import pytest
+from model_fixtures import GenerationRecorderStub
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
@@ -250,7 +251,7 @@ def test_known_fields_have_interface_specific_validation(api_type, body):
         validate_request_body(body, api_type)
 
 
-class Recorder:
+class Recorder(GenerationRecorderStub):
     def __init__(self, fail=False):
         self.settings = []
         self.identities = []
@@ -556,7 +557,9 @@ def test_cancellation_preserves_real_sqlite_request_and_releases_client(
         clients = transport(monkeypatch, respond)
         config = catalog(api_type, {"extension": {"version": 1}}).resolve()
         async with runner.build_model(config) as wrapped:
-            recorder = _TurnRequestRecorder(settings, run, 1, lambda event: None)
+            recorder = _TurnRequestRecorder(
+                settings, run, 1, lambda event: None, lambda name, payload: None
+            )
             live = runner.LiveModel(
                 lambda: wrapped,
                 lambda: "",
@@ -605,6 +608,19 @@ def test_cancellation_preserves_real_sqlite_request_and_releases_client(
 def test_runner_same_turn_snapshot_next_turn_and_provider_isolation(
     monkeypatch, tmp_path, api_type
 ):
+    from contextlib import asynccontextmanager
+
+    from pydantic_ai.models import CompletedStreamedResponse
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+    @asynccontextmanager
+    async def completed_request(self, messages, settings, parameters, run_context=None):
+        response = await self.request(messages, settings, parameters)
+        yield CompletedStreamedResponse(response, model_request_parameters=parameters)
+
+    for provider_model in (OpenAIChatModel, OpenAIResponsesModel, AnthropicModel):
+        monkeypatch.setattr(provider_model, "request_stream", completed_request)
     bodies = []
     base = SqliteStore(tmp_path / "turns.sqlite3")
     settings = SqliteAgentStore(base._db)

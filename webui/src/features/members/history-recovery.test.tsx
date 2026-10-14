@@ -284,6 +284,14 @@ beforeAll(async () => {
   vi.stubGlobal("requestAnimationFrame", dom.window.requestAnimationFrame);
   vi.stubGlobal("cancelAnimationFrame", dom.window.cancelAnimationFrame);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   testing = await import("@testing-library/react");
   userEvent = (await import("@testing-library/user-event")).default;
   useApplication = (await import("@/App")).useApplication;

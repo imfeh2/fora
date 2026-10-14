@@ -334,7 +334,7 @@ it.each([
     expect(screen.queryByText("old text failure")).toBeNull();
     expect(
       screen
-        .getByRole("button", { name: "Loading text..." })
+        .getByRole("button", { name: "Load more text" })
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(text).toHaveBeenCalledTimes(2);
@@ -367,7 +367,7 @@ it("replaces loaded same-prefix text and retries the current version", async () 
   await emit({ type: "turn.progress", agent_id: 2, sequence: 4 });
   expect(screen.queryByText("AAV1")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Load more text" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Retry text" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
   await screen.findByText("AAV2");
   expect(
     text.mock.calls.slice(1).map((call) => call[2].content_version),

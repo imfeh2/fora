@@ -255,6 +255,12 @@ beforeEach(() => {
   harness.view.mockReset();
   harness.positioned.mockReset();
   clearToasts();
+  vi.spyOn(backend, "discussionPreviews").mockResolvedValue({
+    discussion_id: 1,
+    previews: [],
+    has_more: false,
+    next_before: null,
+  });
   vi.spyOn(backend, "onEvent").mockReturnValue(vi.fn());
   vi.spyOn(backend, "discussions").mockResolvedValue([discussion]);
 });

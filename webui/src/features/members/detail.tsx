@@ -22,8 +22,6 @@ import {
   useRef,
   useState,
 } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useOrganization, useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader, Section } from "@/components/layout/shell";
@@ -44,6 +42,11 @@ import { OverflowMenu } from "@/components/ui/menu";
 import { StatePanel } from "@/components/ui/state-panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TreeView } from "@/features/library/tree-view";
+import {
+  CollapsibleText,
+  CopyTextButton,
+  MarkdownContent,
+} from "@/features/markdown";
 import { ConversationSkeleton } from "@/features/members/activity-skeleton";
 import { ConversationHistory } from "@/features/members/conversation-history";
 import { historyRun, mergeHistoryRuns } from "@/features/members/history-state";
@@ -227,7 +230,8 @@ function AgentPage({
         return;
       }
       if (
-        ((event.type.startsWith("turn.") ||
+        (((event.type.startsWith("turn.") &&
+          event.type !== "turn.generation") ||
           event.type === "usage.updated" ||
           event.type === "workspace.changed") &&
           event.agent_id === member.id) ||
@@ -1178,6 +1182,7 @@ export function TurnHistoryModal({
       if (
         event.type === "connection.restored" ||
         (event.type.startsWith("turn.") &&
+          event.type !== "turn.generation" &&
           event.agent_id === agentId &&
           event.sequence === sequence)
       )
@@ -1930,6 +1935,7 @@ function HistoryMessagesPanel({
               value={message}
               agentId={agentId}
               sequence={sequence}
+              identity={`history:${agentId}:${sequence}:${title}:${content.offset + index}`}
               toolResults={toolResults}
             />
           ) : (
@@ -1937,6 +1943,7 @@ function HistoryMessagesPanel({
               key={`${content.offset + index}`}
               value={message}
               label={`Message ${content.offset + index + 1}`}
+              identity={`history:${agentId}:${sequence}:${title}:${content.offset + index}`}
               agentId={agentId}
               sequence={sequence}
             />
@@ -1952,10 +1959,23 @@ function HistoryMessagesPanel({
   );
 }
 
-function SavedMarkdown({ children }: { children: string }) {
+function SavedMarkdown({
+  children,
+  identity,
+}: {
+  children: string;
+  identity: string;
+}) {
   return (
-    <div className="min-w-0 max-w-full text-sm leading-body wrap-anywhere [&_p]:my-2 [&_ul]:list-disc [&_ol]:list-decimal [&_ul]:pl-5 [&_ol]:pl-5 [&_pre]:min-w-0 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-sm [&_pre]:bg-surface-raised [&_pre]:p-3 [&_code]:font-mono [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-line [&_blockquote]:pl-3 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_img]:max-w-full [&_td]:p-2 [&_th]:p-2">
-      <Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown>
+    <div className="history-text min-w-0 max-w-full text-sm leading-body wrap-anywhere">
+      <div className="flex items-center gap-2">
+        <span className="message-copy ml-auto">
+          <CopyTextButton source={children} label="Copy message text" />
+        </span>
+      </div>
+      <CollapsibleText>
+        <MarkdownContent source={children} identity={identity} />
+      </CollapsibleText>
     </div>
   );
 }
@@ -1972,11 +1992,13 @@ function ModelMessageContent({
   value,
   agentId,
   sequence,
+  identity,
   toolResults = [],
 }: {
   value: HistoryValue;
   agentId: number;
   sequence: number;
+  identity: string;
   toolResults?: { [key: string]: HistoryValue }[];
 }) {
   if (isRecord(value) && Array.isArray(value.parts)) {
@@ -1988,6 +2010,7 @@ function ModelMessageContent({
             value={part}
             agentId={agentId}
             sequence={sequence}
+            identity={`${identity}:${index}`}
             toolResults={toolResults}
           />
         ))}
@@ -2001,7 +2024,7 @@ function ModelMessageContent({
     const reference = textValue(value.content);
     const body =
       typeof value.content === "string" ? (
-        <SavedMarkdown>{value.content}</SavedMarkdown>
+        <SavedMarkdown identity={identity}>{value.content}</SavedMarkdown>
       ) : reference ? (
         <HistoryTextPreview
           agentId={agentId}
@@ -2135,16 +2158,20 @@ function textValue(value: HistoryValue): HistoryText | null {
   return value as unknown as HistoryText;
 }
 
-function HistoryValueView({
+export function HistoryValueView({
   value,
   label,
   agentId,
   sequence,
+  markdown = false,
+  identity = `history:${agentId}:${sequence}:${label}`,
 }: {
   value: HistoryValue;
   label: string;
   agentId?: number;
   sequence?: number;
+  markdown?: boolean;
+  identity?: string;
 }) {
   const binary = binaryValue(value);
   const text = textValue(value);
@@ -2156,6 +2183,7 @@ function HistoryValueView({
         sequence={sequence}
         reference={text}
         label={label}
+        markdown={markdown}
       />
     );
   }
@@ -2184,6 +2212,7 @@ function HistoryValueView({
               key={`${label}-${index}`}
               value={child}
               label={`${label} ${index + 1}`}
+              identity={`${identity}:${index}`}
               agentId={agentId}
               sequence={sequence}
             />
@@ -2209,6 +2238,11 @@ function HistoryValueView({
               label={key}
               agentId={agentId}
               sequence={sequence}
+              identity={`${identity}:${key}`}
+              markdown={
+                key === "content" &&
+                (value.part_kind === "text" || value.part_kind === "thinking")
+              }
             />
           ))}
         </div>
@@ -2216,11 +2250,24 @@ function HistoryValueView({
     );
   }
   return (
-    <div className="flex min-w-0 max-w-full flex-col gap-1 py-2 px-3 border border-line rounded-sm bg-surface">
-      <span className="text-xs text-fg-muted">{label}</span>
-      <pre className="m-0 whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
-        {value === null ? "null" : String(value)}
-      </pre>
+    <div className="history-text flex min-w-0 max-w-full flex-col gap-1 py-2 px-3 border border-line rounded-sm bg-surface">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-fg-muted">{label}</span>
+        {markdown && typeof value === "string" ? (
+          <span className="message-copy ml-auto">
+            <CopyTextButton source={value} label="Copy message text" />
+          </span>
+        ) : null}
+      </div>
+      <CollapsibleText>
+        {markdown && typeof value === "string" ? (
+          <MarkdownContent source={value} identity={identity} />
+        ) : (
+          <pre className="m-0 whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
+            {value === null ? "null" : String(value)}
+          </pre>
+        )}
+      </CollapsibleText>
     </div>
   );
 }
@@ -2410,7 +2457,9 @@ function HistoryTextPreview({
         {label} · {formatBytes(reference.total_bytes)}
       </span>
       {markdown ? (
-        <SavedMarkdown>{matching ? text : reference.value}</SavedMarkdown>
+        <SavedMarkdown identity={identity}>
+          {matching ? text : reference.value}
+        </SavedMarkdown>
       ) : (
         <pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap wrap-anywhere text-xs leading-body font-mono tracking-[0]">
           {matching ? text : reference.value}
@@ -2427,11 +2476,10 @@ function HistoryTextPreview({
             void loadMore(matching ? nextOffset : reference.next_offset)
           }
         >
-          {loading
-            ? "Loading text..."
-            : error
-              ? "Retry text"
-              : "Load more text"}
+          {loading ? (
+            <RefreshCw size={13} className="animate-spin" aria-hidden="true" />
+          ) : null}
+          {error ? "Retry" : "Load more text"}
         </Button>
       ) : null}
     </div>

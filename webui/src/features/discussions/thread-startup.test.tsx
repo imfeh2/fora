@@ -190,6 +190,12 @@ beforeEach(() => {
     },
   ]);
   vi.spyOn(backend, "discussionPage").mockReturnValue(read.promise);
+  vi.spyOn(backend, "discussionPreviews").mockImplementation(async (id) => ({
+    discussion_id: id,
+    previews: [],
+    has_more: false,
+    next_before: null,
+  }));
   vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
     events.add(listener);
     return () => events.delete(listener);

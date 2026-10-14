@@ -46,6 +46,21 @@ vi.mock("@/app/router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@/features/discussions/composer", () => ({ Composer: () => null }));
 vi.mock("@/components/ui/tooltip", () => ({ Tooltip: () => null }));
 vi.mock("@/components/ui/menu", () => ({ OverflowMenu: () => null }));
+vi.mock("@/features/discussions/thread-previews", async (original) => ({
+  ...(await original<
+    typeof import("@/features/discussions/thread-previews")
+  >()),
+  useDiscussionPreviews: () => ({
+    state: {
+      metadata: {},
+      resources: {},
+      aliases: {},
+      loading: false,
+      error: null,
+      before: null,
+    },
+  }),
+}));
 vi.mock("@/features/discussions/thread-data", async (original) => ({
   ...(await original<typeof import("@/features/discussions/thread-data")>()),
   useThreadData: () => ({

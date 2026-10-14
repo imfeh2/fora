@@ -372,6 +372,12 @@ describe("scroll to bottom button production lifecycle", () => {
     scrollButton.state.viewportListeners.clear();
     scrollButton.state.eventListener = null;
     scrollButtonToasts.items = [];
+    vi.spyOn(backend, "discussionPreviews").mockResolvedValue({
+      discussion_id: 1,
+      previews: [],
+      has_more: false,
+      next_before: null,
+    });
     vi.spyOn(backend, "discussionPage").mockResolvedValue(page());
     vi.spyOn(backend, "markRead").mockResolvedValue({ read_through: 3 });
     vi.spyOn(backend, "onEvent").mockImplementation((listener) => {

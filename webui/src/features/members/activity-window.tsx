@@ -288,7 +288,11 @@ export function WindowHistory({
         connected.current = true;
         void load();
       }
-      if (event.type.startsWith("turn.") && event.agent_id === agentId)
+      if (
+        event.type.startsWith("turn.") &&
+        event.type !== "turn.generation" &&
+        event.agent_id === agentId
+      )
         void load();
     });
     return () => {

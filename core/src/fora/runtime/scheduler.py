@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from typing import Any
 from weakref import WeakValueDictionary
@@ -14,12 +15,15 @@ from fora.locking import LockLevel, OrderedRLock
 from fora.ports.agent import (
     AgentLifecycle,
     AgentRun,
+    GenerationKey,
+    GenerationUpdate,
     HistoryStore,
     ModelRequestHandle,
     SettingsStore,
 )
 from fora.ports.execution import ExecutionControl
 from fora.ports.store import OrganizationStore
+from fora.runtime.generation import GenerationRecorder
 from fora.runtime.live import LiveSnapshots
 from fora.runtime.reminder import (
     PREPARATION_PROMPT,
@@ -73,11 +77,29 @@ class _TurnRequestRecorder:
         run: AgentRun,
         window_number: int,
         progress: Callable[[str], None],
+        notify: Callable[[str, dict[str, object]], None],
     ) -> None:
         self._history = history
         self._run = run
         self._window_number = window_number
         self._progress = progress
+        self._generation = GenerationRecorder(history, run, notify)
+
+    def generation_session(self) -> AbstractAsyncContextManager[None]:
+        return self._generation.session()
+
+    def generation_key(
+        self, handle: ModelRequestHandle, part_index: int
+    ) -> GenerationKey:
+        return self._generation.key(handle, part_index)
+
+    def generation(
+        self, handle: ModelRequestHandle, part_index: int, update: GenerationUpdate
+    ) -> None:
+        self._generation.update(handle, part_index, update)
+
+    def close(self, error: str | None = None) -> None:
+        self._generation.close(error)
 
     def start(
         self,
@@ -98,30 +120,35 @@ class _TurnRequestRecorder:
             model_json,
             streaming,
         )
+        self._generation.register(handle)
         self._progress("request.started")
         return handle
 
     def response(
         self, handle: ModelRequestHandle, response_json: Sequence[str]
     ) -> None:
+        self._generation.response(handle)
         self._history.finish_model_request(
             self._run.agent_id, self._run.sequence, handle, response_json
         )
         self._progress("request.response")
 
     def related(self, handle: ModelRequestHandle, messages_json: Sequence[str]) -> None:
+        self._generation.flush(handle)
         self._history.link_model_request(
             self._run.agent_id, self._run.sequence, handle, messages_json
         )
         self._progress("tool.result")
 
     def error(self, handle: ModelRequestHandle, error: str) -> None:
+        self._generation.finish(handle, error)
         self._history.fail_model_request(
             self._run.agent_id, self._run.sequence, handle, error
         )
         self._progress("request.error")
 
     def success(self, handle: ModelRequestHandle) -> None:
+        self._generation.finish(handle)
         self._history.complete_model_request(
             self._run.agent_id, self._run.sequence, handle
         )
@@ -738,7 +765,7 @@ class Scheduler:
             )
 
         request_recorder = _TurnRequestRecorder(
-            self.history, run, self.history.window(agent_id).number, progress
+            self.history, run, self.history.window(agent_id).number, progress, self.emit
         )
 
         def persist(messages_json: str) -> None:
@@ -810,6 +837,15 @@ class Scheduler:
                 with self.member_lock(agent_id):
                     self._blocked[agent_id] = "history_invalid"
             logger.exception("turn failed for agent %s", agent_id)
+        try:
+            request_recorder.close(error)
+        except Exception as failure:
+            run_failure = failure
+            status = "failed"
+            error = f"{type(failure).__name__}: {failure}"
+            messages = persisted_history
+            context_exceeded = False
+            logger.exception("Generation finalization failed for agent %s", agent_id)
         window = None
         finalized = False
         threshold = None

@@ -8,7 +8,14 @@ import logging
 import re
 import threading
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Sequence,
+)
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -51,11 +58,15 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 from pydantic_ai.messages import (
+    AgentStreamEvent,
     FunctionToolResultEvent,
     InstructionPart,
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    PartDeltaEvent,
+    PartEndEvent,
+    PartStartEvent,
     RetryPromptPart,
     SystemPromptPart,
     ToolCallPart,
@@ -84,7 +95,6 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.run import AgentRun
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
@@ -96,6 +106,7 @@ from fora.adapters.model.config import (
     model_settings,
 )
 from fora.adapters.model.context_sources import ContextSources
+from fora.adapters.model.generation import GenerationStream
 from fora.adapters.model.observability import (
     Observability,
     ObservabilityConfig,
@@ -107,7 +118,12 @@ from fora.core.attachment import ViewedAttachment, ViewedImage
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, bounded_text
-from fora.ports.agent import ModelRequestHandle, ModelRequestRecorder, SettingsStore
+from fora.ports.agent import (
+    GenerationKey,
+    ModelRequestHandle,
+    ModelRequestRecorder,
+    SettingsStore,
+)
 from fora.ports.live import LiveRequestCoverage, LiveTool, LiveTurn, LiveTurnObserver
 from fora.runtime.reminder import (
     HistoryPersistenceError,
@@ -300,6 +316,9 @@ _EXECUTION_ERRORS = {
     "execution_protocol",
 }
 _tool_call: ContextVar[tuple[int, int, ToolCallPart]] = ContextVar("fora_tool_call")
+_tool_generation: ContextVar[GenerationKey | None] = ContextVar(
+    "fora_tool_generation", default=None
+)
 
 
 @contextmanager
@@ -452,6 +471,7 @@ class LiveModel(WrapperModel):
         self._tools: dict[int, LiveTool] = {}
         self._response_version: str | None = None
         self._context_sources = context_sources
+        self._generation: GenerationStream | None = None
         self._last_request_handle: ModelRequestHandle | None = None
         self._last_response: ModelResponse | None = None
         self.current_request_handle: ModelRequestHandle | None = None
@@ -644,6 +664,20 @@ class LiveModel(WrapperModel):
         if self._live_observer is not None and self.current_request_handle is not None:
             self._live_observer.tool(self.current_request_handle, tool)
 
+    def generation_event(
+        self, event: PartStartEvent | PartDeltaEvent | PartEndEvent
+    ) -> None:
+        if self._generation is not None:
+            self._generation.event(event)
+
+    def generation_key(self, call: ToolCallPart) -> GenerationKey | None:
+        if self._request_recorder is None or self.current_request_handle is None:
+            return None
+        response = self.current_response
+        assert response is not None
+        index = next(index for index, part in enumerate(response.parts) if part is call)
+        return self._request_recorder.generation_key(self.current_request_handle, index)
+
     def tool_started(self, call: ToolCallPart) -> None:
         response = self.current_response
         if response is None or self.current_request_handle is None:
@@ -674,6 +708,20 @@ class LiveModel(WrapperModel):
             if isinstance(part, ToolReturnPart) and part.outcome == "interrupted"
             else "completed"
         )
+        if self._generation is not None:
+            self._generation.tool_result(
+                tool.part_index,
+                "failed"
+                if status == "failed"
+                else "interrupted"
+                if status == "cancelled"
+                else "completed",
+                part.model_response()
+                if isinstance(part, RetryPromptPart)
+                else part.model_response_str()
+                if status in ("failed", "cancelled")
+                else None,
+            )
         result_parts: list[ToolReturnPart | RetryPromptPart | UserPromptPart] = [part]
         if event.content is not None:
             result_parts.append(UserPromptPart(event.content))
@@ -727,6 +775,7 @@ class LiveModel(WrapperModel):
                 model_json,
                 streaming,
             )
+            self._generation = GenerationStream(self._request_recorder, handle)
             if self._live_observer is not None:
                 self._live_observer.started(
                     handle, datetime.now(UTC).isoformat(), model_json
@@ -771,6 +820,8 @@ class LiveModel(WrapperModel):
                 "request_ordinal": handle.ordinal,
             },
         }
+        if self._generation is not None:
+            self._generation.response(list(response.parts))
         self.observe_response(response)
         response_json = _encode_history([response])
         response_version = _response_version(response)
@@ -1138,6 +1189,7 @@ class PydanticModelRunner:
                     lambda: tools.send_message(
                         _required(discussion_id, "discussion_id", action),
                         _required(body, "body", action),
+                        generation_key=_tool_generation.get(),
                     )
                 )
             if action in ("ack", "revoke_ack"):
@@ -1347,7 +1399,6 @@ class PydanticModelRunner:
         if agents_instructions is not None and not isinstance(agents_instructions, str):
             raise ValueError("Invalid AGENTS.md snapshot in resident history")
         hooks: Hooks[AgentTools] = Hooks()
-        agent_run: AgentRun[AgentTools, str] | None = None
 
         @hooks.on.tool_execute
         async def tool_context(
@@ -1359,11 +1410,15 @@ class PydanticModelRunner:
             handler: WrapToolExecuteHandler,
         ) -> Any:
             token = _tool_call.set((request.agent_id, request.sequence, call))
+            generation_token = _tool_generation.set(
+                live_model.generation_key(call) if live_model is not None else None
+            )
             try:
                 if live_model is not None:
                     live_model.tool_started(call)
                 return await handler(args)
             finally:
+                _tool_generation.reset(generation_token)
                 _tool_call.reset(token)
 
         @hooks.on.before_model_request
@@ -1435,6 +1490,15 @@ class PydanticModelRunner:
             response: ModelResponse,
         ) -> ModelResponse:
             if live_model is not None:
+                saved = live_model.current_response
+                if saved is not None:
+                    response.metadata = {
+                        **(response.metadata or {}),
+                        **(saved.metadata or {}),
+                    }
+                fill_response_cost(response)
+                live_model.current_response = response
+                live_model._last_response = response
                 live_model.observe_response(response)
             _persist_history(
                 request, _settle_tool_calls([*ctx.messages, response]), context_sources
@@ -1455,7 +1519,6 @@ class PydanticModelRunner:
             handler: WrapNodeRunHandler[AgentTools],
         ) -> NodeResult[AgentTools]:
             if isinstance(node, CallToolsNode):
-                assert agent_run is not None
                 try:
                     _validate_tool_call_ids(
                         node.model_response,
@@ -1463,11 +1526,7 @@ class PydanticModelRunner:
                         if live_model is not None
                         else None,
                     )
-                    async with node.stream(agent_run.ctx) as events:
-                        async for event in events:
-                            if isinstance(event, FunctionToolResultEvent):
-                                assert live_model is not None
-                                live_model.tool_result(event)
+                    return await handler(node)
                 except BaseException:
                     if live_model is not None:
                         live_model.cancel_tools()
@@ -1523,9 +1582,23 @@ class PydanticModelRunner:
                     live_model._record_error(handle, error)
             raise error
 
+        async def dispatch_events(
+            ctx: RunContext[AgentTools], events: AsyncIterable[AgentStreamEvent]
+        ) -> None:
+            assert live_model is not None
+            async for event in events:
+                if isinstance(event, PartStartEvent | PartDeltaEvent | PartEndEvent):
+                    live_model.generation_event(event)
+                elif isinstance(event, FunctionToolResultEvent):
+                    live_model.tool_result(event)
+
         async def once() -> Any:
-            nonlocal live_model, agent_run
+            nonlocal live_model
             async with AsyncExitStack() as resources:
+                if request.request_recorder is not None:
+                    await resources.enter_async_context(
+                        request.request_recorder.generation_session()
+                    )
                 model = await resources.enter_async_context(self._build_model(config))
                 wrapper = LiveModel(
                     lambda: model,
@@ -1548,13 +1621,14 @@ class PydanticModelRunner:
                 )
                 live_model = wrapper
 
-                async with self._agent.iter(
+                return await self._agent.run(
                     request.prompt,
                     usage=counted,
                     usage_limits=usage_limits,
                     deps=tools,
                     message_history=history,
                     model=wrapper,
+                    event_stream_handler=dispatch_events,
                     capabilities=[
                         hooks,
                         *(
@@ -1563,12 +1637,7 @@ class PydanticModelRunner:
                             else []
                         ),
                     ],
-                ) as active_run:
-                    agent_run = active_run
-                    async for _node in active_run:
-                        pass
-                    assert active_run.result is not None
-                    return active_run.result
+                )
 
         trace = TurnTrace.of(request)
         history_length = len(history)

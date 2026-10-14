@@ -7,6 +7,7 @@ import {
   activityText,
 } from "@/features/members/activity-data";
 import type {
+  GenerationPart,
   HistoryBinary,
   HistoryImage,
   HistoryValue,
@@ -52,6 +53,7 @@ export type ContextEntry = ActivityPart & {
   replyPosition?: string;
   workRecord: boolean;
   diagnostic?: string;
+  generation?: GenerationPart;
 };
 export type ContextCoverage = {
   location: ContextLocation;
@@ -268,6 +270,7 @@ export function composeContext(
   activities: ActivityData[],
   images: Record<string, HistoryImage> = {},
   identities: Map<string, string> = new Map(),
+  generations: GenerationPart[] = [],
 ): ContextComposition {
   const entries: ContextEntry[] = [];
   const coverage: ContextCoverage[] = [];
@@ -673,6 +676,103 @@ export function composeContext(
       previousInstructions = instructionEntries;
     }
   }
+  for (const part of generations) {
+    const key = part.key;
+    const data = activities.find(
+      (activity) => activity.run.sequence === key.sequence,
+    );
+    const summary = data?.requests.find(
+      (request) => request.ordinal === key.ordinal,
+    );
+    if (
+      !data ||
+      !summary ||
+      key.agent_id !== agentId ||
+      key.request_id !== summary.request_id ||
+      key.run_id !== summary.run_id
+    )
+      continue;
+    const snapshot = data.contents[key.ordinal];
+    const response = snapshot?.request.response;
+    if (
+      response &&
+      snapshot?.request.response_saved !== false &&
+      response.messages.length > 0
+    )
+      continue;
+    if (!["text", "thinking", "tool-call"].includes(part.part_kind)) continue;
+    const location: ContextLocation = {
+      agentId,
+      windowNumber: data.run.window_number,
+      sequence: key.sequence,
+      ordinal: key.ordinal,
+      source: "response",
+      messageIndex: 0,
+      path: ["parts", key.part_index],
+    };
+    const originalKey = contextLocationKey(location);
+    const reference = {
+      kind: "generation",
+      key: key as unknown as HistoryValue,
+      revision: part.revision,
+    };
+    if (
+      part.part_kind === "tool-call" &&
+      (typeof part.tool_name !== "string" ||
+        typeof part.tool_call_id !== "string")
+    )
+      throw new Error("Generated tool identity is unavailable");
+    const value: Part =
+      part.part_kind === "tool-call"
+        ? {
+            part_kind: part.part_kind,
+            tool_name: part.tool_name as string,
+            tool_call_id: part.tool_call_id as string,
+            args: { ...reference, field: "args" },
+          }
+        : {
+            part_kind: part.part_kind,
+            content: { ...reference, field: "content" },
+          };
+    const existing = entries.find(
+      (entry) =>
+        entry.sequence === key.sequence &&
+        entry.ordinal === key.ordinal &&
+        entry.source === "response" &&
+        entry.messageIndex === 0 &&
+        entry.partIndex === key.part_index,
+    );
+    if (existing) {
+      existing.generation = part;
+      continue;
+    }
+    const position = entries.findIndex(
+      (entry) =>
+        entry.sequence > key.sequence ||
+        (entry.sequence === key.sequence && entry.ordinal > key.ordinal),
+    );
+    entries.splice(position < 0 ? entries.length : position, 0, {
+      key: originalKey,
+      sequence: key.sequence,
+      ordinal: key.ordinal,
+      source: "response",
+      messageIndex: 0,
+      partIndex: key.part_index,
+      timestamp: part.created_at,
+      value,
+      location,
+      references: [location],
+      canonical: value,
+      contentIdentity: JSON.stringify(value),
+      resolved: value,
+      messageIdentity: JSON.stringify(["response"]),
+      contextSource: null,
+      title: null,
+      reminder: false,
+      workRecord: false,
+      generation: part,
+    });
+  }
   const renamed = new Map<string, string>();
   const used = new Set<string>();
   for (const entry of entries) {
@@ -725,7 +825,8 @@ export function composeContext(
       (activity) => activity.run.sequence === entry.sequence,
     );
     const request = data?.contents[entry.ordinal]?.request;
-    action.requestId = request?.summary.request_id;
+    action.requestId =
+      request?.summary.request_id ?? entry.generation?.key.request_id;
     action.observation = request?.observation;
     const observations =
       request?.related.messages.flatMap((message) => {

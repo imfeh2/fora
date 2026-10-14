@@ -2,6 +2,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from model_fixtures import GenerationRecorderStub
 from pydantic_ai import ModelMessagesTypeAdapter
 from pydantic_ai.messages import (
     ModelRequest,
@@ -19,7 +20,7 @@ from fora.adapters.model.runner import PydanticModelRunner
 from fora.ports.agent import ModelRequestHandle
 
 
-class Recorder:
+class Recorder(GenerationRecorderStub):
     def __init__(self):
         self.inputs = []
         self.parameters = []
@@ -159,7 +160,11 @@ def test_real_sdk_merges_and_sorts_sources_across_requests_and_activity_decode(f
     nudges = iter(["temporary one", "temporary two"])
 
     def respond(messages, info):
-        provider_inputs.append(messages)
+        provider_inputs.append(
+            ModelMessagesTypeAdapter.validate_json(
+                ModelMessagesTypeAdapter.dump_json(messages)
+            )
+        )
         assert not sources(messages)
         if len(provider_inputs) == 1:
             assert len(messages) == 1
@@ -202,9 +207,7 @@ def test_real_sdk_merges_and_sorts_sources_across_requests_and_activity_decode(f
         "ephemeral",
     ]
     for recorded, provider in zip(recorder.inputs, provider_inputs, strict=True):
-        assert ModelMessagesTypeAdapter.dump_python(
-            ContextSources(2, 1).restore(recorded), mode="json"
-        ) == ModelMessagesTypeAdapter.dump_python(provider, mode="json")
+        assert ContextSources(2, 1).restore(recorded) == provider
         assert flattened(recorded) == flattened(provider)
     initial = ModelMessagesTypeAdapter.validate_json(persisted[0])
     assert [source["kind"] for source, part in sources(initial)] == ["session_context"]

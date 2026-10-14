@@ -7,6 +7,7 @@ from typing import Protocol
 from fora.core.discussion import Discussion, Message
 from fora.core.member import AgentState, Member, MemberType
 from fora.core.mention import Mention
+from fora.ports.agent import GenerationKey
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class OrganizationStore(Protocol):
         attachment_ids: Sequence[str] = (),
         client_message_id: str | None = None,
         mark_read: bool = False,
+        generation_key: GenerationKey | None = None,
     ) -> tuple[Message, tuple[Mention, ...], bool]: ...
 
     def message_receipt(

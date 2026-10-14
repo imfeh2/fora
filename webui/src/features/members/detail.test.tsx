@@ -243,6 +243,14 @@ describe("Agent history request fields", () => {
     vi.stubGlobal("HTMLElement", dom.window.HTMLElement);
     vi.stubGlobal("Node", dom.window.Node);
     vi.stubGlobal("MutationObserver", dom.window.MutationObserver);
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     vi.stubGlobal("Event", dom.window.Event);
     vi.stubGlobal("EventTarget", dom.window.EventTarget);
     vi.stubGlobal("CustomEvent", dom.window.CustomEvent);

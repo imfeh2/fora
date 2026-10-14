@@ -11,6 +11,7 @@ import {
 import {
   type AgentHistoryRead,
   backend,
+  type GenerationPart,
   type HistoryBinary,
   type HistoryValue,
 } from "@/lib/backend";
@@ -479,6 +480,100 @@ describe("saved context composition", () => {
     ).toBe(true);
     expect(context.missing).toEqual([]);
   });
+});
+
+function generated(partIndex = 0, partKind = "text"): GenerationPart {
+  return {
+    key: {
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: partIndex,
+      request_id: "request-1",
+      run_id: "fora-4",
+    },
+    part_kind: partKind,
+    revision: 1,
+    status: "generating",
+    error: null,
+    created_at: at,
+    updated_at: at,
+    tool_name: partKind === "tool-call" ? "discussion" : null,
+    tool_call_id: partKind === "tool-call" ? "actual-call" : null,
+  };
+}
+
+it("keeps the content identity when generation becomes a saved response", async () => {
+  const pending = record();
+  if (!pending.request) throw new Error("Missing request");
+  pending.request.response = null;
+  pending.request.summary.status = "pending";
+  const data = await read([pending]);
+  const identities = new Map<string, string>();
+  const current = composeContext(2, [data], {}, identities, [generated()]);
+  const entry = current.entries.find((entry) => entry.generation);
+  expect(entry?.value.part_kind).toBe("text");
+  expect(entry?.location.path).toEqual(["parts", 0]);
+  vi.mocked(backend.agentHistoryRead).mockResolvedValue(record());
+  const saved = await loadActivity(
+    2,
+    4,
+    new AbortController().signal,
+    () => {},
+  );
+  const completed = composeContext(2, [saved], {}, identities, [generated()]);
+  const formal = completed.entries.find(
+    (entry) => entry.value.content === "工作记录",
+  );
+  expect(formal?.key).toBe(entry?.key);
+  expect(
+    completed.entries.filter((entry) => entry.value.part_kind === "text"),
+  ).toHaveLength(1);
+  expect(completed.entries.some((entry) => entry.generation)).toBe(false);
+});
+
+it("keeps actual generated tool identity and independent thinking content", async () => {
+  const pending = record();
+  if (!pending.request) throw new Error("Missing request");
+  pending.request.response = null;
+  const data = await read([pending]);
+  const context = composeContext(2, [data], {}, new Map(), [
+    generated(0, "thinking"),
+    generated(1, "tool-call"),
+  ]);
+  const thinking = context.entries.find(
+    (entry) => entry.value.part_kind === "thinking",
+  );
+  const action = context.entries.find((entry) => entry.action);
+  expect(thinking?.generation?.key.part_index).toBe(0);
+  expect(action?.action?.value.tool_call_id).toBe("actual-call");
+  expect(action?.action?.requestId).toBe("request-1");
+  expect(action?.generation?.key.part_index).toBe(1);
+});
+
+it("preserves one response unit when a live response and its durable generation coexist", async () => {
+  const value = record();
+  if (!value.request) throw new Error("Missing request");
+  value.request.response_saved = false;
+  const context = composeContext(2, [await read([value])], {}, new Map(), [
+    generated(),
+  ]);
+  const texts = context.entries.filter(
+    (entry) => entry.value.part_kind === "text",
+  );
+  expect(texts).toHaveLength(1);
+  expect(texts[0].generation?.key.request_id).toBe("request-1");
+});
+
+it("ignores generation outside the recorded request identity", async () => {
+  const data = await read([record()]);
+  const wrong = generated();
+  wrong.key.request_id = "another-request";
+  const context = composeContext(2, [data], {}, new Map(), [wrong]);
+  expect(context.entries.some((entry) => entry.generation)).toBe(false);
+});
+
+describe("saved context composition", () => {
   it.each(["response", "related"] as const)(
     "composes every published %s update with its own values",
     async (source) => {

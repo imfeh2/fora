@@ -39,6 +39,21 @@ vi.mock("react", async (importOriginal) => {
   return { ...react, useState: vi.fn(react.useState) };
 });
 vi.mock("@/components/ui/menu", () => ({ OverflowMenu: vi.fn(() => null) }));
+vi.mock("@/features/discussions/thread-previews", async (original) => ({
+  ...(await original<
+    typeof import("@/features/discussions/thread-previews")
+  >()),
+  useDiscussionPreviews: () => ({
+    state: {
+      metadata: {},
+      resources: {},
+      aliases: {},
+      loading: false,
+      error: null,
+      before: null,
+    },
+  }),
+}));
 
 let closeDom: (() => void) | undefined;
 

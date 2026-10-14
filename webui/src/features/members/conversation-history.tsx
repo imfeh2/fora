@@ -126,7 +126,7 @@ function useHistoryPosition(
     const onScroll = () => {
       if (cache)
         cache.following =
-          scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop <= 24;
+          scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop <= 40;
       remember();
     };
     capture.current = remember;

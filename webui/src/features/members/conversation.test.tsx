@@ -41,6 +41,10 @@ function workflow<Args extends unknown[]>(
   };
 }
 
+function test(name: string, work: (scope: TestWorkflow) => Promise<void>) {
+  it(name, workflow(work));
+}
+
 function complete(scope: TestWorkflow, work: () => void | Promise<void>) {
   return scope.step(() => testing.act(work));
 }
@@ -473,6 +477,459 @@ function runningTools(): AgentHistoryRead {
 }
 
 describe("Member conversation", () => {
+  test("reads a growing part independently and preserves its unit when the response is saved", async (scope) => {
+    const pending = read(4, []);
+    if (!pending.request) throw new Error("Saved request is missing");
+    pending.run.status = "running";
+    pending.request.summary.status = "pending";
+    pending.request.response = null;
+    const key = {
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: 0,
+      request_id: pending.request.summary.request_id,
+      run_id: pending.request.summary.run_id,
+    };
+    let revision = 1;
+    const source = () =>
+      revision === 1
+        ? "## 当前内容\n\n已经收到 **正文**。"
+        : "## 当前内容\n\n已经收到 **完整正文**。";
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(pending);
+    vi.spyOn(backend, "agentGenerationParts").mockImplementation(async () => ({
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      parts: [
+        {
+          key,
+          revision,
+          part_kind: "text",
+          status: "generating",
+          error: null,
+          created_at: date,
+          updated_at: date,
+          tool_name: null,
+          tool_call_id: null,
+        },
+      ],
+      has_more: false,
+      next_after: null,
+    }));
+    vi.spyOn(backend, "agentGenerationText").mockImplementation(
+      async (_key, currentRevision, field, offset = 0) => {
+        const value = source();
+        const bytes = new TextEncoder().encode(value).length;
+        return {
+          key,
+          field,
+          revision: currentRevision,
+          value,
+          offset,
+          next_offset: bytes,
+          total_bytes: bytes,
+          has_more: false,
+        };
+      },
+    );
+    await complete(scope, async () => {
+      mount();
+    });
+    const heading = testing.screen.getByRole("heading", {
+      name: "当前内容",
+    });
+    const unit = heading.closest("article");
+    expect(
+      testing.screen.getByText("正文", {
+        selector: "[data-streamdown='strong']",
+      }),
+    ).toBeTruthy();
+    const reads = vi.mocked(backend.agentHistoryRead).mock.calls.length;
+    revision = 2;
+    await scope.step(() =>
+      event({ type: "turn.generation", ...key, revision } as BackendEvent),
+    );
+    expect(
+      testing.screen.getByText("完整正文", {
+        selector: "[data-streamdown='strong']",
+      }),
+    ).toBeTruthy();
+    expect(vi.mocked(backend.agentHistoryRead).mock.calls.length).toBe(reads);
+    expect(
+      testing.screen
+        .getByRole("heading", { name: "当前内容" })
+        .closest("article"),
+    ).toBe(unit);
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(4, [{ part_kind: "text", content: source() }]),
+    );
+    await scope.step(() =>
+      event({
+        type: "turn.finished",
+        agent_id: 2,
+        sequence: 4,
+      } as BackendEvent),
+    );
+    expect(
+      testing.screen.queryByRole("status", { name: "Generating" }),
+    ).toBeNull();
+    expect(
+      testing.screen.getAllByRole("heading", { name: "当前内容" }),
+    ).toHaveLength(1);
+    expect(
+      testing.screen
+        .getByRole("heading", { name: "当前内容" })
+        .closest("article"),
+    ).toBe(unit);
+  });
+
+  test("renders saved send text and copies its original Markdown", async (scope) => {
+    const body =
+      "# 更新\n\n@文档助手 **正文**\n\n![图片](https://example.com/image.png)\n\n<script>unsafe</script>";
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(
+        4,
+        [
+          {
+            part_kind: "tool-call",
+            tool_name: "discussion",
+            tool_call_id: "saved-send",
+            args: { action: "send", discussion_id: 8, body },
+          },
+        ],
+        [
+          {
+            part_kind: "tool-return",
+            tool_name: "discussion",
+            tool_call_id: "saved-send",
+            content: { discussion_id: 8, id: 12, created_at: date },
+          },
+        ],
+      ),
+    );
+    const current = vi.spyOn(backend, "discussionPage");
+    const clipboard = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboard },
+    });
+    await complete(scope, async () => {
+      mount();
+    });
+    const heading = testing.screen.getByRole("heading", {
+      name: "更新",
+    });
+    const article = heading.closest("article");
+    expect(article?.querySelector("mark")).toBeNull();
+    expect(current).not.toHaveBeenCalled();
+    expect(article?.querySelector("img")).toBeNull();
+    expect(
+      testing.screen.getByRole("link", { name: "图片" }).getAttribute("href"),
+    ).toBe("https://example.com/image.png");
+    expect(article?.querySelector("script")).toBeNull();
+    expect(article?.textContent).toContain("<script>unsafe</script>");
+    await complete(scope, async () => {
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Copy message text" }),
+      );
+    });
+    expect(clipboard).toHaveBeenCalledWith(body);
+    expect(
+      testing.screen
+        .getByRole("button", { name: "Copied" })
+        .closest(".message-copy")
+        ?.parentElement?.querySelector("time"),
+    ).not.toBeNull();
+  });
+
+  test("renders and copies TextPart and ThinkingPart with independent saved identities", async (scope) => {
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(
+      read(4, [
+        { part_kind: "thinking", content: "## 思考\n\n分析 **依据**。" },
+        { part_kind: "text", content: "## 回应\n\n完成 **检查**。" },
+      ]),
+    );
+    const clipboard = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: clipboard },
+    });
+    await complete(scope, async () => {
+      mount();
+    });
+    const response = testing.screen.getByRole("heading", {
+      name: "回应",
+    });
+    const thinking = testing.screen.getByText("思考");
+    expect(thinking.closest("details")?.open).toBe(false);
+    expect(
+      thinking.closest(".markdown-content")?.getAttribute("data-content-id"),
+    ).not.toBe(
+      response.closest(".markdown-content")?.getAttribute("data-content-id"),
+    );
+    const copy = response
+      .closest("article")
+      ?.querySelector<HTMLButtonElement>(
+        "button[aria-label='Copy message text']",
+      );
+    if (!copy) throw new Error("Copy button is unavailable");
+    await complete(scope, async () => {
+      testing.fireEvent.click(copy);
+    });
+    expect(clipboard).toHaveBeenCalledWith("## 回应\n\n完成 **检查**。");
+  });
+
+  test("shows complete generated parameters through the existing field presentation", async (scope) => {
+    const pending = read(4, []);
+    if (!pending.request) throw new Error("Saved request is missing");
+    pending.request.response = null;
+    pending.request.summary.status = "pending";
+    const key = {
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: 0,
+      request_id: pending.request.summary.request_id,
+      run_id: pending.request.summary.run_id,
+    };
+    let revision = 1;
+    let args = '{"argv":["cat","资料';
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(pending);
+    vi.spyOn(backend, "agentGenerationParts").mockImplementation(async () => ({
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      has_more: false,
+      next_after: null,
+      parts: [
+        {
+          key,
+          revision,
+          part_kind: "tool-call",
+          status: "generating",
+          error: null,
+          tool_name: "run",
+          tool_call_id: "generated-run",
+          created_at: date,
+          updated_at: date,
+        },
+      ],
+    }));
+    const text = vi
+      .spyOn(backend, "agentGenerationText")
+      .mockImplementation(async (_key, currentRevision, field, offset = 0) => ({
+        key,
+        field,
+        revision: currentRevision,
+        value: args,
+        offset,
+        next_offset: new TextEncoder().encode(args).length,
+        total_bytes: new TextEncoder().encode(args).length,
+        has_more: false,
+      }));
+    await complete(scope, async () => {
+      mount();
+    });
+    const toggle = testing.screen.getByRole("button", {
+      name: /Run command/,
+    });
+    expect(text).not.toHaveBeenCalled();
+    await complete(scope, async () => {
+      testing.fireEvent.click(toggle);
+    });
+    expect(testing.screen.getByText(args)).toBeTruthy();
+    args = JSON.stringify({ argv: ["cat", "资料.md"], cwd: "/project/fora" });
+    revision = 2;
+    await scope.step(() =>
+      event({ type: "turn.generation", ...key, revision } as BackendEvent),
+    );
+    expect(testing.screen.getByText("argv 1")).toBeTruthy();
+    expect(testing.screen.getByText("资料.md")).toBeTruthy();
+    expect(testing.screen.getByText("cwd")).toBeTruthy();
+    expect(testing.screen.queryByText(args)).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(text.mock.calls.every((call) => call[2] === "args")).toBe(true);
+  });
+
+  test("keeps failed generation readable and opens its request from the information line", async (scope) => {
+    const pending = read(4, []);
+    if (!pending.request) throw new Error("Saved request is missing");
+    pending.request.response = null;
+    const key = {
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: 0,
+      request_id: pending.request.summary.request_id,
+      run_id: pending.request.summary.run_id,
+    };
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(pending);
+    vi.spyOn(backend, "agentGenerationParts").mockResolvedValue({
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      has_more: false,
+      next_after: null,
+      parts: [
+        {
+          key,
+          revision: 2,
+          part_kind: "text",
+          status: "failed",
+          error: "Provider timed out",
+          tool_name: null,
+          tool_call_id: null,
+          created_at: date,
+          updated_at: date,
+        },
+      ],
+    });
+    const body = "## 保存的正文\n\n收到 **最后内容**。";
+    const bytes = new TextEncoder().encode(body).length;
+    vi.spyOn(backend, "agentGenerationText").mockResolvedValue({
+      key,
+      field: "content",
+      revision: 2,
+      value: body,
+      offset: 0,
+      next_offset: bytes,
+      total_bytes: bytes,
+      has_more: false,
+    });
+    await complete(scope, async () => {
+      mount();
+    });
+    const heading = testing.screen.getByRole("heading", {
+      name: "保存的正文",
+    });
+    const icon = testing.screen.getByRole("button", {
+      name: "Not sent: Provider timed out",
+    });
+    expect(icon.closest("article")).toBe(heading.closest("article"));
+    expect(icon.parentElement?.querySelector("time")).not.toBeNull();
+    expect(
+      testing.screen.queryByRole("status", { name: "Generating" }),
+    ).toBeNull();
+    await complete(scope, async () => {
+      testing.fireEvent.click(icon);
+    });
+    expect(testing.screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      vi
+        .mocked(backend.agentHistoryRead)
+        .mock.calls.some(
+          (call) => call[0] === 2 && call[1] === 4 && call[2] === 1,
+        ),
+    ).toBe(true);
+  });
+
+  test("preserves requested text pages and the 300px expansion state while generated revisions arrive", async (scope) => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(600);
+    const pending = read(4, []);
+    if (!pending.request) throw new Error("Saved request is missing");
+    pending.request.response = null;
+    const key = {
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      part_index: 0,
+      request_id: pending.request.summary.request_id,
+      run_id: pending.request.summary.run_id,
+    };
+    let revision = 1;
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(pending);
+    vi.spyOn(backend, "agentGenerationParts").mockImplementation(async () => ({
+      agent_id: 2,
+      sequence: 4,
+      ordinal: 1,
+      has_more: false,
+      next_after: null,
+      parts: [
+        {
+          key,
+          revision,
+          part_kind: "text",
+          status: "generating",
+          error: null,
+          tool_name: null,
+          tool_call_id: null,
+          created_at: date,
+          updated_at: date,
+        },
+      ],
+    }));
+    const text = vi
+      .spyOn(backend, "agentGenerationText")
+      .mockImplementation(async (_key, currentRevision, field, offset = 0) => {
+        const chunks = [
+          `生成正文 ${currentRevision}\n\n`,
+          `第二页正文 ${currentRevision}\n\n`,
+          `第三页正文 ${currentRevision}`,
+        ];
+        const sizes = chunks.map(
+          (value) => new TextEncoder().encode(value).length,
+        );
+        const index = offset === 0 ? 0 : offset === sizes[0] ? 1 : 2;
+        const total = sizes.reduce((sum, value) => sum + value, 0);
+        return {
+          key,
+          field,
+          revision: currentRevision,
+          value: chunks[index],
+          offset,
+          next_offset: offset + sizes[index],
+          total_bytes: total,
+          has_more: offset + sizes[index] < total,
+        };
+      });
+    await complete(scope, async () => {
+      mount();
+    });
+    const body = testing.screen.getByText("生成正文 1");
+    const article = body.closest("article");
+    const toggle = testing.screen.getByRole("button", { name: "Show more" });
+    expect(article?.querySelector(".max-h-\\[300px\\]")).not.toBeNull();
+    await complete(scope, async () => {
+      testing.fireEvent.click(toggle);
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Load more text" }),
+      );
+    });
+    expect(testing.screen.getByText("第二页正文 1")).toBeTruthy();
+    await complete(scope, async () => {
+      testing.fireEvent.click(
+        testing.screen.getByRole("button", { name: "Load more text" }),
+      );
+    });
+    expect(testing.screen.getByText("第三页正文 1")).toBeTruthy();
+    expect(
+      testing.screen.queryByRole("button", { name: "Load more text" }),
+    ).toBeNull();
+    revision = 2;
+    await scope.step(() =>
+      event({ type: "turn.generation", ...key, revision } as BackendEvent),
+    );
+    expect(testing.screen.getByText("生成正文 2").closest("article")).toBe(
+      article,
+    );
+    expect(testing.screen.getByText("第二页正文 2").closest("article")).toBe(
+      article,
+    );
+    expect(testing.screen.getByText("第三页正文 2").closest("article")).toBe(
+      article,
+    );
+    expect(
+      text.mock.calls
+        .filter((call) => call[1] === 2)
+        .map((call) => call[3] ?? 0),
+    ).toEqual([0, 16, 35]);
+    expect(testing.screen.getByRole("button", { name: "Show less" })).toBe(
+      toggle,
+    );
+    expect(article?.querySelector(".max-h-\\[300px\\]")).toBeNull();
+  });
+
   it("observes multiple targets and independently releases shared targets", () => {
     const first = document.createElement("div");
     const second = document.createElement("div");
@@ -1913,6 +2370,13 @@ describe("Member conversation", () => {
           testing.screen.queryByRole("listbox", { name: "Context windows" }),
         ).toBeNull(),
       );
+      if (method === "Tab") {
+        expect(document.activeElement).toBe(
+          testing.screen.getByRole("button", { name: "Copy message text" }),
+        );
+        expect(scroll.scrollTop).toBe(400);
+        await user.tab();
+      }
       await user.keyboard("继续阅读");
       expect(document.activeElement).toBe(target);
       expect((target as HTMLInputElement).value).toBe("继续阅读");
@@ -2389,7 +2853,8 @@ describe("Member conversation", () => {
     const updated = await testing.screen.findByText("增量正文");
     expect(updated).toBe(strong);
     expect(updated.closest("article")).toBe(article);
-    expect(updated.tagName).toBe("STRONG");
+    expect(updated.getAttribute("data-streamdown")).toBe("strong");
+    expect(updated.classList.contains("font-semibold")).toBe(true);
     expect(
       testing.screen.getByRole("button", { name: "Show less" }),
     ).toBeTruthy();
@@ -2797,7 +3262,8 @@ describe("Member conversation", () => {
   it("keeps Markdown in the work record with the Agent identity", async () => {
     mount();
     const strong = await testing.screen.findByText("校验");
-    expect(strong.tagName).toBe("STRONG");
+    expect(strong.getAttribute("data-streamdown")).toBe("strong");
+    expect(strong.classList.contains("font-semibold")).toBe(true);
     const bubble = strong.closest("article");
     expect(bubble?.getAttribute("aria-label")).toBe("Agent work record");
     expect(bubble?.textContent).toContain("文档助手");

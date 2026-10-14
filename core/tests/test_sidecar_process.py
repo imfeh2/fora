@@ -701,8 +701,31 @@ def local_model():
                     },
                 }
             ).encode()
+            if request.get("stream"):
+                chunk = {
+                    "id": "test-completion",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": request["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": "Completed"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                }
+                body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header(
+                "Content-Type",
+                "text/event-stream" if request.get("stream") else "application/json",
+            )
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

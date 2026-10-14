@@ -43,7 +43,14 @@ import {
   centeredScrollTop,
   shouldStopPositioningForKey,
 } from "@/features/discussions/thread-position";
-import { renderMentions } from "@/features/mentions";
+import {
+  combineThreadUnits,
+  type PreviewState,
+  useDiscussionPreviews,
+} from "@/features/discussions/thread-previews";
+import { GenerationIndicator } from "@/features/generation-state";
+import { CopyTextButton, MarkdownContent } from "@/features/markdown";
+import { TurnHistoryModal } from "@/features/members/detail";
 import {
   BackendError,
   backend,
@@ -178,6 +185,7 @@ function ThreadSession({
 }) {
   const { discussions, refresh } = useOrganization();
   const navigate = useNavigate();
+  const previews = useDiscussionPreviews(id);
   const thread = useThreadData(id, humanId);
   const { data: detail, missing, failed: loadFailed } = thread;
   const [busy, setBusy] = useState(false);
@@ -206,18 +214,22 @@ function ThreadSession({
   const monitoring = useRef(false);
   const monitorStaleFrames = useRef(0);
   const monitorLastTop = useRef(-1);
-  const messages = detail?.messages ?? [];
+  const units = useMemo(
+    () => combineThreadUnits(detail?.messages ?? [], previews.state),
+    [detail?.messages, previews.state],
+  );
   const virtual = useVirtualizer({
-    count: messages.length,
+    count: units.length,
     getScrollElement: () => scroll.current,
     estimateSize: () => 96,
-    getItemKey: useCallback((index: number) => messages[index].id, [messages]),
+    getItemKey: useCallback((index: number) => units[index].key, [units]),
     overscan: 5,
     anchorTo: "end",
     followOnAppend: detail !== null && !detail.hasAfter,
     paddingStart: 16,
     paddingEnd: composerSize + keyboardOffset + 24,
-    scrollEndThreshold: 1,
+    scrollEndThreshold: 40,
+    useAnimationFrameWithResizeObserver: true,
   });
   const resizeComposer = useCallback(
     (height: number) => {
@@ -263,6 +275,15 @@ function ThreadSession({
         !thread.loading
       )
         void thread.markRead(Math.max(...visible)).catch(() => {});
+      if (
+        previews.state.before &&
+        !previews.state.loading &&
+        !previews.state.error &&
+        root.clientHeight > 0 &&
+        (virtual.getTotalSize() <= root.clientHeight ||
+          (paginate && root.scrollTop < root.clientHeight))
+      )
+        void previews.earlier();
       if (!thread.failed && !thread.loading) {
         if (
           current.hasBefore &&
@@ -280,7 +301,7 @@ function ThreadSession({
           void thread.request("after");
       }
     },
-    [composerSize, keyboardOffset, thread, virtual],
+    [composerSize, keyboardOffset, previews, thread, virtual],
   );
 
   const sampleRef = useRef(sample);
@@ -472,8 +493,8 @@ function ThreadSession({
       return;
     }
 
-    const index = messages.findIndex(
-      (message) => message.id === detail.divider,
+    const index = units.findIndex(
+      (unit) => unit.message?.id === detail.divider,
     );
     if (index < 0) throw new Error("Entry divider is missing from its page");
     positioning.current = true;
@@ -542,7 +563,7 @@ function ThreadSession({
     thread.position,
     thread.consumePositioningIntent,
     detail?.divider,
-    messages,
+    units,
     virtual,
     startMonitoring,
     endPositioning,
@@ -703,7 +724,7 @@ function ThreadSession({
   const showScrollButton =
     initialReady.current &&
     detail !== null &&
-    messages.length > 0 &&
+    units.length > 0 &&
     (!atBottom || detail.hasAfter);
 
   const prevShowScrollButton = useRef(showScrollButton);
@@ -789,7 +810,7 @@ function ThreadSession({
         <div className="@container relative flex min-h-0 flex-1 flex-col">
           <div
             ref={scroll}
-            className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 narrow:px-3 [overflow-anchor:none]"
+            className="min-h-0 min-w-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 narrow:px-3 [overflow-anchor:none]"
             onScroll={() => {
               shouldFollowBottom.current = false;
               if (positioningInterrupted.current && scroll.current)
@@ -803,7 +824,8 @@ function ThreadSession({
           >
             {!detail && !loadFailed && !missing ? <ThreadSkeleton /> : null}
             {detail &&
-            messages.length === 0 &&
+            units.length === 0 &&
+            !previews.state.loading &&
             !thread.loading &&
             !loadFailed ? (
               <div
@@ -829,20 +851,54 @@ function ThreadSession({
                 />
               </div>
             ) : null}
+            {previews.state.error ? (
+              <div role="alert" className="py-3 text-sm text-danger">
+                <p>{previews.state.error.message}</p>
+                <Button size="sm" onClick={() => void previews.refresh()}>
+                  Retry
+                </Button>
+              </div>
+            ) : null}
+            {Object.entries(previews.state.resources).map(
+              ([previewId, state]) =>
+                !state.data &&
+                state.error &&
+                ![
+                  "not_found",
+                  "not_a_member",
+                  "not_permitted",
+                  "permission_denied",
+                ].includes(state.error.code) ? (
+                  <div
+                    key={previewId}
+                    role="alert"
+                    className="py-3 text-sm text-danger"
+                  >
+                    <p>{state.error.message}</p>
+                    <Button
+                      size="sm"
+                      disabled={state.loading}
+                      onClick={() => void previews.retry(previewId)}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : null,
+            )}
             <ol
               className="relative"
-              hidden={messages.length === 0}
+              hidden={units.length === 0}
               style={{ height: virtual.getTotalSize() }}
             >
               {items.map((item) => {
-                const message = messages[item.index];
+                const unit = units[item.index];
+                const message = unit.message;
                 const previousSender =
                   item.index === 0
                     ? detail?.previousSender
-                    : messages[item.index - 1].sender_id;
-                const divider = message.id === detail?.divider;
-                const compact =
-                  !divider && previousSender === message.sender_id;
+                    : units[item.index - 1].senderId;
+                const divider = message?.id === detail?.divider;
+                const compact = !divider && previousSender === unit.senderId;
                 return (
                   <li
                     key={item.key}
@@ -865,13 +921,27 @@ function ThreadSession({
                     <MessageRow
                       discussionId={id}
                       message={message}
+                      preview={unit.preview}
+                      identity={unit.key}
                       compact={compact}
                       fresh={false}
-                      pending={message.pending}
-                      acknowledged={message.acknowledged}
+                      pending={message?.pending ?? false}
+                      acknowledged={message?.acknowledged ?? false}
                       busy={ackBusy}
-                      onAck={() => void ack([message.id])}
-                      onRevoke={() => void ack([message.id], true)}
+                      onAck={() => message && void ack([message.id])}
+                      onRevoke={() => message && void ack([message.id], true)}
+                      onMore={() =>
+                        unit.preview?.data &&
+                        void previews.more(
+                          unit.preview.data.metadata.preview_id,
+                        )
+                      }
+                      onRetry={() =>
+                        unit.preview?.data &&
+                        void previews.retry(
+                          unit.preview.data.metadata.preview_id,
+                        )
+                      }
                     />
                   </li>
                 );
@@ -1000,6 +1070,10 @@ export function ScrollToBottomButton({
 export function MessageRow({
   discussionId,
   message,
+  preview,
+  identity,
+  onMore,
+  onRetry,
   compact,
   fresh,
   pending,
@@ -1009,7 +1083,11 @@ export function MessageRow({
   onRevoke,
 }: {
   discussionId: number;
-  message: Message;
+  message?: Message;
+  preview?: PreviewState;
+  identity?: string;
+  onMore?: () => void;
+  onRetry?: () => void;
   compact: boolean;
   fresh: boolean;
   pending: boolean;
@@ -1019,16 +1097,36 @@ export function MessageRow({
   onRevoke: () => void;
 }) {
   const { members } = useOrganization();
+  const [details, setDetails] = useState(false);
+  const saved = preview?.data;
+  if (!message && !saved)
+    throw new Error("Message reading unit has no content");
+  const senderId = message?.sender_id ?? saved?.metadata.key.agent_id;
+  if (senderId === undefined) throw new Error("Message sender is missing");
+  const source = message?.body ?? saved?.text.value;
+  const timestamp = message?.created_at ?? saved?.metadata.created_at;
+  if (source === undefined || timestamp === undefined)
+    throw new Error("Message text or timestamp is missing");
+  const name =
+    message?.sender_name ??
+    members?.find((member) => member.id === senderId)?.name;
+  const status = saved?.metadata.status;
+  const failed = status === "failed" || status === "interrupted";
+  if (!message && failed && !saved?.metadata.error)
+    throw new Error("Generation failure reason is missing");
+  const generating =
+    !message && (status === "generating" || status === "sending");
   return (
     <div
-      data-message-id={message.id}
+      data-message-id={message?.id}
+      data-preview-id={!message ? saved?.metadata.preview_id : undefined}
       className={clsx(
-        "flex scroll-m-6 items-start gap-3",
+        "message-row flex scroll-m-6 items-start gap-3",
         fresh && "animate-rise-in [animation-duration:var(--duration-slow)]",
       )}
     >
       <div className="w-[26px] flex-none">
-        {compact ? null : <Avatar memberId={message.sender_id} />}
+        {compact ? null : <Avatar memberId={senderId} />}
       </div>
       <div
         className={clsx(
@@ -1036,25 +1134,60 @@ export function MessageRow({
           pending ? "border-l-yellow-300" : "border-l-transparent",
         )}
       >
-        {compact ? null : (
-          <div className="mb-0.5 flex items-baseline gap-2">
-            <span className="font-semibold">{message.sender_name}</span>
-            <Tooltip label={formatTime(message.created_at)}>
-              <time
-                className="text-xs text-fg-muted"
-                dateTime={message.created_at}
-              >
-                {relativeTime(message.created_at)}
-              </time>
-            </Tooltip>
-          </div>
-        )}
-        <div className="whitespace-pre-wrap wrap-anywhere [&_mark]:bg-blue-500/25 [&_mark]:text-blue-100 [&_mark]:rounded-xs [&_mark]:px-[3px] [&_mark]:font-medium">
-          {members === null
-            ? message.body
-            : renderMentions(message.body, message.mentions, members)}
+        <div className="mb-0.5 flex items-center gap-2">
+          {compact ? null : (
+            <>
+              <span className="font-semibold">{name}</span>
+              <Tooltip label={formatTime(timestamp)}>
+                <time className="text-xs text-fg-muted" dateTime={timestamp}>
+                  {relativeTime(timestamp)}
+                </time>
+              </Tooltip>
+            </>
+          )}
+          {!message && failed && saved ? (
+            <GenerationIndicator
+              state={{
+                status,
+                reason: String(saved.metadata.error),
+                onOpenDetails: () => setDetails(true),
+              }}
+            />
+          ) : null}
+          <span className="message-copy ml-auto">
+            <CopyTextButton source={source} label="Copy message text" />
+          </span>
         </div>
-        {message.attachments.map((attachment) => (
+        <MarkdownContent
+          source={source}
+          identity={identity ?? `message:${discussionId}:${message?.id}`}
+          revision={saved?.text.revision}
+          generating={generating}
+          mentions={message?.mentions}
+        />
+        {generating ? <GenerationIndicator state={{ status }} /> : null}
+        {preview?.error ? (
+          <div role="alert" className="mt-2 text-sm text-danger">
+            <p>{preview.error.message}</p>
+            <Button size="sm" disabled={preview.loading} onClick={onRetry}>
+              Retry
+            </Button>
+          </div>
+        ) : !message && saved?.text.has_more ? (
+          <Button
+            size="sm"
+            disabled={preview?.loading}
+            aria-label="Load more text"
+            aria-busy={preview?.loading}
+            onClick={onMore}
+          >
+            {preview?.loading ? (
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+            ) : null}
+            Load more text
+          </Button>
+        ) : null}
+        {message?.attachments.map((attachment) => (
           <MessageAttachment
             key={attachment.id}
             discussionId={discussionId}
@@ -1083,6 +1216,15 @@ export function MessageRow({
               Undo
             </Button>
           </div>
+        ) : null}
+        {details && saved ? (
+          <TurnHistoryModal
+            agentId={saved.metadata.key.agent_id}
+            sequence={saved.metadata.key.sequence}
+            initialOrdinal={saved.metadata.key.ordinal}
+            open
+            onOpenChange={setDetails}
+          />
         ) : null}
       </div>
     </div>

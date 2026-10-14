@@ -17,8 +17,6 @@ import {
   useRef,
   useState,
 } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useOrganization } from "@/app/organization";
 import { Modal } from "@/components/ui/dialog";
 import {
@@ -31,6 +29,8 @@ import {
 import { StatePanel } from "@/components/ui/state-panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MessageAttachment } from "@/features/discussions/attachments";
+import { GenerationIndicator } from "@/features/generation-state";
+import { CopyTextButton, MarkdownContent } from "@/features/markdown";
 import {
   type ContextEntry,
   composeContext,
@@ -51,6 +51,12 @@ import {
   savedTextKey,
   type TextReads,
 } from "@/features/members/activity-data";
+import { TurnHistoryModal } from "@/features/members/detail";
+import {
+  type AgentGenerationState,
+  AgentGenerationWatcher,
+  GenerationContent,
+} from "@/features/members/generation";
 import { useLiveTool } from "@/features/members/live-tool";
 import { useWindowState } from "@/features/members/window-cache";
 import {
@@ -58,6 +64,7 @@ import {
   type Attachment,
   BackendError,
   backend,
+  type GenerationPart,
   type HistoryBinary,
   type HistoryImage,
   type HistoryText,
@@ -232,7 +239,7 @@ function ActivityReader({
         return;
       }
       if (
-        (event.type.startsWith("turn.") ||
+        ((event.type.startsWith("turn.") && event.type !== "turn.generation") ||
           event.type === "tool.updated" ||
           event.type === "usage.updated") &&
         event.agent_id === agentId &&
@@ -294,6 +301,9 @@ export function ConversationFeed({
     "conversation:reads",
     {},
   );
+  const [generations, setGenerations] = useWindowState<
+    Record<string, AgentGenerationState>
+  >("conversation:generations", {});
   const [images, setImages] = useWindowState<Record<string, HistoryImage>>(
     "conversation:images",
     {},
@@ -365,6 +375,7 @@ export function ConversationFeed({
     ),
     images,
     identities,
+    Object.values(generations).flatMap((state) => state.parts),
   );
   const presentation: ReactNode[] = [];
   for (const run of runs) {
@@ -440,6 +451,8 @@ export function ConversationFeed({
           diagnostic={entry.diagnostic}
           emptyReminder={entry.reminder && entry.resolved.content === ""}
           saved={entry.saved}
+          generation={entry.generation}
+          ordinal={entry.ordinal}
           agentId={agentId}
           name={name}
           grouped={
@@ -523,6 +536,33 @@ export function ConversationFeed({
           register={register}
         />
       ))}
+      {runs.flatMap((run) =>
+        (reads[run.sequence]?.data?.requests ?? []).map((summary) => {
+          const snapshot = reads[run.sequence]?.data?.contents[summary.ordinal];
+          if (
+            snapshot?.request.response &&
+            snapshot.request.response_saved !== false &&
+            snapshot.request.response.messages.length > 0
+          )
+            return null;
+          const identity = `${run.sequence}:${summary.ordinal}:${summary.request_id}`;
+          return (
+            <AgentGenerationWatcher
+              key={identity}
+              request={{
+                agent_id: agentId,
+                sequence: run.sequence,
+                ordinal: summary.ordinal,
+                request_id: summary.request_id,
+                run_id: summary.run_id,
+              }}
+              onChange={(state) =>
+                setGenerations((saved) => ({ ...saved, [identity]: state }))
+              }
+            />
+          );
+        }),
+      )}
       {!runs.length && !loading ? (
         <StatePanel
           compact
@@ -554,6 +594,8 @@ function Bubble({
   grouped,
   label,
   target,
+  copySource,
+  indicator,
   children,
 }: {
   identity: string;
@@ -564,6 +606,8 @@ function Bubble({
   grouped: boolean;
   label?: string;
   target?: string;
+  copySource?: string;
+  indicator?: ReactNode;
   children: ReactNode;
 }) {
   const avatar =
@@ -579,7 +623,7 @@ function Bubble({
       )}
     >
       {side === "agent" ? avatar : null}
-      <div className="flex min-w-0 max-w-[85%] flex-col">
+      <div className="history-text flex min-w-0 max-w-[85%] flex-col">
         <div
           className={clsx(
             "mb-1 flex flex-wrap items-center gap-2 text-xs text-fg-muted",
@@ -594,8 +638,14 @@ function Bubble({
           ) : (
             <span>Start time unavailable</span>
           )}
+          {indicator}
           {target ? <span className="wrap-anywhere">{target}</span> : null}
           {label ? <span>{label}</span> : null}
+          {copySource !== undefined ? (
+            <span className="message-copy ml-auto">
+              <CopyTextButton source={copySource} label="Copy message text" />
+            </span>
+          ) : null}
         </div>
         <div
           className={clsx(
@@ -650,6 +700,8 @@ const ConversationEntry = memo(function ConversationEntry({
   diagnostic,
   emptyReminder,
   saved,
+  generation,
+  ordinal,
   agentId,
   name,
   grouped,
@@ -671,20 +723,55 @@ const ConversationEntry = memo(function ConversationEntry({
   kind: HistoryValue | undefined;
   value: HistoryValue;
   emptyReminder: boolean;
+  generation?: GenerationPart;
+  ordinal: number;
   agentId: number;
   name: string;
   grouped: boolean;
   complete: boolean;
   running: boolean;
 }) {
+  const [details, setDetails] = useState(false);
+  const openDetails = useCallback(() => setDetails(true), []);
+  const content = generation ? (
+    <LongContent identity={`${sequence}:${identity}`}>
+      <GenerationContent part={generation} field="content" />
+    </LongContent>
+  ) : (
+    <Content
+      agentId={agentId}
+      sequence={sequence}
+      identity={identity}
+      value={value}
+      markdown={kind === "text" || kind === "thinking"}
+      preview={title !== null}
+    />
+  );
+  if (
+    generation &&
+    (generation.status === "failed" || generation.status === "interrupted") &&
+    !generation.error
+  )
+    throw new Error("Generation failure reason is unavailable");
   const body = (
     <>
-      {saved === false ? (
+      {details ? (
+        <TurnHistoryModal
+          agentId={agentId}
+          sequence={sequence}
+          initialOrdinal={ordinal}
+          open
+          onOpenChange={setDetails}
+        />
+      ) : null}
+      {saved === false && !generation ? (
         <p className="m-0 text-xs text-danger">Not saved</p>
       ) : null}
       {reply !== undefined ? (
         <LongContent identity={`${identity}:reply`}>
-          <Prose>{reply}</Prose>
+          <Prose identity={`history:${agentId}:${identity}:reply`} copy={false}>
+            {reply}
+          </Prose>
         </LongContent>
       ) : null}
       {action ? (
@@ -695,18 +782,19 @@ const ConversationEntry = memo(function ConversationEntry({
           complete={complete}
           running={running}
           replyDetails={reply !== undefined}
+          generation={generation}
         />
       ) : reminder && complete && emptyReminder ? (
         <p className="m-0">No saved reminder</p>
+      ) : kind === "thinking" ? (
+        <details className="min-w-0 max-w-full text-fg-muted">
+          <summary className="cursor-pointer text-sm wrap-anywhere">
+            Thinking
+          </summary>
+          {content}
+        </details>
       ) : (
-        <Content
-          agentId={agentId}
-          sequence={sequence}
-          identity={identity}
-          value={value}
-          markdown={kind === "text"}
-          preview={title !== null}
-        />
+        content
       )}
       {diagnostic ? (
         <p role="alert" className="text-sm text-danger wrap-anywhere">
@@ -733,6 +821,20 @@ const ConversationEntry = memo(function ConversationEntry({
       senderId={reminder ? undefined : agentId}
       name={reminder ? undefined : name}
       timestamp={timestamp}
+      copySource={reply}
+      indicator={
+        generation &&
+        (generation.status === "failed" ||
+          generation.status === "interrupted") ? (
+          <GenerationIndicator
+            state={{
+              status: generation.status,
+              reason: generation.error as string,
+              onOpenDetails: openDetails,
+            }}
+          />
+        ) : null
+      }
       grouped={grouped}
       label={
         reminder
@@ -858,6 +960,7 @@ function ToolAction({
   complete,
   running,
   replyDetails = false,
+  generation,
 }: {
   agentId: number;
   sequence: number;
@@ -865,6 +968,7 @@ function ToolAction({
   complete: boolean;
   running: boolean;
   replyDetails?: boolean;
+  generation?: GenerationPart;
 }) {
   const { members, discussions } = useOrganization();
   const summary = actionSummary(
@@ -959,13 +1063,31 @@ function ToolAction({
       </button>
       {opened ? (
         <div className="mt-2 flex min-w-0 flex-col gap-3 overflow-x-auto rounded-sm bg-app p-3 font-mono text-xs whitespace-pre-wrap">
-          <Content
-            agentId={agentId}
-            sequence={sequence}
-            identity={`${action.key}:parameters`}
-            value={action.args}
-            references={action.args === action.value.args}
-          />
+          {generation ? (
+            <LongContent identity={`${sequence}:${action.key}:parameters`}>
+              <GenerationContent
+                part={generation}
+                field="args"
+                renderArgs={(value) => (
+                  <Content
+                    agentId={agentId}
+                    sequence={sequence}
+                    identity={`${action.key}:parameters`}
+                    value={value}
+                    references={false}
+                  />
+                )}
+              />
+            </LongContent>
+          ) : (
+            <Content
+              agentId={agentId}
+              sequence={sequence}
+              identity={`${action.key}:parameters`}
+              value={action.args}
+              references={action.args === action.value.args}
+            />
+          )}
           <Content
             agentId={agentId}
             sequence={sequence}
@@ -1204,10 +1326,25 @@ function SavedAttachments({ value }: { value: HistoryValue }) {
   });
 }
 
-function Prose({ children }: { children: string }) {
+function Prose({
+  children,
+  identity,
+  copy = true,
+}: {
+  children: string;
+  identity: string;
+  copy?: boolean;
+}) {
   return (
-    <div className="prose min-w-0 max-w-full text-sm wrap-anywhere">
-      <Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown>
+    <div className="history-text min-w-0 max-w-full text-sm wrap-anywhere">
+      {copy ? (
+        <div className="flex items-center gap-2">
+          <span className="message-copy ml-auto">
+            <CopyTextButton source={children} label="Copy message text" />
+          </span>
+        </div>
+      ) : null}
+      <MarkdownContent source={children} identity={identity} />
     </div>
   );
 }
@@ -1362,7 +1499,9 @@ const Content = memo(function Content({
         }
         const body =
           markdown && typeof leaf.value === "string" ? (
-            <Prose>{leaf.value}</Prose>
+            <Prose identity={`history:${agentId}:${sequence}:${key}`}>
+              {leaf.value}
+            </Prose>
           ) : (
             <pre
               data-value-type={
@@ -1544,7 +1683,7 @@ function TextContent({
   return (
     <div className="flex min-w-0 flex-col items-start gap-2">
       {markdown ? (
-        <Prose>{visible.value}</Prose>
+        <Prose identity={`history:${agentId}:${key}`}>{visible.value}</Prose>
       ) : (
         <pre className="m-0 max-w-full overflow-x-auto text-xs leading-5 whitespace-pre-wrap wrap-anywhere">
           {visible.value}
@@ -1663,6 +1802,7 @@ function ImageContent({
         onOpenChange={setOpen}
         title="History image"
         wide
+        variant="history"
         footer={<Button onClick={() => setOpen(false)}>Close</Button>}
       >
         {visibleUrl ? (
