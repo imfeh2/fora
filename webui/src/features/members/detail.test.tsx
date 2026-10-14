@@ -262,6 +262,77 @@ describe("Agent history request fields", () => {
 
   afterEach(() => cleanup());
 
+  it("delegates reading history to the real window directory and conversation entry", async () => {
+    vi.spyOn(backend, "disconnected", "get").mockReturnValue(false);
+    const directory = vi
+      .spyOn(backend, "agentHistoryWindows")
+      .mockResolvedValue({
+        agent_id: 2,
+        current_window_number: 1,
+        windows: [
+          {
+            number: 1,
+            is_current: true,
+            started_at: "2026-01-01T00:00:00Z",
+            start_reason: null,
+            ended_at: null,
+            end_reason: null,
+            since_sequence: 0,
+          },
+        ],
+        has_unassigned: false,
+        has_before: false,
+        next_before: null,
+      });
+    const history = vi.spyOn(backend, "agentHistory").mockResolvedValue({
+      agent_id: 2,
+      window_number: 1,
+      runs: [],
+      windows: [],
+      has_before: false,
+      next_before: null,
+      windows_has_more: false,
+      windows_next_after: null,
+    });
+    const subscriptions = new Set<Parameters<typeof backend.onEvent>[0]>();
+    vi.spyOn(backend, "onEvent").mockImplementation((listener) => {
+      subscriptions.add(listener);
+      return () => subscriptions.delete(listener);
+    });
+    const mounted = render(
+      <TooltipProvider>
+        <OrganizationProvider
+          value={{
+            members: [{ id: 2, name: "Alpha", type: "agent", state: "idle" }],
+            humanId: 1,
+            discussions: [],
+            connectionError: null,
+            organizationError: null,
+            discussionsError: null,
+            retry: async () => {},
+            refresh: async () => {},
+          }}
+        >
+          <HistorySection agentId={2} initialRuns={[]} reading />
+        </OrganizationProvider>
+      </TooltipProvider>,
+    );
+    expect(await screen.findByText("Initial context")).toBeTruthy();
+    expect(await screen.findByText("No activity yet")).toBeTruthy();
+    expect(directory).toHaveBeenCalledExactlyOnceWith(2);
+    expect(history).toHaveBeenCalledExactlyOnceWith(
+      2,
+      undefined,
+      30,
+      undefined,
+      30,
+      { window_number: 1 },
+    );
+    expect(subscriptions.size).toBe(2);
+    mounted.unmount();
+    expect(subscriptions.size).toBe(0);
+  });
+
   afterAll(() => {
     closeDom?.();
     vi.unstubAllGlobals();

@@ -1,14 +1,16 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import * as testing from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationProvider } from "@/app/organization";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import * as activityData from "@/features/members/activity-data";
+import { ConversationFeed } from "@/features/members/conversation";
+import { ConversationHistory } from "@/features/members/conversation-history";
+import {
+  type WindowCache,
+  WindowContext,
+} from "@/features/members/window-cache";
 import {
   type AgentHistoryPage,
   type AgentHistoryRead,
@@ -23,86 +25,46 @@ import {
   type Message,
 } from "@/lib/backend";
 
-let testing: typeof import("@testing-library/react");
-let userEvent: typeof import("@testing-library/user-event").default;
-let TooltipProvider: typeof import("@/components/ui/tooltip").TooltipProvider;
-let HistorySection: typeof import("@/features/members/detail").HistorySection;
-let closeDom: () => void;
 const listeners = new Set<(event: BackendEvent) => void>();
-const observers = new Map<Element, () => void>();
+const observers = new Map<Element, Set<TestResizeObserver>>();
 
-beforeAll(async () => {
-  const packageName = "jsdom";
-  const { JSDOM } = await import(packageName);
-  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-    url: "http://localhost",
-    pretendToBeVisual: true,
-  });
-  closeDom = () => dom.window.close();
-  for (const name of [
-    "window",
-    "document",
-    "navigator",
-    "HTMLElement",
-    "Element",
-    "HTMLButtonElement",
-    "HTMLInputElement",
-    "Node",
-    "NodeFilter",
-    "MutationObserver",
-    "Event",
-    "CustomEvent",
-    "MouseEvent",
-    "PointerEvent",
-    "KeyboardEvent",
-    "getComputedStyle",
-  ])
-    vi.stubGlobal(name, name === "window" ? dom.window : dom.window[name]);
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    dom.window.requestAnimationFrame.bind(dom.window),
-  );
-  vi.stubGlobal(
-    "cancelAnimationFrame",
-    dom.window.cancelAnimationFrame.bind(dom.window),
-  );
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      target: Element | null = null;
-      constructor(readonly callback: () => void) {}
-      observe(target: Element) {
-        this.target = target;
-        observers.set(target, this.callback);
-      }
-      disconnect() {
-        if (this.target) observers.delete(this.target);
-      }
-    },
-  );
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
-  Object.defineProperty(dom.window.HTMLElement.prototype, "scrollIntoView", {
-    configurable: true,
-    value: vi.fn(),
-  });
-  testing = await import("@testing-library/react");
-  userEvent = (await import("@testing-library/user-event")).default;
-  ({ TooltipProvider } = await import("@/components/ui/tooltip"));
-  ({ HistorySection } = await import("@/features/members/detail"));
-});
+class TestResizeObserver {
+  readonly targets = new Set<Element>();
+  constructor(readonly callback: ResizeObserverCallback) {}
+  observe(target: Element) {
+    this.targets.add(target);
+    const registered = observers.get(target) ?? new Set<TestResizeObserver>();
+    registered.add(this);
+    observers.set(target, registered);
+  }
+  unobserve(target: Element) {
+    this.targets.delete(target);
+    const registered = observers.get(target);
+    if (!registered) return;
+    registered.delete(this);
+    if (!registered.size) observers.delete(target);
+  }
+  disconnect() {
+    for (const target of this.targets) this.unobserve(target);
+  }
+}
 
-afterAll(() => {
-  closeDom();
-  vi.unstubAllGlobals();
-});
+function resizeTarget(target: Element) {
+  for (const observer of [...(observers.get(target) ?? [])]) {
+    if (!observer.targets.has(target)) continue;
+    observer.callback(
+      [{ target } as ResizeObserverEntry],
+      observer as unknown as ResizeObserver,
+    );
+  }
+}
+
+vi.stubGlobal("ResizeObserver", TestResizeObserver);
 afterEach(() => {
   testing.cleanup();
+  expect(listeners.size).toBe(0);
+  expect(observers.size).toBe(0);
+  expect(document.body.childElementCount).toBe(0);
   listeners.clear();
   observers.clear();
   vi.restoreAllMocks();
@@ -269,12 +231,18 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-function view(runs: AgentRun[] = [], scroll = false, controls = false) {
+function view(
+  runs: AgentRun[] = [],
+  scroll = false,
+  controls = false,
+  feed?: ReactNode,
+  name = "文档助手",
+) {
   return (
     <TooltipProvider>
       <OrganizationProvider
         value={{
-          members: [{ id: 2, name: "文档助手", type: "agent", state: "idle" }],
+          members: [{ id: 2, name, type: "agent", state: "idle" }],
           humanId: 1,
           discussions: [],
           connectionError: null,
@@ -290,7 +258,7 @@ function view(runs: AgentRun[] = [], scroll = false, controls = false) {
           style={{ overflowY: scroll ? "auto" : "visible" }}
           data-testid="scroll"
         >
-          <HistorySection agentId={2} initialRuns={runs} reading />
+          {feed ?? <ConversationHistory agentId={2} initialRuns={runs} />}
         </div>
         {controls ? <input aria-label="After history" /> : null}
       </OrganizationProvider>
@@ -336,6 +304,41 @@ beforeEach(() => {
 });
 
 describe("Member conversation", () => {
+  it("observes multiple targets and independently releases shared targets", () => {
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    const one = vi.fn<ResizeObserverCallback>();
+    const two = vi.fn<ResizeObserverCallback>();
+    const observer = new ResizeObserver(one);
+    const shared = new ResizeObserver(two);
+    observer.observe(first);
+    observer.observe(first);
+    observer.observe(second);
+    shared.observe(first);
+    resizeTarget(first);
+    expect(one).toHaveBeenCalledOnce();
+    expect(two).toHaveBeenCalledOnce();
+    expect(one.mock.calls[0][0][0].target).toBe(first);
+    expect(one.mock.calls[0][1]).toBe(observer);
+    observer.unobserve(first);
+    resizeTarget(first);
+    expect(one).toHaveBeenCalledOnce();
+    expect(two).toHaveBeenCalledTimes(2);
+    resizeTarget(second);
+    expect(one).toHaveBeenCalledTimes(2);
+    expect(one.mock.calls[1][0][0].target).toBe(second);
+    observer.disconnect();
+    resizeTarget(second);
+    expect(one).toHaveBeenCalledTimes(2);
+    shared.disconnect();
+    resizeTarget(first);
+    expect(two).toHaveBeenCalledTimes(2);
+    expect(observers.size).toBe(0);
+    observer.observe(second);
+    resizeTarget(second);
+    expect(one).toHaveBeenCalledTimes(3);
+    observer.disconnect();
+  });
   it("keeps window and conversation reads distinct from confirmed empty history", async () => {
     const windows = deferred<AgentHistoryWindows>();
     const history = deferred<AgentHistoryPage>();
@@ -1242,7 +1245,8 @@ describe("Member conversation", () => {
     testing.fireEvent.scroll(scroll);
     const feed = testing.screen.getByRole("feed", { name: "Activity history" });
     const root = feed.parentElement;
-    const resize = root ? observers.get(root) : undefined;
+    const resize =
+      root && observers.has(root) ? () => resizeTarget(root) : undefined;
     if (!resize) throw new Error("Reading container observer is missing");
     testing.fireEvent.click(
       testing.screen.getByRole("button", { name: "Load earlier history" }),
@@ -1455,6 +1459,355 @@ describe("Member conversation", () => {
     expect(testing.screen.getAllByText("保存的回复正文")).toHaveLength(1);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(testing.screen.getByText("资料正文")).toBeTruthy();
+  });
+
+  it("preserves expanded Markdown nodes while other records and its own content update", async () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.textContent?.startsWith("持续阅读") ? 600 : 100;
+      },
+    );
+    vi.mocked(backend.agentHistory).mockResolvedValue(page(1, [4, 3]));
+    let content = "持续阅读 **原始正文**";
+    let other = "另一个记录";
+    vi.mocked(backend.agentHistoryRead).mockImplementation(
+      async (_agent, sequence) =>
+        read(sequence, [
+          { part_kind: "text", content: sequence === 4 ? content : other },
+        ]),
+    );
+    mount();
+    const strong = await testing.screen.findByText("原始正文");
+    const article = strong.closest("article");
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", { name: "Show more" }),
+    );
+    other = "另一个记录更新";
+    await event({
+      type: "turn.progress",
+      agent_id: 2,
+      sequence: 3,
+    } as BackendEvent);
+    await testing.screen.findByText(other);
+    expect(testing.screen.getByText("原始正文")).toBe(strong);
+    expect(
+      testing.screen.getByRole("button", { name: "Show less" }),
+    ).toBeTruthy();
+    content = "持续阅读 **增量正文**";
+    await event({
+      type: "turn.progress",
+      agent_id: 2,
+      sequence: 4,
+    } as BackendEvent);
+    const updated = await testing.screen.findByText("增量正文");
+    expect(updated).toBe(strong);
+    expect(updated.closest("article")).toBe(article);
+    expect(updated.tagName).toBe("STRONG");
+    expect(
+      testing.screen.getByRole("button", { name: "Show less" }),
+    ).toBeTruthy();
+    expect(testing.screen.queryByText("原始正文")).toBeNull();
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Show less" }),
+    );
+    expect(testing.screen.getByText("增量正文")).toBe(updated);
+  });
+
+  it("continues text through retry and growth while preserving its nodes during other updates", async () => {
+    vi.mocked(backend.agentHistory).mockResolvedValue(page(1, [4, 3]));
+    let reference: HistoryText = {
+      kind: "text",
+      source: "response",
+      request_ordinal: 1,
+      message_index: 0,
+      path: ["parts", 0, "content"],
+      value: "中文",
+      offset: 0,
+      next_offset: 6,
+      total_bytes: 12,
+      has_more: true,
+    };
+    let other = "并行记录";
+    vi.mocked(backend.agentHistoryRead).mockImplementation(
+      async (_agent, sequence) =>
+        read(sequence, [
+          {
+            part_kind: "text",
+            content:
+              sequence === 4 ? (reference as unknown as HistoryValue) : other,
+          },
+        ]),
+    );
+    const text = vi
+      .spyOn(backend, "agentHistoryText")
+      .mockRejectedValueOnce(
+        new BackendError("timeout", "Text timed out", true),
+      )
+      .mockResolvedValueOnce({
+        offset: 6,
+        next_offset: 12,
+        total_bytes: 12,
+        value: "内容",
+        has_more: false,
+      })
+      .mockResolvedValueOnce({
+        offset: 12,
+        next_offset: 18,
+        total_bytes: 18,
+        value: "继续",
+        has_more: false,
+      });
+    mount();
+    const body = await testing.screen.findByText("中文");
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", { name: "Load more text" }),
+    );
+    await testing.screen.findByText("Text timed out");
+    other = "并行记录更新";
+    await event({
+      type: "turn.progress",
+      agent_id: 2,
+      sequence: 3,
+    } as BackendEvent);
+    await testing.screen.findByText(other);
+    expect(testing.screen.getByText("中文")).toBe(body);
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Retry text" }),
+    );
+    expect(await testing.screen.findByText("中文内容")).toBe(body);
+    expect(text.mock.calls[1][2].offset).toBe(6);
+    expect(testing.screen.queryByText("Text timed out")).toBeNull();
+    reference = { ...reference, total_bytes: 18 };
+    await event({
+      type: "turn.progress",
+      agent_id: 2,
+      sequence: 4,
+    } as BackendEvent);
+    testing.fireEvent.click(
+      await testing.screen.findByRole("button", { name: "Load more text" }),
+    );
+    expect(await testing.screen.findByText("中文内容继续")).toBe(body);
+    expect(text.mock.calls.map((call) => call[2].offset)).toEqual([6, 6, 12]);
+    expect(
+      testing.screen.queryByRole("button", { name: "Load more text" }),
+    ).toBeNull();
+  });
+
+  it("updates an unchanged action as saving completes and the run ends", async () => {
+    const action: activityData.ActivityAction = {
+      key: "1:response:0:0",
+      ordinal: 1,
+      messageIndex: 0,
+      partIndex: 0,
+      timestamp: date,
+      value: { part_kind: "tool-call", tool_name: "run" },
+      args: { argv: ["cat", "资料.md"] },
+      results: [],
+      sent: null,
+    };
+    const data: activityData.ActivityData = {
+      run: { ...run(4), status: "running" },
+      requests: [],
+      contents: {},
+      legacy: [],
+      legacyStart: 0,
+      actions: [action],
+      notes: [],
+      final: [],
+      complete: false,
+      missing: [],
+    };
+    let publish!: (data: activityData.ActivityData) => void;
+    const pending = deferred<activityData.ActivityData>();
+    vi.spyOn(activityData, "loadActivity").mockImplementation(
+      async (_agent, _sequence, _signal, callback) => {
+        publish = callback;
+        callback(data);
+        return pending.promise;
+      },
+    );
+    testing.render(
+      view(
+        [],
+        false,
+        false,
+        <ConversationFeed agentId={2} runs={[run(4)]} loading={false} />,
+      ),
+    );
+    const toggle = await testing.screen.findByRole("button", {
+      name: "Read file 资料.md · Loading result",
+    });
+    const article = toggle.closest("article");
+    testing.fireEvent.click(toggle);
+    await testing.act(async () => publish({ ...data, complete: true }));
+    expect(
+      testing.screen.getByRole("button", {
+        name: "Read file 资料.md · Waiting for result",
+      }),
+    ).toBe(toggle);
+    await testing.act(async () => {
+      const complete = { ...data, run: run(4), complete: true };
+      publish(complete);
+      pending.resolve(complete);
+    });
+    expect(
+      testing.screen.getByRole("button", {
+        name: "Read file 资料.md · No saved result",
+      }),
+    ).toBe(toggle);
+    expect(toggle.closest("article")).toBe(article);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      testing.screen.queryByLabelText("Reading saved activity"),
+    ).toBeNull();
+  });
+
+  it("updates disconnected loading entries and resumes their existing nodes", async () => {
+    let disconnected = false;
+    vi.spyOn(backend, "disconnected", "get").mockImplementation(
+      () => disconnected,
+    );
+    const pending = deferred<activityData.ActivityData>();
+    vi.spyOn(activityData, "loadActivity").mockImplementation(
+      async () => pending.promise,
+    );
+    const initial = { ...run(4), reminded: undefined };
+    const feed = (
+      <ConversationFeed agentId={2} runs={[initial]} loading={false} />
+    );
+    const rendered = testing.render(view([], false, false, feed));
+    const trigger = await testing.screen.findByLabelText(
+      "Loading trigger information",
+    );
+    const article = trigger.closest("article");
+    expect(
+      testing.screen.getByLabelText("Reading saved activity"),
+    ).toBeTruthy();
+    disconnected = true;
+    await event({ type: "connection.closed" } as BackendEvent);
+    expect(
+      testing.screen.queryByLabelText("Loading trigger information"),
+    ).toBeNull();
+    expect(
+      testing.screen.queryByLabelText("Reading saved activity"),
+    ).toBeNull();
+    expect(
+      testing.screen
+        .getByText("Loading trigger information")
+        .closest("article"),
+    ).toBe(article);
+    disconnected = false;
+    await event({ type: "connection.restored" } as BackendEvent);
+    expect(
+      testing.screen
+        .getByLabelText("Loading trigger information")
+        .closest("article"),
+    ).toBe(article);
+    expect(
+      testing.screen.getByLabelText("Reading saved activity"),
+    ).toBeTruthy();
+    rendered.unmount();
+  });
+
+  it("uses the current activity retry registration after the run changes", async () => {
+    const load = vi
+      .spyOn(activityData, "loadActivity")
+      .mockRejectedValue(
+        new BackendError("timeout", "Activity timed out", true),
+      );
+    const firstCache: WindowCache = {
+      values: new Map(),
+      following: true,
+      position: null,
+    };
+    const nextCache: WindowCache = {
+      values: new Map(),
+      following: true,
+      position: null,
+    };
+    const feed = (cache: WindowCache) => (
+      <WindowContext.Provider value={cache}>
+        <ConversationFeed agentId={2} runs={[run(4)]} loading={false} />
+      </WindowContext.Provider>
+    );
+    const rendered = testing.render(view([], false, false, feed(firstCache)));
+    const retry = await testing.screen.findByRole("button", {
+      name: "Retry activity",
+    });
+    const first = load.mock.calls[0][2];
+    const previous = firstCache.values.get("conversation:reads");
+    rendered.rerender(view([], false, false, feed(nextCache)));
+    await testing.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    expect(first.aborted).toBe(true);
+    await testing.waitFor(() =>
+      expect(retry.hasAttribute("disabled")).toBe(false),
+    );
+    const current = nextCache.values.get("conversation:reads");
+    testing.fireEvent.click(retry);
+    await testing.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+    expect(firstCache.values.get("conversation:reads")).toBe(previous);
+    expect(nextCache.values.get("conversation:reads")).not.toBe(current);
+    expect(load.mock.calls[2][2]).not.toBe(first);
+    expect(load.mock.calls[2][2].aborted).toBe(false);
+    expect(testing.screen.getByRole("button", { name: "Retry activity" })).toBe(
+      retry,
+    );
+  });
+
+  it("updates adjacent grouping and Member identity through the entry boundary", async () => {
+    const first: activityData.ActivityPart = {
+      key: "1:response:0:0",
+      ordinal: 1,
+      messageIndex: 0,
+      partIndex: 0,
+      timestamp: date,
+      value: { part_kind: "text", content: "第一段正文" },
+    };
+    const second = {
+      ...first,
+      key: "1:response:0:1",
+      partIndex: 1,
+      value: { part_kind: "text", content: "第二段正文" },
+    };
+    const data: activityData.ActivityData = {
+      run: run(4),
+      requests: [],
+      contents: {},
+      legacy: [],
+      legacyStart: 0,
+      actions: [],
+      notes: [first, second],
+      final: [],
+      complete: true,
+      missing: [],
+    };
+    let publish!: (data: activityData.ActivityData) => void;
+    vi.spyOn(activityData, "loadActivity").mockImplementation(
+      async (_agent, _sequence, _signal, callback) => {
+        publish = callback;
+        callback(data);
+        return data;
+      },
+    );
+    const feed = (
+      <ConversationFeed agentId={2} runs={[run(4)]} loading={false} />
+    );
+    const rendered = testing.render(view([], false, false, feed));
+    const body = await testing.screen.findByText("第二段正文");
+    const article = body.closest("article");
+    expect(article?.classList.contains("mt-1")).toBe(true);
+    await testing.act(async () =>
+      publish({
+        ...data,
+        notes: [first, { ...second, timestamp: "2026-10-08T09:25:00Z" }],
+      }),
+    );
+    expect(body.closest("article")).toBe(article);
+    expect(article?.classList.contains("mt-4")).toBe(true);
+    rendered.rerender(view([], false, false, feed, "资料助手"));
+    expect(article?.textContent).toContain("资料助手");
+    expect(article?.querySelector("svg rect")).toBeTruthy();
+    expect(testing.screen.getByText("第二段正文")).toBe(body);
   });
 
   it("expands a long work record according to its measured content height", async () => {

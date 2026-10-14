@@ -1,10 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import {
-  createContext,
   type ReactNode,
-  type SetStateAction,
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -13,77 +10,20 @@ import { Button } from "@/components/ui/index";
 import { SelectList } from "@/components/ui/select-list";
 import { ConversationSkeleton } from "@/features/members/activity-skeleton";
 import {
+  type HistoryRange,
+  mergeHistoryRanges,
+} from "@/features/members/history-state";
+import {
+  type WindowCache,
+  WindowContext,
+} from "@/features/members/window-cache";
+import {
   type AgentHistoryWindow,
   type AgentRun,
   BackendError,
   backend,
 } from "@/lib/backend";
 import { formatTime } from "@/lib/format";
-
-export type WindowPosition = {
-  identity: string;
-  path: number[];
-  top: number;
-  scrollTop: number;
-};
-
-export type WindowCache = {
-  values: Map<string, unknown>;
-  following: boolean;
-  position: WindowPosition | null;
-};
-
-const WindowContext = createContext<WindowCache | null>(null);
-
-export function useWindowCache() {
-  return useContext(WindowContext);
-}
-
-export function useWindowState<T>(
-  key: string,
-  initial: T | (() => T),
-): [T, (value: SetStateAction<T>) => void] {
-  const cache = useWindowCache();
-  const [value, update] = useState<T>(() => {
-    if (cache?.values.has(key)) return cache.values.get(key) as T;
-    const value =
-      typeof initial === "function" ? (initial as () => T)() : initial;
-    cache?.values.set(key, value);
-    return value;
-  });
-  const current = useRef(value);
-  const setValue = useCallback(
-    (next: SetStateAction<T>) => {
-      const value =
-        typeof next === "function"
-          ? (next as (value: T) => T)(current.current)
-          : next;
-      current.current = value;
-      cache?.values.set(key, value);
-      update(value);
-    },
-    [cache, key],
-  );
-  return [value, setValue];
-}
-
-type WindowRange = { upper: number; lower: number };
-
-function includeRange(
-  ranges: WindowRange[],
-  incoming: WindowRange,
-): WindowRange[] {
-  const merged: WindowRange[] = [];
-  for (const range of [...ranges, incoming].sort(
-    (left, right) => right.upper - left.upper,
-  )) {
-    const previous = merged[merged.length - 1];
-    if (previous && range.upper >= previous.lower)
-      previous.lower = Math.min(previous.lower, range.lower);
-    else merged.push({ ...range });
-  }
-  return merged;
-}
 
 function failure(error: unknown): BackendError {
   return error instanceof BackendError
@@ -188,7 +128,7 @@ export function WindowHistory({
   const connected = useRef(true);
   const directoryBefore = useRef<number | null>(null);
   const olderCursor = useRef<number | null>(null);
-  const ranges = useRef<WindowRange[]>([]);
+  const ranges = useRef<HistoryRange[]>([]);
   const choose = (number: number | null) => {
     selection.current = number;
     setSelected(number);
@@ -236,13 +176,15 @@ export function WindowHistory({
             .sort((left, right) => right.number - left.number);
         });
         setHasUnassigned(page.has_unassigned);
-        ranges.current = includeRange(ranges.current, {
-          upper: Math.max(...page.windows.map((window) => window.number)),
-          lower:
-            page.has_before && page.next_before !== null
-              ? page.next_before
-              : Number.NEGATIVE_INFINITY,
-        });
+        ranges.current = mergeHistoryRanges(ranges.current, [
+          {
+            upper: Math.max(...page.windows.map((window) => window.number)),
+            lower:
+              page.has_before && page.next_before !== null
+                ? page.next_before
+                : Number.NEGATIVE_INFINITY,
+          },
+        ]);
         directoryBefore.current = Number.isFinite(ranges.current[0].lower)
           ? ranges.current[0].lower
           : null;
@@ -299,13 +241,15 @@ export function WindowHistory({
           (left, right) => right.number - left.number,
         );
       });
-      ranges.current = includeRange(ranges.current, {
-        upper: cursor,
-        lower:
-          page.has_before && page.next_before !== null
-            ? page.next_before
-            : Number.NEGATIVE_INFINITY,
-      });
+      ranges.current = mergeHistoryRanges(ranges.current, [
+        {
+          upper: cursor,
+          lower:
+            page.has_before && page.next_before !== null
+              ? page.next_before
+              : Number.NEGATIVE_INFINITY,
+        },
+      ]);
       directoryBefore.current = Number.isFinite(ranges.current[0].lower)
         ? ranges.current[0].lower
         : null;

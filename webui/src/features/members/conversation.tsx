@@ -7,6 +7,7 @@ import {
   Terminal,
 } from "lucide-react";
 import {
+  memo,
   type ReactNode,
   useCallback,
   useEffect,
@@ -35,7 +36,7 @@ import {
   loadActivity,
   readableResult,
 } from "@/features/members/activity-data";
-import { useWindowState } from "@/features/members/activity-window";
+import { useWindowState } from "@/features/members/window-cache";
 import {
   type AgentHistoryRun,
   BackendError,
@@ -201,6 +202,12 @@ export function ConversationFeed({
     },
     [],
   );
+  const onRetry = useCallback((sequence: number) => {
+    const retry = retries.current.get(sequence);
+    if (!retry) throw new Error("Activity retry is unavailable");
+    retry();
+  }, []);
+  const disconnected = backend.disconnected;
   const units: ConversationUnit[] = [];
   for (const run of runs) {
     const state = reads[run.sequence];
@@ -349,83 +356,132 @@ export function ConversationFeed({
           Math.abs(
             Date.parse(unit.timestamp) - Date.parse(previous.timestamp),
           ) < 300_000;
-        return unit.source ? (
-          <MessageBubble
-            key={unit.key}
-            unit={unit}
-            agentId={agentId}
-            grouped={grouped}
-            onMessage={onMessage}
-          />
-        ) : (
-          <Bubble
+        return (
+          <ConversationEntry
             key={unit.key}
             identity={unit.key}
+            sequence={unit.sequence}
+            timestamp={unit.timestamp}
             side={unit.side}
             senderId={unit.senderId}
-            name={unit.side === "agent" ? name : undefined}
-            timestamp={unit.timestamp}
+            source={unit.source}
+            action={unit.action}
+            text={unit.text}
+            state={unit.state}
+            notice={unit.notice}
+            workRecord={unit.workRecord}
             grouped={grouped}
-            label={unit.workRecord ? "Agent work record" : undefined}
-          >
-            {unit.action ? (
-              <ToolAction
-                agentId={agentId}
-                sequence={unit.sequence}
-                action={unit.action}
-                complete={reads[unit.sequence]?.data?.complete ?? false}
-                running={reads[unit.sequence]?.data?.run.status === "running"}
-              />
-            ) : null}
-            {unit.text !== undefined ? (
-              <Content
-                agentId={agentId}
-                sequence={unit.sequence}
-                identity={unit.key}
-                value={unit.text}
-                markdown
-              />
-            ) : null}
-            {unit.notice === "Loading trigger information" &&
-            !backend.disconnected ? (
-              <LoadingSkeleton label={unit.notice}>
-                <Skeleton className="w-48 max-w-full" />
-                <Skeleton className="w-32 max-w-full" />
-              </LoadingSkeleton>
-            ) : unit.notice ? (
-              <p className="m-0 wrap-anywhere">{unit.notice}</p>
-            ) : null}
-            {unit.state?.error ? (
-              <Retry
-                error={unit.state.error.message}
-                loading={unit.state.loading}
-                label="Retry activity"
-                onRetry={() => {
-                  const retry = retries.current.get(unit.sequence);
-                  if (!retry) throw new Error("Activity retry is unavailable");
-                  retry();
-                }}
-              />
-            ) : null}
-            {unit.key.endsWith(":state") &&
-            !unit.state?.data &&
-            !unit.state?.error &&
-            !backend.disconnected ? (
-              <LoadingSkeleton label="Reading saved activity">
-                <Skeleton className="w-48 max-w-full" />
-                <Skeleton className="w-32 max-w-full" />
-              </LoadingSkeleton>
-            ) : unit.state?.data &&
-              (unit.state.loading ||
-                reads[unit.sequence]?.data?.run.status === "running") ? (
-              <Spinner label="Reading saved activity" />
-            ) : null}
-          </Bubble>
+            agentId={agentId}
+            name={unit.side === "agent" ? name : undefined}
+            complete={reads[unit.sequence]?.data?.complete ?? false}
+            running={reads[unit.sequence]?.data?.run.status === "running"}
+            disconnected={disconnected}
+            onMessage={onMessage}
+            onRetry={onRetry}
+          />
         );
       })}
     </div>
   );
 }
+
+const ConversationEntry = memo(function ConversationEntry({
+  identity,
+  sequence,
+  timestamp,
+  side,
+  senderId,
+  source,
+  action,
+  text,
+  state,
+  notice,
+  workRecord,
+  grouped,
+  agentId,
+  name,
+  complete,
+  running,
+  disconnected,
+  onMessage,
+  onRetry,
+}: Omit<ConversationUnit, "key" | "order"> & {
+  identity: string;
+  grouped: boolean;
+  agentId: number;
+  name?: string;
+  complete: boolean;
+  running: boolean;
+  disconnected: boolean;
+  onMessage: (identity: string, saved: SavedMessage) => void;
+  onRetry: (sequence: number) => void;
+}) {
+  return source ? (
+    <MessageBubble
+      unit={{ key: identity, sequence, timestamp, side, senderId, source }}
+      agentId={agentId}
+      grouped={grouped}
+      disconnected={disconnected}
+      onMessage={onMessage}
+    />
+  ) : (
+    <Bubble
+      identity={identity}
+      side={side}
+      senderId={senderId}
+      name={name}
+      timestamp={timestamp}
+      grouped={grouped}
+      label={workRecord ? "Agent work record" : undefined}
+    >
+      {action ? (
+        <ToolAction
+          agentId={agentId}
+          sequence={sequence}
+          action={action}
+          complete={complete}
+          running={running}
+        />
+      ) : null}
+      {text !== undefined ? (
+        <Content
+          agentId={agentId}
+          sequence={sequence}
+          identity={identity}
+          value={text}
+          markdown
+        />
+      ) : null}
+      {notice === "Loading trigger information" && !disconnected ? (
+        <LoadingSkeleton label={notice}>
+          <Skeleton className="w-48 max-w-full" />
+          <Skeleton className="w-32 max-w-full" />
+        </LoadingSkeleton>
+      ) : notice ? (
+        <p className="m-0 wrap-anywhere">{notice}</p>
+      ) : null}
+      {state?.error ? (
+        <Retry
+          error={state.error.message}
+          loading={state.loading}
+          label="Retry activity"
+          onRetry={() => onRetry(sequence)}
+        />
+      ) : null}
+      {identity.endsWith(":state") &&
+      !state?.data &&
+      !state?.error &&
+      !disconnected ? (
+        <LoadingSkeleton label="Reading saved activity">
+          <Skeleton className="w-48 max-w-full" />
+          <Skeleton className="w-32 max-w-full" />
+        </LoadingSkeleton>
+      ) : state?.data && (state.loading || running) ? (
+        <Spinner label="Reading saved activity" />
+      ) : null}
+    </Bubble>
+  );
+});
 
 function Bubble({
   identity,
@@ -521,11 +577,13 @@ function MessageBubble({
   unit,
   agentId,
   grouped,
+  disconnected,
   onMessage,
 }: {
   unit: ConversationUnit;
   agentId: number;
   grouped: boolean;
+  disconnected: boolean;
   onMessage: (identity: string, saved: SavedMessage) => void;
 }) {
   const identity = unit.source;
@@ -629,7 +687,7 @@ function MessageBubble({
           ))}
         </>
       ) : null}
-      {!saved && !error && !backend.disconnected ? (
+      {!saved && !error && !disconnected ? (
         <LoadingSkeleton label={`Loading ${label.toLowerCase()}`}>
           <Skeleton className="w-48 max-w-full" />
           <Skeleton className="w-32 max-w-full" />
@@ -1205,7 +1263,7 @@ function contentLeaves(
   return [{ label, value }];
 }
 
-function Content({
+const Content = memo(function Content({
   agentId,
   sequence,
   identity,
@@ -1296,7 +1354,7 @@ function Content({
   ) : (
     <LongContent identity={`${sequence}:${identity}`}>{content}</LongContent>
   );
-}
+});
 
 function TextContent({
   agentId,
