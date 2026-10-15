@@ -27,6 +27,8 @@ from fora.adapters.websocket.access_error import ACCESS_ERROR_PAGE
 from fora.adapters.websocket.address import (
     HOST,
     http_origin,
+    matches_public_host,
+    parse_authority,
     parse_origin,
     validate_host,
 )
@@ -377,12 +379,14 @@ class WebServer:
         *,
         uploads: Uploads | None = None,
         host: str = HOST,
+        public_hosts: frozenset[str] = frozenset(),
     ) -> None:
         self._dispatcher = dispatcher
         self._token = token
         self._directory = directory
         self._uploads = uploads
         self._host = validate_host(host)
+        self._public_hosts = public_hosts
         if not 0 <= port <= 65535:
             raise OverflowError("port must be between 0 and 65535")
         addresses = socket.getaddrinfo(
@@ -462,7 +466,10 @@ class WebServer:
 
     @property
     def loopback(self) -> bool:
-        return self._address.is_loopback
+        address = self._address
+        if address.version == 6 and address.ipv4_mapped is not None:
+            address = address.ipv4_mapped
+        return address.is_loopback
 
     @property
     def ipv6(self) -> bool:
@@ -482,40 +489,69 @@ class WebServer:
     def access_url(self, token: str) -> str:
         return str(URL(self.access_origin).with_path("/").with_query(token=token))
 
-    def _allows_origin(self, request: web.Request, value: str) -> bool:
-        try:
-            origin = parse_origin(value)
-        except ValueError:
-            return False
+    def _authority(self, request: web.Request, scheme: str = "http") -> URL:
+        values = request.headers.getall("Host", [])
+        if len(values) != 1:
+            raise ValueError("exactly one Host header is required")
+        return parse_authority(values[0], scheme)
+
+    def _connection_origin(self, request: web.Request) -> URL | None:
+        transport = request.transport
+        address = transport.get_extra_info("sockname") if transport else None
+        if address is None:
+            return None
+        local = ip_address(address[0])
+        if int(address[1]) != self._port or not (
+            self.wildcard
+            and local.version == self._address.version
+            or local == self._address
+        ):
+            return None
+        return parse_origin(http_origin(str(local), int(address[1])))
+
+    def _allows_local_origin(self, request: web.Request, origin: URL) -> bool:
         if origin in self._origins:
             return True
         if origin.scheme != "http" or origin.port != self._port:
             return False
-        transport = request.transport
-        if transport is None:
-            return False
-        address = transport.get_extra_info("sockname")
-        if address is None:
-            return False
+        local = self._connection_origin(request)
+        return (
+            local is not None
+            and origin == self._authority(request)
+            and (origin.raw_host in self._names or self.wildcard and origin == local)
+        )
+
+    def _allows_host(self, request: web.Request) -> bool:
         try:
-            local = parse_origin(
-                http_origin(str(ip_address(address[0])), int(address[1]))
+            authority = self._authority(request)
+            assert authority.raw_host is not None
+            return (
+                not self.loopback
+                or matches_public_host(authority.raw_host, self._public_hosts)
+                or self._allows_local_origin(request, authority)
             )
-            requested = parse_origin(f"http://{request.host}")
         except ValueError:
             return False
-        if (
-            int(address[1]) == self._port
-            and (
-                self.wildcard
-                and ip_address(address[0]).version == self._address.version
-                or ip_address(address[0]) == self._address
+
+    def _allows_origin(self, request: web.Request, value: str) -> bool:
+        try:
+            if len(request.headers.getall("Origin", [])) > 1:
+                return False
+            origin = parse_origin(value)
+            scheme = origin.scheme if origin.scheme in ("http", "https") else "http"
+            requested = self._authority(request, scheme)
+            if self._allows_local_origin(request, origin):
+                return True
+            if origin.scheme not in ("http", "https"):
+                return False
+            assert origin.raw_host is not None
+            return self._connection_origin(request) is not None and (
+                matches_public_host(origin.raw_host, self._public_hosts)
+                or not self.loopback
+                and origin == requested
             )
-            and origin.raw_host in self._names
-            and origin == requested
-        ):
-            return True
-        return self.wildcard and origin == local == requested
+        except ValueError:
+            return False
 
     def add_websocket_route(
         self, path: str, handler: SocketHandler, *, max_msg_size: int
@@ -672,18 +708,17 @@ class WebServer:
         handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
     ) -> web.StreamResponse:
         origin = request.headers.get("Origin")
-        if origin is not None and not self._allows_origin(request, origin):
-            if (
-                request.path != "/ws"
-                or request.headers.get("Upgrade", "").lower() == "websocket"
-            ) and not (
-                handler == self._static
-                and request.method == "GET"
-                and self._directory is not None
-            ):
-                raise web.HTTPForbidden(text="Origin not allowed")
-            origin = None
         try:
+            if not self._allows_host(request) or (
+                origin is not None and not self._allows_origin(request, origin)
+            ):
+                origin = None
+                if not (
+                    handler == self._static
+                    and request.method == "GET"
+                    and self._directory is not None
+                ):
+                    raise web.HTTPForbidden(text="Origin not allowed")
             if request.method == "OPTIONS":
                 response: web.StreamResponse = web.Response(status=204)
             else:
@@ -751,8 +786,9 @@ class WebServer:
         return await worker(
             partial(
                 static_response,
-                document_allowed=self._allows_origin(request, f"http://{request.host}"),
-                origin_allowed=origin is None or self._allows_origin(request, origin),
+                document_allowed=self._allows_host(request),
+                origin_allowed=self._allows_host(request)
+                and (origin is None or self._allows_origin(request, origin)),
                 entry_url=entry_url,
             ),
             self._directory,

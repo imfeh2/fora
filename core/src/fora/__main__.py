@@ -19,7 +19,7 @@ from fora.adapters.host import (
     stdin_is_piped,
     write_private,
 )
-from fora.adapters.websocket.address import HOST, validate_host
+from fora.adapters.websocket.address import HOST, public_hosts, validate_host
 from fora.runtime_info import RuntimeInfo
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 DATA_DIRECTORY_ENV = "FORA_DATA_DIR"
 PORT_ENV = "FORA_PORT"
 HOST_ENV = "FORA_HOST"
+PUBLIC_HOSTS_ENV = "FORA_PUBLIC_HOSTS"
 TOKEN_ENV = "FORA_TOKEN"
 WEBUI_DIRECTORY_ENV = "FORA_WEBUI_DIR"
 DEVELOPMENT_PORT = 2461
@@ -68,7 +69,18 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
             "0.0.0.0 and :: listen on all IPv4 or IPv6 interfaces; "
             "other devices use this machine's actual IP, the same port and token; "
             "non-loopback binding exposes the organization to reachable devices; "
-            "routing and firewall rules must allow access, and browser origins must use the listening port"
+            "routing and firewall rules must allow access; "
+            "non-loopback listeners accept domain names without registration"
+        ),
+    )
+    parser.add_argument(
+        "--public-host",
+        action="append",
+        help=(
+            "allow a public hostname for reverse proxy access (repeatable; "
+            "replaces FORA_PUBLIC_HOSTS, a comma-separated list); "
+            ".example.com allows the domain and all subdomains; "
+            "only allow domains you control"
         ),
     )
     parser.add_argument(
@@ -91,6 +103,9 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     if options.transport == STDIO:
         if options.host is not None:
             parser.error("--host is only supported with --transport websocket")
+        if options.public_host is not None:
+            parser.error("--public-host is only supported with --transport websocket")
+        options.public_hosts = frozenset()
     else:
         if options.host is None:
             options.host = os.environ.get(HOST_ENV) or HOST
@@ -98,6 +113,14 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
             options.host = validate_host(options.host)
         except ValueError as error:
             parser.error(f"invalid --host: {error}")
+        values = options.public_host
+        if values is None:
+            configured = os.environ.get(PUBLIC_HOSTS_ENV, "")
+            values = configured.split(",") if configured else []
+        try:
+            options.public_hosts = public_hosts(values)
+        except ValueError as error:
+            parser.error(f"invalid public host: {error}")
     return options
 
 
@@ -342,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
                 port=options.port,
                 uploads=uploads,
                 host=options.host,
+                public_hosts=options.public_hosts,
             )
             resources.callback(server.stop)
             voice = VoiceEndpoint(lambda: agent_store.get_settings("voice"))
@@ -359,12 +383,14 @@ def main(argv: list[str] | None = None) -> int:
                 log.info(
                     "Listening on all %s interfaces; other devices use this machine's actual IP "
                     "with the same port and token from the access link. Routing and firewall rules "
-                    "must allow access; browser origins must use the listening port.",
+                    "must allow access.",
                     "IPv6" if server.ipv6 else "IPv4",
                 )
             if not server.loopback:
                 log.warning(
-                    "Reachable devices can access this organization using its access token."
+                    "Reachable devices can access this organization using its access token. "
+                    "This non-loopback listener accepts domain names without registration; "
+                    "DNS rebinding protection applies only to loopback listeners."
                 )
             announce(
                 {

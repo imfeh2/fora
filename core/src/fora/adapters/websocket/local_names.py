@@ -5,7 +5,6 @@ import ctypes
 import json
 import logging
 import os
-import re
 import shutil
 import socket
 import sys
@@ -27,7 +26,7 @@ if TYPE_CHECKING:
 else:
     from python_hosts.hosts import HostsEntry
 
-from fora.adapters.websocket.address import validate_host
+from fora.adapters.websocket.address import normalize_name
 
 Address = IPv4Address | IPv6Address
 REFRESH_INTERVAL = 30
@@ -37,18 +36,6 @@ log = logging.getLogger(__name__)
 
 def unavailable(source: str, category: str) -> None:
     log.debug("Local name source unavailable: %s (%s)", source, category)
-
-
-def normalize_name(value: str) -> str:
-    host = validate_host(value).lower()
-    if len(host) > 253 or not all(
-        re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-        for label in host.split(".")
-    ):
-        raise ValueError("invalid DNS name")
-    if all(label.isdecimal() for label in host.split(".")):
-        raise ValueError("numeric names are not DNS names")
-    return host
 
 
 def valid_names(values: list[str] | tuple[str, ...]) -> set[str]:

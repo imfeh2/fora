@@ -955,7 +955,10 @@ def test_http_websocket_diagnosis() -> None:
                 params={"token": token},
                 headers={"Origin": "https://untrusted.example"},
             )
-            assert response.status_code == 204
+            assert response.status_code == 403
+            assert response.text == "Origin not allowed"
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers["Referrer-Policy"] == "no-referrer"
             assert "Access-Control-Allow-Origin" not in response.headers
     finally:
         server.stop()

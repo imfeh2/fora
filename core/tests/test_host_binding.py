@@ -264,9 +264,9 @@ def test_wildcard_origin_uses_local_connection_and_host():
             transport=transport,
         )
         assert server._allows_origin(request, origin)
+        assert server._allows_origin(request, f"https://{local}:{server.port}")
         for value in (
             f"http://{local}:{server.port + 1}",
-            f"https://{local}:{server.port}",
             f"http://192.0.2.26:{server.port}",
             f"http://external.invalid:{server.port}",
             f"http://user@{local}:{server.port}",
@@ -368,7 +368,7 @@ def test_shared_origin_boundary_and_authentication(host):
             )
             response = connection.getresponse()
             response.read()
-            assert response.status == 204
+            assert response.status == 403
             assert response.getheader("Access-Control-Allow-Origin") is None
             connection.request(
                 "PUT",

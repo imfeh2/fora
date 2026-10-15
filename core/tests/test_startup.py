@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import time
 from contextlib import closing
+from http.client import HTTPConnection
 from pathlib import Path
 
 import pytest
@@ -361,6 +362,35 @@ def test_explicit_options_override_the_environment(tmp_path: Path) -> None:
         assert kernel.ready["token"] == "explicit"
         assert (explicit / "fora.sqlite3").is_file()
         assert not from_environment.exists()
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
+@pytest.mark.parametrize(
+    ("arguments", "environment"),
+    [
+        (["--public-host", "public.example"], {}),
+        ([], {"FORA_PUBLIC_HOSTS": "public.example"}),
+        (["--public-host", "public.example"], {"FORA_PUBLIC_HOSTS": "other.example"}),
+    ],
+)
+def test_public_host_configuration_reaches_the_network_boundary(
+    tmp_path: Path, arguments, environment
+) -> None:
+    with Kernel(tmp_path / "data", arguments=arguments, env=environment) as kernel:
+        for origin, expected in (
+            ("https://public.example:8443", 204),
+            ("https://other.example", 403),
+        ):
+            with closing(
+                HTTPConnection("127.0.0.1", kernel.port, timeout=5)
+            ) as connection:
+                connection.request("OPTIONS", "/voice", headers={"Origin": origin})
+                response = connection.getresponse()
+                response.read()
+                assert response.status == expected
+                assert response.getheader("Access-Control-Allow-Origin") == (
+                    origin if expected == 204 else None
+                )
         assert kernel.shutdown() == 0, kernel.stderr
 
 

@@ -1080,7 +1080,14 @@ def test_authentication_diagnosis_and_fixed_application_origins(tmp_path: Path) 
                     )
                     response = connection.getresponse()
                     body = response.read()
-                    assert response.status == (204 if token == kernel.token else 401)
+                    allowed = origin in (
+                        "http://localhost:1420",
+                        "http://tauri.localhost",
+                        "tauri://localhost",
+                    )
+                    assert response.status == (
+                        (204 if token == kernel.token else 401) if allowed else 403
+                    )
                     assert response.getheader("Cache-Control") == "no-store"
                     assert response.getheader("Referrer-Policy") == "no-referrer"
                     assert response.getheader("Vary") == "Origin"
@@ -1098,7 +1105,7 @@ def test_authentication_diagnosis_and_fixed_application_origins(tmp_path: Path) 
                         response.getheader("Access-Control-Allow-Credentials") is None
                     )
                     assert kernel.token.encode() not in body
-                    if token == kernel.token:
+                    if token == kernel.token and allowed:
                         assert body == b""
         assert kernel.shutdown() == 0, kernel.stderr
         assert kernel.token not in kernel.stderr

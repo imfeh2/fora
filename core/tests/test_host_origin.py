@@ -413,8 +413,8 @@ def test_origin_rejection_protocols_and_authentication(site):
             ]
             == 404
         )
-    assert request(site, "GET", "/ws?token=test-token", {"Origin": "null"})[0] == 204
-    assert request(site, "GET", "/ws", {"Origin": "null"})[0] == 401
+    assert request(site, "GET", "/ws?token=test-token", {"Origin": "null"})[0] == 403
+    assert request(site, "GET", "/ws", {"Origin": "null"})[0] == 403
     for origin, token, expected in (
         (bad["Origin"], "test-token", 403),
         (site.access_origin, "wrong", 401),

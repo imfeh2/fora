@@ -35,10 +35,10 @@ a:focus-visible { outline: 2px solid rgb(50 73 148); outline-offset: 2px; }
 <body>
 <main>
 <h1>This address is not allowed</h1>
-<p>Fora answers only on this computer's own addresses and names. The address you opened is not one of them, so the page could not load.</p>
+<p>Fora did not accept the address this page was opened from, so the page could not load.</p>
 <p>Open Fora at this address:</p>
 <p><a href="ENTRY_URL" rel="noreferrer">ENTRY_URL</a></p>
-<p>A name that merely resolves to this computer is not accepted, so a page you visit elsewhere cannot reach this instance through a name it controls.</p>
+<p>To use a domain with this instance, allow it at startup with --public-host (or FORA_PUBLIC_HOSTS).</p>
 </main>
 </body>
 </html>
