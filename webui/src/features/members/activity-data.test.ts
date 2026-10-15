@@ -45,9 +45,13 @@ const call = (tool_name = "run", args: HistoryValue = { argv: ["pwd"] }) => ({
   kind: "response",
   parts: [{ part_kind: "tool-call", tool_name, tool_call_id: "same-id", args }],
 });
-const result = (content: HistoryValue, part_kind = "tool-return") => ({
+const result = (
+  content: HistoryValue,
+  part_kind = "tool-return",
+  tool_name = "run",
+) => ({
   kind: "request",
-  parts: [{ part_kind, tool_name: "run", tool_call_id: "same-id", content }],
+  parts: [{ part_kind, tool_name, tool_call_id: "same-id", content }],
 });
 function read(
   ordinal = 1,
@@ -234,12 +238,16 @@ describe("activity data", () => {
     const value: AgentHistoryRead = read();
     const payload = [
       call("view_image", { path: "/image.png" }),
-      result({
-        kind: "binary",
-        data: "YWJj",
-        media_type: "image/png",
-        identifier: "a9993e",
-      }),
+      result(
+        {
+          kind: "binary",
+          data: "YWJj",
+          media_type: "image/png",
+          identifier: "a9993e",
+        },
+        "tool-return",
+        "view_image",
+      ),
       text("Ending"),
     ];
     const content = JSON.stringify(payload);
@@ -406,6 +414,7 @@ describe("activity data", () => {
                 ? "failed"
                 : { discussion_id: 8, id: 9, created_at: run.started_at },
               ordinal === 2 ? "retry-prompt" : "tool-return",
+              "discussion",
             ),
           ]);
         }

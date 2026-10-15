@@ -1103,6 +1103,148 @@ describe("Member conversation", () => {
     }),
   );
 
+  it("keeps saved observation failures local and retries through the history reader", async () => {
+    const value = command("Original saved result");
+    if (!value.request) throw new Error("Request is missing");
+    const related = value.request.related.messages[0] as Record<
+      string,
+      HistoryValue
+    >;
+    related.metadata = {
+      fora: {
+        request_id: "request",
+        request_ordinal: 1,
+        tool_observations: [
+          {
+            request_ordinal: 1,
+            part_index: 0,
+            tool_call_id: "read",
+            tool_name: "run",
+            status: "unsupported",
+            started_at: date,
+            completed_at: date,
+            has_result: true,
+            result_positions: [[0, 0]],
+          },
+        ],
+      },
+    };
+    const original = structuredClone(value);
+    vi.mocked(backend.agentHistory).mockResolvedValue(page(1, [5, 4]));
+    vi.mocked(backend.agentHistoryRead).mockImplementation(
+      async (_agent, sequence) =>
+        sequence === 4
+          ? value
+          : read(5, [{ part_kind: "text", content: "Other saved activity" }]),
+    );
+    mount(false, true);
+    const action = await testing.screen.findByRole("button", {
+      name: "Read file docs/发布说明.md · Saved observation unavailable",
+    });
+    await testing.screen.findByText("Other saved activity");
+    expect(
+      testing.screen.getByRole("combobox", { name: "Context window" }),
+    ).toBeTruthy();
+    expect(
+      testing.screen.getByRole("textbox", { name: "After history" }),
+    ).toBeTruthy();
+    testing.fireEvent.click(action);
+    await testing.screen.findByText("Original saved result");
+    expect(
+      testing.screen.getAllByText(/Saved observation status is unsupported/),
+    ).toHaveLength(2);
+    expect(
+      testing.screen.getByText(
+        'Saved observation status is unsupported (Agent 2, activity 4, request 1, related[0] ["metadata","fora","tool_observations",0,"status"])',
+      ),
+    ).toBeTruthy();
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Full context" }),
+    );
+    const modal = await testing.screen.findByRole("dialog");
+    await testing.within(modal).findByText("Associated tool results");
+    testing.fireEvent.click(testing.within(modal).getByLabelText("Close"));
+    await testing.waitFor(() =>
+      expect(testing.screen.queryByRole("dialog")).toBeNull(),
+    );
+    const reads = vi.mocked(backend.agentHistoryRead).mock.calls.length;
+    vi.mocked(backend.agentHistoryRead).mockImplementation(
+      async (_agent, sequence) =>
+        sequence === 4
+          ? command("Recovered saved result")
+          : read(5, [{ part_kind: "text", content: "Other saved activity" }]),
+    );
+    testing.fireEvent.click(
+      testing.screen.getByRole("button", { name: "Retry saved context" }),
+    );
+    await testing.screen.findByText("Recovered saved result");
+    await testing.waitFor(() =>
+      expect(
+        testing.screen.queryByRole("button", { name: "Retry saved context" }),
+      ).toBeNull(),
+    );
+    expect(
+      vi.mocked(backend.agentHistoryRead).mock.calls.length,
+    ).toBeGreaterThan(reads);
+    expect(testing.screen.getByText("Other saved activity")).toBeTruthy();
+    expect(value).toEqual(original);
+  });
+
+  it("ignores a late saved-context retry after switching windows", async () => {
+    const value = command("Original result");
+    if (!value.request) throw new Error("Request is missing");
+    const related = value.request.related.messages[0] as Record<
+      string,
+      HistoryValue
+    >;
+    related.metadata = {
+      fora: {
+        request_id: "wrong-request",
+        request_ordinal: 1,
+        tool_observations: [],
+      },
+    };
+    vi.mocked(backend.agentHistoryWindows).mockResolvedValue(directory([2, 1]));
+    vi.mocked(backend.agentHistory).mockImplementation(
+      async (_agent, _before, _limit, _windowsAfter, _windowsLimit, options) =>
+        page(
+          options?.window_number ?? 2,
+          options?.window_number === 1 ? [3] : [4],
+        ),
+    );
+    vi.mocked(backend.agentHistoryRead).mockResolvedValue(value);
+    mount();
+    const retry = await testing.screen.findByRole("button", {
+      name: "Retry saved context",
+    });
+    const pending = deferred<AgentHistoryRead>();
+    vi.mocked(backend.agentHistoryRead).mockImplementation(
+      async (_agent, sequence) =>
+        sequence === 4
+          ? pending.promise
+          : read(3, [
+              { part_kind: "text", content: "Selected window activity" },
+            ]),
+    );
+    testing.fireEvent.click(retry);
+    await testing.waitFor(() =>
+      expect(retry.hasAttribute("disabled")).toBe(true),
+    );
+    const selector = testing.screen.getByRole("combobox", {
+      name: "Context window",
+    });
+    await chooseWindow(selector, "1");
+    await testing.screen.findByText("Selected window activity");
+    await testing.act(async () =>
+      pending.resolve(command("Late retry content")),
+    );
+    expect(testing.screen.queryByText("Late retry content")).toBeNull();
+    expect(
+      testing.screen.queryByRole("button", { name: "Retry saved context" }),
+    ).toBeNull();
+    expect(testing.screen.getByText("Selected window activity")).toBeTruthy();
+  });
+
   it("reads saved SDK image positions together with their tool lifecycle", async () => {
     const binary = {
       kind: "binary",

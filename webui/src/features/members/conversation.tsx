@@ -32,6 +32,7 @@ import { MessageAttachment } from "@/features/discussions/attachments";
 import { GenerationIndicator } from "@/features/generation-state";
 import { CopyTextButton, MarkdownContent } from "@/features/markdown";
 import {
+  type ContextDiagnostic,
   type ContextEntry,
   composeContext,
   contextImageKey,
@@ -475,6 +476,26 @@ export function ConversationFeed({
       );
     }
     if (!placed && status) presentation.push(status);
+    for (const ordinal of new Set(
+      composition.diagnostics
+        .filter((item) => item.location.sequence === run.sequence)
+        .map((item) => item.location.ordinal),
+    ))
+      presentation.push(
+        <ContextDiagnosticPanel
+          key={`${run.sequence}:${ordinal}:diagnostic`}
+          agentId={agentId}
+          sequence={run.sequence}
+          ordinal={ordinal}
+          diagnostics={composition.diagnostics.filter(
+            (item) =>
+              item.location.sequence === run.sequence &&
+              item.location.ordinal === ordinal,
+          )}
+          loading={state?.loading ?? false}
+          retry={() => onRetry(run.sequence)}
+        />,
+      );
     if (state?.error && !needsReminder)
       presentation.push(
         <Retry
@@ -580,6 +601,51 @@ export function ConversationFeed({
         <p role="alert" className="text-sm text-warning wrap-anywhere">
           Historical content is incomplete: {composition.missing.join(", ")}
         </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ContextDiagnosticPanel({
+  agentId,
+  sequence,
+  ordinal,
+  diagnostics,
+  loading,
+  retry,
+}: {
+  agentId: number;
+  sequence: number;
+  ordinal: number;
+  diagnostics: ContextDiagnostic[];
+  loading: boolean;
+  retry: () => void;
+}) {
+  const [details, setDetails] = useState(false);
+  return (
+    <div className="min-w-0 text-sm">
+      <Retry
+        error={diagnostics
+          .map(
+            ({ location, reason }) =>
+              `${reason} (Agent ${agentId}, activity ${sequence}, request ${ordinal}, ${location.source}[${location.messageIndex}] ${JSON.stringify(location.path)})`,
+          )
+          .join("; ")}
+        loading={loading}
+        label="Retry saved context"
+        onRetry={retry}
+      />
+      <Button variant="ghost" size="sm" onClick={() => setDetails(true)}>
+        Full context
+      </Button>
+      {details ? (
+        <TurnHistoryModal
+          agentId={agentId}
+          sequence={sequence}
+          initialOrdinal={ordinal || undefined}
+          open
+          onOpenChange={setDetails}
+        />
       ) : null}
     </div>
   );
@@ -985,7 +1051,11 @@ function ToolAction({
   );
   const tool = String(action.value.tool_name);
   const observing =
-    action.ordinal > 0 && (running || action.observation !== undefined);
+    !action.observationError &&
+    !action.readingObservation &&
+    action.requestId !== undefined &&
+    action.ordinal > 0 &&
+    (running || action.observation !== undefined);
   const live = useLiveTool({
     agentId,
     sequence,
@@ -1018,23 +1088,27 @@ function ToolAction({
         : tool === "web_search"
           ? Search
           : FileText;
-  const status = lifecycle
-    ? {
-        queued: "Queued",
-        running: "Running",
-        completed: "Completed",
-        failed: "Failed",
-        cancelled: "Cancelled",
-      }[lifecycle.status]
-    : failed
-      ? "Failed"
-      : results.length
-        ? "Result saved"
-        : !complete
-          ? "Loading result"
-          : running
-            ? "Waiting for result"
-            : "No saved result";
+  const status = action.observationError
+    ? "Saved observation unavailable"
+    : action.readingObservation
+      ? "Reading saved observation"
+      : lifecycle
+        ? {
+            queued: "Queued",
+            running: "Running",
+            completed: "Completed",
+            failed: "Failed",
+            cancelled: "Cancelled",
+          }[lifecycle.status]
+        : failed
+          ? "Failed"
+          : results.length
+            ? "Result saved"
+            : !complete
+              ? "Loading result"
+              : running
+                ? "Waiting for result"
+                : "No saved result";
   return (
     <div className="min-w-0">
       <button

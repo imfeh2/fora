@@ -34,6 +34,8 @@ export type ActivityAction = ActivityPart & {
     live_revision: number;
     request_id: string;
   };
+  observationError?: string;
+  readingObservation?: boolean;
   lifecycle?: Pick<
     LiveTool,
     | "status"

@@ -60,11 +60,289 @@ export type ContextCoverage = {
   target: string;
   kind: "content" | "reference" | "inspection";
 };
+export type ContextDiagnostic = {
+  location: ContextLocation;
+  reason: string;
+};
 export type ContextComposition = {
   entries: ContextEntry[];
   coverage: ContextCoverage[];
   missing: string[];
+  diagnostics: ContextDiagnostic[];
 };
+
+function contextMessageIssue(
+  data: ActivityData,
+  ordinal: number,
+  agentId: number,
+): ContextDiagnostic | null {
+  const snapshot = data.contents[ordinal];
+  for (const source of ["input", "response", "related", "run"] as const) {
+    if (source === "run" && ordinal !== 0) continue;
+    const page = source === "run" ? null : snapshot?.request[source];
+    const messages = source === "run" ? data.legacy : (page?.messages ?? []);
+    const values = source === "run" ? undefined : snapshot?.values[source];
+    const location: ContextLocation = {
+      agentId,
+      windowNumber: data.run.window_number,
+      sequence: data.run.sequence,
+      ordinal,
+      source,
+      messageIndex: page?.offset ?? 0,
+      path: [],
+    };
+    if (values && values.length !== messages.length)
+      return {
+        location,
+        reason: "Complete context does not match its saved message page",
+      };
+    for (const [index, message] of messages.entries()) {
+      const at = { ...location, messageIndex: location.messageIndex + index };
+      if (!activityRecord(message) || !Array.isArray(message.parts))
+        return {
+          location: at,
+          reason: "Saved context message has no parts array",
+        };
+      const value = values ? values[index] : message;
+      if (
+        !activityRecord(value) ||
+        !Array.isArray(value.parts) ||
+        value.parts.length !== message.parts.length ||
+        value.kind !== message.kind
+      )
+        return {
+          location: at,
+          reason: "Complete context message does not match its saved structure",
+        };
+      for (const [partIndex, part] of message.parts.entries()) {
+        const canonical = value.parts[partIndex];
+        const partLocation = { ...at, path: ["parts", partIndex] };
+        if (!activityRecord(part))
+          return {
+            location: partLocation,
+            reason: "Saved context part is not an object",
+          };
+        if (
+          !activityRecord(canonical) ||
+          canonical.part_kind !== part.part_kind
+        )
+          return {
+            location: partLocation,
+            reason: "Complete context part does not match its saved identity",
+          };
+      }
+    }
+  }
+  return null;
+}
+
+type SavedToolObservation = {
+  value?: Part;
+  location: ContextLocation;
+  diagnostic?: ContextDiagnostic;
+};
+type SavedToolObservations = {
+  parts: Map<number, SavedToolObservation>;
+  diagnostics: ContextDiagnostic[];
+  diagnostic?: ContextDiagnostic;
+  pending?: boolean;
+};
+
+function savedToolObservations(
+  data: ActivityData,
+  ordinal: number,
+  base: Pick<ContextLocation, "agentId" | "windowNumber" | "sequence">,
+): SavedToolObservations {
+  const result: SavedToolObservations = { parts: new Map(), diagnostics: [] };
+  const snapshot = data.contents[ordinal];
+  if (!snapshot) return result;
+  const request = snapshot.request;
+  const messages = snapshot.values.related ?? request.related.messages;
+  const observations: { value: HistoryValue; location: ContextLocation }[] = [];
+  const issue = (location: ContextLocation, field: string, reason: string) => ({
+    location: { ...location, path: [...location.path, field] },
+    reason,
+  });
+  for (const [index, message] of messages.entries()) {
+    if (!activityRecord(message) || !activityRecord(message.metadata)) continue;
+    const fora = message.metadata.fora;
+    if (!activityRecord(fora) || fora.tool_observations === undefined) continue;
+    const location: ContextLocation = {
+      ...base,
+      ordinal,
+      source: "related",
+      messageIndex: request.related.offset + index,
+      path: ["metadata", "fora"],
+    };
+    if (
+      !snapshot.complete &&
+      (!snapshot.values.related || !snapshot.values.response)
+    )
+      return { ...result, pending: true };
+    let diagnostic: ContextDiagnostic | undefined;
+    if (fora.request_ordinal !== ordinal)
+      diagnostic = issue(
+        location,
+        "request_ordinal",
+        "Saved observation request ordinal does not match",
+      );
+    else if (fora.request_id !== request.summary.request_id)
+      diagnostic = issue(
+        location,
+        "request_id",
+        "Saved observation request identity does not match",
+      );
+    else if (!Array.isArray(fora.tool_observations))
+      diagnostic = issue(
+        location,
+        "tool_observations",
+        "Saved observations are not an array",
+      );
+    if (diagnostic) {
+      result.diagnostic = diagnostic;
+      result.diagnostics.push(diagnostic);
+      continue;
+    }
+    for (const [observationIndex, value] of (
+      fora.tool_observations as HistoryValue[]
+    ).entries())
+      observations.push({
+        value,
+        location: {
+          ...location,
+          path: [...location.path, "tool_observations", observationIndex],
+        },
+      });
+  }
+  const response = snapshot.values.response ?? request.response?.messages ?? [];
+  for (const { value, location } of observations) {
+    if (
+      !activityRecord(value) ||
+      typeof value.part_index !== "number" ||
+      !Number.isSafeInteger(value.part_index) ||
+      value.part_index < 0
+    ) {
+      result.diagnostics.push(
+        issue(
+          location,
+          "part_index",
+          "Saved observation part index is unsupported",
+        ),
+      );
+      continue;
+    }
+    const message = request.response?.offset === 0 ? response[0] : undefined;
+    const call =
+      message !== undefined &&
+      activityRecord(message) &&
+      Array.isArray(message.parts)
+        ? message.parts[value.part_index]
+        : undefined;
+    const invalidate = (field: string, reason: string) => {
+      const diagnostic = issue(location, field, reason);
+      result.diagnostics.push(diagnostic);
+      result.parts.set(value.part_index as number, { location, diagnostic });
+    };
+    if (
+      call === undefined ||
+      !activityRecord(call) ||
+      call.part_kind !== "tool-call"
+    ) {
+      invalidate(
+        "part_index",
+        "Saved observation does not identify a response tool call",
+      );
+      continue;
+    }
+    if (result.parts.has(value.part_index)) {
+      invalidate("part_index", "Saved observation part identity is duplicated");
+      continue;
+    }
+    const mismatch = (
+      [
+        ["request_ordinal", ordinal],
+        ["tool_call_id", call.tool_call_id],
+        ["tool_name", call.tool_name],
+      ] as const
+    ).find(([field, expected]) => value[field] !== expected);
+    if (mismatch) {
+      invalidate(mismatch[0], "Saved observation tool identity does not match");
+      continue;
+    }
+    if (
+      !["queued", "running", "completed", "failed", "cancelled"].includes(
+        String(value.status),
+      )
+    ) {
+      invalidate("status", "Saved observation status is unsupported");
+      continue;
+    }
+    const invalidTime = (["started_at", "completed_at"] as const).find(
+      (field) => !(value[field] === null || typeof value[field] === "string"),
+    );
+    if (invalidTime) {
+      invalidate(
+        invalidTime,
+        "Saved observation timestamp type is unsupported",
+      );
+      continue;
+    }
+    if (
+      value.has_result !== undefined &&
+      typeof value.has_result !== "boolean"
+    ) {
+      invalidate("has_result", "Saved observation result flag is unsupported");
+      continue;
+    }
+    if (
+      value.result_positions !== undefined &&
+      !Array.isArray(value.result_positions)
+    ) {
+      invalidate("result_positions", "Saved result positions are not an array");
+      continue;
+    }
+    if (
+      value.content_version !== undefined &&
+      value.content_version !== null &&
+      typeof value.content_version !== "string"
+    ) {
+      invalidate(
+        "content_version",
+        "Saved observation content version is unsupported",
+      );
+      continue;
+    }
+    if (Array.isArray(value.result_positions)) {
+      if (value.has_result === false && value.result_positions.length > 0) {
+        invalidate(
+          "result_positions",
+          "Saved observation without a result has result positions",
+        );
+        continue;
+      }
+      const overlapping = value.result_positions.some((position) =>
+        observations.some(
+          (item) =>
+            item.location !== location &&
+            activityRecord(item.value) &&
+            Array.isArray(item.value.result_positions) &&
+            item.value.result_positions.some(
+              (other) => JSON.stringify(other) === JSON.stringify(position),
+            ),
+        ),
+      );
+      if (overlapping) {
+        invalidate(
+          "result_positions",
+          "Saved result position belongs to multiple observations",
+        );
+        continue;
+      }
+    }
+    result.parts.set(value.part_index, { value, location });
+  }
+  return result;
+}
 
 export function contextLocationKey(location: ContextLocation): string {
   return JSON.stringify([
@@ -275,7 +553,9 @@ export function composeContext(
   const entries: ContextEntry[] = [];
   const coverage: ContextCoverage[] = [];
   const missing: string[] = [];
+  const diagnostics: ContextDiagnostic[] = [];
   const savedIdentities = new Map(identities);
+  const observations = new Map<string, SavedToolObservations>();
   const associations = new Map<string, ContextEntry>();
   let previous: ContextEntry[] = [];
   let previousWindow: number | null | undefined;
@@ -351,6 +631,45 @@ export function composeContext(
       const content = snapshot?.request;
       if (!content && summary.ordinal !== 0) continue;
       const ordinal = summary.ordinal;
+      const issue = contextMessageIssue(data, ordinal, agentId);
+      if (issue) {
+        diagnostics.push(issue);
+        for (const source of ["input", "response", "related", "run"] as const) {
+          const page = source === "run" ? null : content?.[source];
+          const messages =
+            source === "run" ? data.legacy : (page?.messages ?? []);
+          for (const [index, message] of messages.entries())
+            addCoverage(
+              message,
+              {
+                ...base,
+                ordinal,
+                source,
+                messageIndex: (page?.offset ?? 0) + index,
+                path: [],
+              },
+              "Full context",
+              "inspection",
+            );
+        }
+        for (const source of ["parameters", "settings", "model"] as const) {
+          const value =
+            source === "parameters" ? snapshot?.parameters : content?.[source];
+          if (value !== undefined)
+            addCoverage(
+              value as HistoryValue,
+              { ...base, ordinal, source, messageIndex: 0, path: [] },
+              "Full context",
+              "inspection",
+            );
+        }
+        previous = [];
+        previousInstructions = new Map();
+        continue;
+      }
+      const observed = savedToolObservations(data, ordinal, base);
+      observations.set(JSON.stringify([run.sequence, ordinal]), observed);
+      diagnostics.push(...observed.diagnostics);
       const instructionEntries = new Map<string, ContextEntry>();
       const addInstruction = (
         value: HistoryValue,
@@ -463,19 +782,12 @@ export function composeContext(
         const offset = source === "run" ? 0 : (content?.[source]?.offset ?? 0);
         const complete =
           source === "run" ? undefined : snapshot?.values[source];
-        for (const [index, rawMessage] of messages.entries()) {
-          if (!activityRecord(rawMessage) || !Array.isArray(rawMessage.parts))
-            throw new Error("Saved context message is invalid");
+        for (const [index, message] of messages.entries()) {
+          const rawMessage = message as Part & { parts: Part[] };
           const messageIndex = offset + index;
-          if (Array.isArray(complete) && complete.length !== messages.length)
-            throw new Error(
-              "Saved complete context does not match its message page",
-            );
-          const normalized = Array.isArray(complete)
-            ? complete[index]
-            : rawMessage;
-          if (!activityRecord(normalized) || !Array.isArray(normalized.parts))
-            throw new Error("Saved complete context message is invalid");
+          const normalized = (
+            Array.isArray(complete) ? complete[index] : rawMessage
+          ) as Part & { parts: Part[] };
           const metadata = activityRecord(rawMessage.metadata)
             ? rawMessage.metadata
             : {};
@@ -513,11 +825,7 @@ export function composeContext(
           const sources = partSources(normalized, agentId, run.sequence);
           if (sources.diagnostic) missing.push(sources.diagnostic);
           for (const [partIndex, value] of rawMessage.parts.entries()) {
-            if (!activityRecord(value))
-              throw new Error("Saved context part is invalid");
             const canonical = normalized.parts[partIndex];
-            if (!activityRecord(canonical))
-              throw new Error("Saved complete context part is invalid");
             const location = {
               ...messageLocation,
               path: ["parts", partIndex],
@@ -644,7 +952,11 @@ export function composeContext(
                 value.part_kind === "retry-prompt"
               ) {
                 const call = scopeCalls.get(callId);
-                if (call) associations.set(selected.key, call);
+                if (
+                  call &&
+                  call.resolved.tool_name === entry.resolved.tool_name
+                )
+                  associations.set(selected.key, call);
               }
             }
             if (existing) {
@@ -720,8 +1032,13 @@ export function composeContext(
       part.part_kind === "tool-call" &&
       (typeof part.tool_name !== "string" ||
         typeof part.tool_call_id !== "string")
-    )
-      throw new Error("Generated tool identity is unavailable");
+    ) {
+      diagnostics.push({
+        location,
+        reason: "Generated tool identity is unavailable",
+      });
+      continue;
+    }
     const value: Part =
       part.part_kind === "tool-call"
         ? {
@@ -821,52 +1138,76 @@ export function composeContext(
   for (const entry of entries) {
     const action = entry.action;
     if (!action) continue;
-    const data = activities.find(
-      (activity) => activity.run.sequence === entry.sequence,
+    const origin = entry.references.find(
+      (reference) =>
+        reference.agentId === agentId && reference.source === "response",
     );
-    const request = data?.contents[entry.ordinal]?.request;
+    const data = origin
+      ? activities.find((activity) => activity.run.sequence === origin.sequence)
+      : undefined;
+    const request = origin
+      ? data?.contents[origin.ordinal]?.request
+      : undefined;
     action.requestId =
       request?.summary.request_id ?? entry.generation?.key.request_id;
     action.observation = request?.observation;
-    const observations =
-      request?.related.messages.flatMap((message) => {
-        if (!activityRecord(message) || !activityRecord(message.metadata))
-          return [];
-        const fora = message.metadata.fora;
-        if (!activityRecord(fora) || !Array.isArray(fora.tool_observations))
-          return [];
-        if (
-          fora.request_ordinal !== entry.ordinal ||
-          fora.request_id !== request.summary.request_id
-        )
-          throw new Error("Saved tool observation request does not match");
-        return fora.tool_observations;
-      }) ?? [];
-    const observation = observations.find(
-      (item) => activityRecord(item) && item.part_index === entry.partIndex,
-    );
-    if (observation !== undefined) {
-      if (
-        !activityRecord(observation) ||
-        observation.request_ordinal !== entry.ordinal ||
-        observation.tool_call_id !== action.value.tool_call_id ||
-        observation.tool_name !== action.value.tool_name ||
-        !["queued", "running", "completed", "failed", "cancelled"].includes(
-          String(observation.status),
-        ) ||
-        !(
-          observation.started_at === null ||
-          typeof observation.started_at === "string"
-        ) ||
-        !(
-          observation.completed_at === null ||
-          typeof observation.completed_at === "string"
-        )
-      )
-        throw new Error("Saved tool observation identity is invalid");
+    const observed = origin
+      ? observations.get(JSON.stringify([origin.sequence, origin.ordinal]))
+      : undefined;
+    const parsed = origin
+      ? observed?.parts.get(origin.path[1] as number)
+      : undefined;
+    const invalidate = (diagnostic: ContextDiagnostic) => {
+      diagnostics.push(diagnostic);
+      entry.diagnostic = diagnostic.reason;
+      action.observationError = diagnostic.reason;
+    };
+    const diagnostic = observed?.diagnostic ?? parsed?.diagnostic;
+    if (diagnostic) {
+      invalidate(diagnostic);
+      continue;
+    }
+    if (observed?.pending) {
+      action.readingObservation = true;
+      continue;
+    }
+    const observation = parsed?.value;
+    if (observation !== undefined && parsed && origin) {
       const associatedResults = action.results;
+      const resultIssue = (
+        index: number,
+        reason: string,
+      ): ContextDiagnostic => ({
+        location: {
+          ...parsed.location,
+          path: [...parsed.location.path, "result_positions", index],
+        },
+        reason,
+      });
+      if (
+        observation.has_result === false &&
+        associatedResults.some(
+          (result) =>
+            result.value.part_kind !== "tool-return" ||
+            result.value.outcome !== "interrupted",
+        )
+      ) {
+        invalidate({
+          location: {
+            ...parsed.location,
+            path: [...parsed.location.path, "has_result"],
+          },
+          reason: "Saved observation result flag contradicts a saved result",
+        });
+        continue;
+      }
       if (Array.isArray(observation.result_positions)) {
-        action.results = observation.result_positions.map((position) => {
+        const results: ContextEntry[] = [];
+        let issue: ContextDiagnostic | undefined;
+        for (const [
+          index,
+          position,
+        ] of observation.result_positions.entries()) {
           if (
             !Array.isArray(position) ||
             position.length !== 2 ||
@@ -876,13 +1217,16 @@ export function composeContext(
                 Number.isSafeInteger(number) &&
                 number >= 0,
             )
-          )
-            throw new Error("Saved result position is invalid");
+          ) {
+            issue = resultIssue(index, "Saved result position is invalid");
+            break;
+          }
           const result = entries.find((candidate) =>
             candidate.references.some(
               (reference) =>
-                reference.sequence === entry.sequence &&
-                reference.ordinal === entry.ordinal &&
+                reference.agentId === origin.agentId &&
+                reference.sequence === origin.sequence &&
+                reference.ordinal === origin.ordinal &&
                 reference.source === "related" &&
                 reference.messageIndex === position[0] &&
                 reference.path.length === 2 &&
@@ -890,10 +1234,34 @@ export function composeContext(
                 reference.path[1] === position[1],
             ),
           );
-          if (!result) throw new Error("Saved result position is unavailable");
-          targets.set(result.key, entry.key);
-          return result;
-        });
+          if (
+            !result ||
+            (results.length === 0 &&
+              result.value.part_kind === "user-prompt") ||
+            (result.value.part_kind !== "user-prompt" &&
+              !["tool-return", "retry-prompt"].includes(
+                String(result.value.part_kind),
+              )) ||
+            (result.value.part_kind !== "user-prompt" &&
+              (result.resolved.tool_call_id !== entry.resolved.tool_call_id ||
+                result.resolved.tool_name !== entry.resolved.tool_name)) ||
+            results.includes(result)
+          ) {
+            issue = resultIssue(
+              index,
+              "Saved result position does not identify an available related result",
+            );
+            break;
+          }
+          results.push(result);
+        }
+        if (issue) {
+          invalidate(issue);
+          continue;
+        }
+        for (const result of action.results) targets.delete(result.key);
+        action.results = results;
+        for (const result of results) targets.set(result.key, entry.key);
       }
       if (observation.has_result === false) {
         for (const result of associatedResults) {
@@ -909,8 +1277,8 @@ export function composeContext(
       }
       action.lifecycle = {
         status: observation.status as LiveTool["status"],
-        started_at: observation.started_at,
-        completed_at: observation.completed_at,
+        started_at: observation.started_at as string | null,
+        completed_at: observation.completed_at as string | null,
         saved: true,
         has_result:
           typeof observation.has_result === "boolean"
@@ -1028,5 +1396,14 @@ export function composeContext(
       ),
     coverage,
     missing: [...new Set(missing)],
+    diagnostics: diagnostics.filter(
+      (item, index) =>
+        diagnostics.findIndex(
+          (candidate) =>
+            candidate.reason === item.reason &&
+            contextLocationKey(candidate.location) ===
+              contextLocationKey(item.location),
+        ) === index,
+    ),
   };
 }

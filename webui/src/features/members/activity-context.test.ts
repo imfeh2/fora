@@ -5,6 +5,7 @@ import {
   contextLocationKey,
 } from "@/features/members/activity-context";
 import {
+  type ActivityData,
   loadActivity,
   mergeActivityData,
 } from "@/features/members/activity-data";
@@ -164,7 +165,8 @@ async function read(records: AgentHistoryRead[]) {
       const value = records.find(
         (value) =>
           value.run.sequence === sequence &&
-          value.request?.summary.ordinal === (ordinal ?? 1),
+          value.request?.summary.ordinal ===
+            (ordinal ?? records[0].request?.summary.ordinal),
       );
       if (!value) throw new Error("Missing test request");
       return value;
@@ -307,6 +309,394 @@ function cancelledRecord(
   ]);
   return value;
 }
+
+describe("saved observation isolation", () => {
+  const observations = (value: AgentHistoryRead) => {
+    const message = value.request?.related.messages[0] as Record<
+      string,
+      HistoryValue
+    >;
+    const metadata = message.metadata as Record<string, HistoryValue>;
+    const fora = metadata.fora as Record<string, HistoryValue>;
+    return fora.tool_observations as Record<string, HistoryValue>[];
+  };
+
+  it.each([
+    ["request_ordinal", 9],
+    ["tool_call_id", "other-call"],
+    ["tool_name", "other-tool"],
+    ["status", "unknown"],
+    ["started_at", 4],
+    ["completed_at", false],
+    ["has_result", "false"],
+  ] as const)(
+    "isolates invalid observation field %s without changing original results",
+    async (field, invalid) => {
+      const value = cancelledRecord(1, null, false);
+      observations(value)[0][field] = invalid;
+      const original = structuredClone(value);
+      const data = await read([value]);
+      const context = composeContext(2, [data]);
+      const action = context.entries.find(
+        (entry) => entry.value.tool_call_id === "cancelled" && entry.action,
+      )?.action;
+      expect(
+        context.diagnostics.some(
+          (item) => item.location.path[item.location.path.length - 1] === field,
+        ),
+      ).toBe(true);
+      expect(action?.observationError).toBeDefined();
+      expect(action?.lifecycle).toBeUndefined();
+      expect(action?.results[0].value.content).toContain(
+        "without a confirmed result",
+      );
+      expect(
+        context.entries.find(
+          (entry) => entry.value.tool_call_id === "adjacent" && entry.action,
+        )?.action?.lifecycle?.status,
+      ).toBe("cancelled");
+      expect(
+        context.entries.find(
+          (entry) => entry.value.tool_call_id === "image" && entry.action,
+        )?.action?.results,
+      ).toHaveLength(2);
+      expect(value).toEqual(original);
+    },
+  );
+
+  it("keeps historical input calls separate from current response observations at the same part index", async () => {
+    const value = cancelledRecord(1, null, false);
+    value.request!.input.messages.push(
+      response([
+        {
+          part_kind: "tool-call",
+          tool_call_id: "historical",
+          tool_name: "read_file",
+          args: { path: "guide.md" },
+        },
+      ]),
+      {
+        kind: "request",
+        parts: [
+          {
+            part_kind: "tool-return",
+            tool_call_id: "historical",
+            tool_name: "read_file",
+            content: "Historical result",
+            outcome: "success",
+          },
+        ],
+      },
+    );
+    value.request!.input.total = value.request!.input.messages.length;
+    const data = await read([value]);
+    const context = composeContext(2, [data]);
+    expect(context.diagnostics).toEqual([]);
+    const historical = context.entries.find(
+      (entry) => entry.value.tool_call_id === "historical" && entry.action,
+    )?.action;
+    expect(historical?.results[0].value.content).toBe("Historical result");
+    expect(historical?.lifecycle?.status).toBe("completed");
+    expect(historical?.lifecycle?.completed_at).toBeNull();
+    expect(
+      context.entries.find(
+        (entry) => entry.source === "response" && entry.partIndex === 0,
+      )?.action?.lifecycle?.status,
+    ).toBe("cancelled");
+  });
+
+  it("uses verified original response references when a predecessor is loaded", async () => {
+    const earlier = cancelledRecord(1, null, false);
+    const later = cancelledRecord(2, at, true);
+    expect(earlier.request?.response?.messages).toHaveLength(1);
+    later.request!.input = page([
+      ...earlier.request!.input.messages,
+      ...earlier.request!.response!.messages,
+      ...earlier.request!.related.messages,
+    ]);
+    const laterData = await read([later]);
+    const identities = new Map<string, string>();
+    const before = composeContext(2, [laterData], {}, identities);
+    expect(before.diagnostics).toEqual([]);
+    const historical = before.entries.find(
+      (entry) =>
+        entry.source === "input" &&
+        entry.action?.value.tool_call_id === "cancelled",
+    );
+    expect(historical?.action?.lifecycle?.status).toBe("cancelled");
+    expect(historical?.action?.lifecycle?.has_result).toBe(true);
+    const earlierData = await read([earlier]);
+    const combined = {
+      ...laterData,
+      requests: [...earlierData.requests, ...laterData.requests],
+      contents: { ...earlierData.contents, ...laterData.contents },
+    };
+    const original = structuredClone(combined);
+    for (const [ordinal, snapshot] of Object.entries(combined.contents))
+      original.contents[Number(ordinal)].readId = snapshot.readId;
+    const after = composeContext(2, [combined], {}, identities);
+    expect(after.diagnostics).toEqual([]);
+    const calls = after.entries.filter(
+      (entry) => entry.action?.value.tool_call_id === "cancelled",
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls.map((entry) => entry.ordinal)).toEqual([1, 2]);
+    expect(calls[0].key).toBe(historical?.key);
+    expect(
+      calls[0].references.some(
+        (reference) => reference.ordinal === 2 && reference.source === "input",
+      ),
+    ).toBe(true);
+    expect(calls[0].action?.lifecycle).toMatchObject({
+      status: "cancelled",
+      has_result: false,
+      started_at: null,
+    });
+    expect(calls[0].action?.results).toEqual([]);
+    expect(calls[1].action?.lifecycle).toMatchObject({
+      status: "cancelled",
+      has_result: true,
+      started_at: at,
+    });
+    expect(calls[1].action?.results).toHaveLength(1);
+    expect(calls[1].action?.results[0].ordinal).toBe(2);
+    expect(combined).toEqual(original);
+  });
+
+  it.each([-1, 99, "0", null])(
+    "diagnoses an unassigned observation index %s",
+    async (index) => {
+      const value = cancelledRecord(1, null, false);
+      observations(value)[0].part_index = index;
+      const data = await read([value]);
+      const context = composeContext(2, [data]);
+      expect(context.diagnostics).toHaveLength(1);
+      expect(context.diagnostics[0].location.path).toEqual([
+        "metadata",
+        "fora",
+        "tool_observations",
+        0,
+        "part_index",
+      ]);
+      expect(context.entries.filter((entry) => entry.action)).toHaveLength(3);
+      expect(
+        context.entries.find(
+          (entry) => entry.value.tool_call_id === "image" && entry.action,
+        )?.action?.results,
+      ).toHaveLength(2);
+    },
+  );
+
+  it("diagnoses observation metadata even when the request has no action", async () => {
+    const value = cancelledRecord(1, null, false);
+    value.request!.response = page([
+      response([{ part_kind: "text", content: "Saved text" }]),
+    ]);
+    const data = await read([value]);
+    const context = composeContext(2, [data]);
+    expect(context.diagnostics).toHaveLength(3);
+    expect(
+      context.entries.some((entry) => entry.value.content === "Saved text"),
+    ).toBe(true);
+    expect(
+      context.entries.some((entry) => entry.value.part_kind === "tool-return"),
+    ).toBe(true);
+  });
+
+  it("keeps duplicated observation identity diagnostic and preserves the real result", async () => {
+    const value = cancelledRecord(1, at, true);
+    observations(value).push(structuredClone(observations(value)[0]));
+    const data = await read([value]);
+    const context = composeContext(2, [data]);
+    const action = context.entries.find(
+      (entry) => entry.value.tool_call_id === "cancelled" && entry.action,
+    )?.action;
+    expect(
+      context.diagnostics.some((item) => item.reason.includes("duplicated")),
+    ).toBe(true);
+    expect(action?.lifecycle).toBeUndefined();
+    expect(action?.results).toHaveLength(1);
+  });
+
+  it("retains a real result when an observation claims no result", async () => {
+    const value = cancelledRecord(1, null, false);
+    const message = value.request!.related.messages[0] as Record<
+      string,
+      HistoryValue
+    >;
+    const parts = message.parts as Record<string, HistoryValue>[];
+    parts[0].outcome = "success";
+    parts[0].content = "Actual result";
+    const data = await read([value]);
+    const context = composeContext(2, [data]);
+    const action = context.entries.find(
+      (entry) => entry.value.tool_call_id === "cancelled" && entry.action,
+    )?.action;
+    expect(context.diagnostics[0].location.path.slice(-1)).toEqual([
+      "has_result",
+    ]);
+    expect(action?.results[0].value.content).toBe("Actual result");
+    expect(action?.lifecycle).toBeUndefined();
+  });
+
+  it("validates every result position before changing associations", async () => {
+    const value = cancelledRecord(1, at, true);
+    observations(value)[0].result_positions = [
+      [0, 0],
+      [9, 0],
+    ];
+    const data = await read([value]);
+    const context = composeContext(2, [data]);
+    const action = context.entries.find(
+      (entry) => entry.value.tool_call_id === "cancelled" && entry.action,
+    )?.action;
+    expect(context.diagnostics[0].location.path.slice(-2)).toEqual([
+      "result_positions",
+      1,
+    ]);
+    expect(action?.results).toHaveLength(1);
+    expect(action?.lifecycle).toBeUndefined();
+    expect(action?.observationError).toBeDefined();
+  });
+
+  it("preserves successful requests around an invalid request without sharing its prefix", async () => {
+    const values = [record(1), record(2), record(3)];
+    for (const value of values) {
+      value.run.request_count = 3;
+      value.requests = values.map((item) => item.request!.summary);
+    }
+    values[1].request!.response = page([{ kind: "response", parts: [null] }]);
+    const data = await read(values);
+    const identities = new Map<string, string>();
+    const context = composeContext(2, [data], {}, identities);
+    expect(context.diagnostics).toHaveLength(1);
+    expect(context.diagnostics[0].location.ordinal).toBe(2);
+    expect(
+      context.entries
+        .filter((entry) => entry.value.content === "工作记录")
+        .map((entry) => entry.ordinal),
+    ).toEqual([1, 3]);
+    expect(
+      context.entries.filter((entry) => entry.title === "Session context"),
+    ).toHaveLength(2);
+    expect([...identities.keys()].some((key) => JSON.parse(key)[3] === 2)).toBe(
+      false,
+    );
+    expect(
+      context.coverage.some(
+        (item) => item.location.ordinal === 2 && item.target === "Full context",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps response observations pending until the response snapshot is complete", async () => {
+    const data = await read([cancelledRecord(1, null, false)]);
+    const snapshot = data.contents[1];
+    const partial = {
+      ...data,
+      contents: {
+        1: {
+          ...snapshot,
+          complete: false,
+          values: { related: snapshot.values.related },
+        },
+      },
+    };
+    const context = composeContext(2, [partial]);
+    expect(context.diagnostics).toEqual([]);
+    expect(
+      context.entries.filter((entry) => entry.action?.readingObservation),
+    ).toHaveLength(3);
+    expect(
+      context.entries.some((entry) => entry.action?.lifecycle !== undefined),
+    ).toBe(false);
+  });
+
+  it("diagnoses complete observations without a saved response after every reader publication", async () => {
+    const value = cancelledRecord(1, null, false);
+    value.request!.response = null;
+    const original = structuredClone(value);
+    const states: ActivityData[] = [];
+    vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
+    const data = await loadActivity(
+      2,
+      4,
+      new AbortController().signal,
+      (state) => states.push(state),
+    );
+    const partial = states.filter((state) => !state.contents[1]?.complete);
+    expect(partial.length).toBeGreaterThan(0);
+    for (const state of partial)
+      expect(composeContext(2, [state]).diagnostics).toEqual([]);
+    const context = composeContext(2, [data]);
+    expect(context.diagnostics).toHaveLength(3);
+    expect(context.diagnostics[0]).toMatchObject({
+      reason: "Saved observation does not identify a response tool call",
+      location: {
+        sequence: 4,
+        ordinal: 1,
+        source: "related",
+        path: ["metadata", "fora", "tool_observations", 0, "part_index"],
+      },
+    });
+    expect(
+      context.entries.filter(
+        (entry) => entry.value.part_kind === "tool-return",
+      ),
+    ).toHaveLength(3);
+    expect(value).toEqual(original);
+  });
+
+  it("uses complete metadata values and treats intermediate snapshots as reading", async () => {
+    const value = cancelledRecord(1, null, false);
+    const saved = observations(value)[0];
+    const rawTime = {
+      kind: "text",
+      source: "related",
+      request_ordinal: 1,
+      message_index: 0,
+      path: ["metadata", "fora", "tool_observations", 0, "completed_at"],
+      offset: 0,
+      next_offset: 1,
+      total_bytes: 2,
+      value: "a",
+      has_more: true,
+    };
+    saved.completed_at = rawTime;
+    vi.spyOn(backend, "agentHistoryText").mockResolvedValue({
+      offset: 1,
+      next_offset: 2,
+      total_bytes: 2,
+      value: "b",
+      has_more: false,
+    });
+    const states: ActivityData[] = [];
+    vi.spyOn(backend, "agentHistoryRead").mockResolvedValue(value);
+    const data = await loadActivity(
+      2,
+      4,
+      new AbortController().signal,
+      (state) => states.push(state),
+    );
+    const pending = states.find(
+      (state) => state.contents[1] && !state.contents[1].complete,
+    );
+    expect(pending).toBeDefined();
+    const reading = composeContext(2, [pending!]);
+    expect(reading.diagnostics).toEqual([]);
+    expect(
+      reading.entries.some((entry) => entry.action?.readingObservation),
+    ).toBe(true);
+    const context = composeContext(2, [data]);
+    expect(context.diagnostics).toEqual([]);
+    expect(
+      context.entries.find(
+        (entry) => entry.value.tool_call_id === "cancelled" && entry.action,
+      )?.action?.lifecycle?.completed_at,
+    ).toBe("ab");
+    expect(saved.completed_at).toEqual(rawTime);
+  });
+});
 
 describe("saved context composition", () => {
   it.each([
@@ -958,14 +1348,49 @@ describe("saved context composition", () => {
 
   it("diagnoses a genuinely inconsistent completed message snapshot", async () => {
     const data = await read([record()]);
+    const next = await read([record(2)]);
     const snapshot = data.contents[1];
-    data.contents[1] = {
-      ...snapshot,
-      values: { ...snapshot.values, input: [] },
+    const combined: ActivityData = {
+      ...data,
+      requests: [...data.requests, ...next.requests],
+      contents: {
+        ...data.contents,
+        ...next.contents,
+        1: { ...snapshot, values: { ...snapshot.values, input: [] } },
+      },
     };
-    expect(() => composeContext(2, [data])).toThrow(
-      "Saved complete context does not match its message page",
+    const original = structuredClone(combined);
+    for (const [ordinal, snapshot] of Object.entries(combined.contents))
+      original.contents[Number(ordinal)].readId = snapshot.readId;
+    const identities = new Map([["unrelated", "stable"]]);
+    const context = composeContext(2, [combined], {}, identities);
+    expect(context.diagnostics).toHaveLength(1);
+    expect(context.diagnostics[0].reason).toBe(
+      "Complete context does not match its saved message page",
     );
+    expect(context.diagnostics[0].location).toMatchObject({
+      sequence: 4,
+      ordinal: 1,
+      source: "input",
+    });
+    expect(context.entries.some((entry) => entry.ordinal === 1)).toBe(false);
+    expect(
+      context.entries.some(
+        (entry) => entry.ordinal === 2 && entry.value.content === "工作记录",
+      ),
+    ).toBe(true);
+    expect(
+      context.coverage.some(
+        (item) => item.location.ordinal === 1 && item.target === "Full context",
+      ),
+    ).toBe(true);
+    expect(
+      [...identities.keys()]
+        .filter((key) => key !== "unrelated")
+        .every((key) => JSON.parse(key)[3] === 2),
+    ).toBe(true);
+    expect(identities.get("unrelated")).toBe("stable");
+    expect(combined).toEqual(original);
   });
 
   it("preserves Legacy image locations before and after byte confirmation", async () => {
