@@ -535,7 +535,7 @@ export function DiscussionCard({
       <div className="flex items-start justify-between gap-2 min-w-0">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <span
-            className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-gray-800 text-fg-muted"
+            className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-surface-raised text-fg-muted"
             aria-hidden="true"
           >
             <MessageSquare size={15} />
@@ -625,7 +625,7 @@ export function DiscussionRow({
       <td>
         <div className="flex min-w-0 items-center gap-3">
           <span
-            className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-gray-800 text-fg-muted"
+            className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-surface-raised text-fg-muted"
             aria-hidden="true"
           >
             <MessageSquare size={15} />

@@ -40,6 +40,7 @@
 
   --color-fg: var(--color-gray-100);
   --color-fg-muted: var(--color-gray-400);
+  --color-fg-subtle: var(--color-gray-500);
   --color-fg-disabled: var(--color-gray-600);
   --color-primary: var(--color-blue-300);
   --color-success: var(--color-green-300);
@@ -51,6 +52,7 @@
   --color-surface-raised: var(--color-gray-800);
   --color-surface-hover: var(--color-gray-700);
   --color-surface-selected: var(--color-gray-700);
+  --color-surface-pressed: var(--color-gray-600);
 
   --color-line: var(--color-gray-700);
   --color-line-interactive: var(--color-gray-600);

@@ -201,14 +201,14 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--color-gray-700);
+    background: var(--color-line);
     border: 2px solid transparent;
     background-clip: content-box;
     border-radius: 9999px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--color-gray-600);
+    background: var(--color-line-interactive);
     background-clip: content-box;
   }
 

@@ -2645,7 +2645,7 @@ function ActivityCard({
   const requestCount = run.request_count ?? 0;
 
   return (
-    <li className="border border-line rounded-sm bg-gray-800/50 overflow-hidden transition-[border-color] duration-(--duration-fast) ease-linear hover:border-line-interactive">
+    <li className="border border-line rounded-sm bg-surface-raised/50 overflow-hidden transition-[border-color] duration-(--duration-fast) ease-linear hover:border-line-interactive">
       <button
         type="button"
         className="flex items-center gap-3 w-full py-3 px-4 border-0 bg-transparent text-inherit text-left cursor-pointer"

@@ -1043,7 +1043,7 @@ export function ScrollToBottomButton({
       onBlur={onBlur}
       className={clsx(
         "relative flex size-10 items-center justify-center rounded-full border border-line-interactive bg-surface text-fg shadow-md transition-all duration-(--duration-fast) ease-linear",
-        "hover:enabled:border-line-hover hover:enabled:bg-surface-hover hover:enabled:text-fg active:enabled:bg-gray-600",
+        "hover:enabled:border-line-hover hover:enabled:bg-surface-hover hover:enabled:text-fg active:enabled:bg-surface-pressed",
         "focus-visible:border-line-focus focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ring)_40%,transparent)]",
         "disabled:cursor-not-allowed disabled:opacity-60",
         "narrow:before:absolute narrow:before:-inset-0.5 narrow:before:content-[''] touch:before:absolute touch:before:-inset-0.5 touch:before:content-['']",

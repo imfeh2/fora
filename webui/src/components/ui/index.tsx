@@ -70,13 +70,13 @@ export function FieldSkeleton() {
 
 const buttonVariants = {
   default:
-    "border-line-interactive bg-transparent text-fg shadow-button hover:enabled:bg-surface-hover hover:enabled:border-line-hover active:enabled:bg-gray-600 disabled:text-fg-disabled",
+    "border-line-interactive bg-transparent text-fg shadow-button hover:enabled:bg-surface-hover hover:enabled:border-line-hover active:enabled:bg-surface-pressed disabled:text-fg-disabled",
   primary:
     "border-blue-500 bg-blue-500 text-gray-0 shadow-button hover:enabled:bg-blue-300 hover:enabled:border-blue-300 active:enabled:bg-blue-700 active:enabled:border-blue-700 disabled:bg-blue-700/45 disabled:border-transparent disabled:text-gray-0/55",
   ghost:
-    "border-transparent bg-transparent text-fg-muted shadow-none hover:enabled:bg-surface-hover hover:enabled:text-fg active:enabled:bg-gray-600",
+    "border-transparent bg-transparent text-fg-muted shadow-none hover:enabled:bg-surface-hover hover:enabled:text-fg active:enabled:bg-surface-pressed",
   danger:
-    "border-line-interactive bg-transparent text-danger shadow-button hover:enabled:bg-red-500/18 hover:enabled:border-red-500 hover:enabled:text-red-100 active:enabled:not-hover:bg-gray-600",
+    "border-line-interactive bg-transparent text-danger shadow-button hover:enabled:bg-red-500/18 hover:enabled:border-red-500 hover:enabled:text-red-100 active:enabled:not-hover:bg-surface-pressed",
 };
 
 const buttonSizes = {
@@ -100,7 +100,7 @@ const badgeTones = {
 };
 
 const chipTones = {
-  neutral: "border-line bg-gray-800 text-fg-muted",
+  neutral: "border-line bg-surface-raised text-fg-muted",
   blue: "border-blue-500/50 bg-blue-500/18 text-blue-100",
   warning: "border-yellow-300/50 bg-yellow-300/16 text-yellow-200",
   danger: "border-red-500/60 bg-red-500/18 text-red-100",
@@ -108,7 +108,7 @@ const chipTones = {
 };
 
 const stateDotStates = {
-  idle: "bg-gray-500",
+  idle: "bg-fg-subtle",
   running: "bg-green-200 animate-breathe",
   paused: "bg-yellow-300",
   blocked: "bg-yellow-300",
@@ -116,7 +116,7 @@ const stateDotStates = {
 };
 
 const dotTones = {
-  grey: "bg-gray-500",
+  grey: "bg-fg-subtle",
   blue: "bg-blue-300",
   green: "bg-green-200",
   yellow: "bg-yellow-300",
@@ -399,7 +399,7 @@ export function Chip({
 
 export function CountPill({ children }: { children: ReactNode }) {
   return (
-    <p className="self-start py-[3px] px-3 rounded-full bg-gray-800 text-fg-muted text-xs font-medium tabular-nums">
+    <p className="self-start py-[3px] px-3 rounded-full bg-surface-raised text-fg-muted text-xs font-medium tabular-nums">
       {children}
     </p>
   );
@@ -583,7 +583,7 @@ export function Meter({
 export function Spinner({ label }: { label: string }) {
   return (
     <span
-      className="inline-block size-4 flex-none border-2 border-gray-600 border-t-blue-300 rounded-full animate-spin"
+      className="inline-block size-4 flex-none border-2 border-line-interactive border-t-blue-300 rounded-full animate-spin"
       role="status"
       aria-label={label}
     />

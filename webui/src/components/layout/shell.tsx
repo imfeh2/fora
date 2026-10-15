@@ -13,7 +13,7 @@ import { Badge, IconButton } from "@/components/ui/index";
 import brandIcon from "../../../../assets/icon.svg";
 
 const crumbClasses =
-  "inline-flex items-center gap-1 self-start min-h-6 py-0 pr-2 pl-1 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg";
+  "inline-flex items-center gap-1 self-start min-h-6 py-0 pr-2 pl-1 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg";
 
 const pageBodyVariants = {
   scroll:
@@ -230,8 +230,8 @@ export function NavItem({
     <li>
       <div
         className={clsx(
-          "group relative flex items-center rounded-sm transition-[background-color] duration-(--duration-fast) ease-linear hover:bg-gray-800 before:content-[''] before:absolute before:left-0 before:top-1/2 before:w-[2px] before:rounded-r-[9999px] before:bg-blue-300 before:-translate-y-1/2 before:transition-[height] before:duration-(--duration-base) before:ease-transform",
-          active ? "bg-gray-800 before:h-4" : "before:h-0",
+          "group relative flex items-center rounded-sm transition-[background-color] duration-(--duration-fast) ease-linear hover:bg-surface-raised before:content-[''] before:absolute before:left-0 before:top-1/2 before:w-[2px] before:rounded-r-[9999px] before:bg-blue-300 before:-translate-y-1/2 before:transition-[height] before:duration-(--duration-base) before:ease-transform",
+          active ? "bg-surface-raised before:h-4" : "before:h-0",
         )}
         data-active={active}
       >
@@ -288,9 +288,9 @@ export function NavSubItem({
       <button
         type="button"
         className={clsx(
-          "relative flex items-center gap-2 w-full h-[26px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
+          "relative flex items-center gap-2 w-full h-[26px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
           active
-            ? "bg-gray-800 text-fg font-medium"
+            ? "bg-surface-raised text-fg font-medium"
             : "bg-transparent text-fg-muted",
         )}
         data-nav="subitem"
@@ -470,7 +470,7 @@ export function Table({
   return (
     <div className="w-full overflow-x-auto">
       <table
-        className="w-full table-auto [&_td]:p-3 [&_td]:border-b [&_td]:border-line [&_td]:align-middle [&_td[data-align=end]]:text-right max-[1120px]:[&_td[data-hide-below=md]]:hidden max-[940px]:[&_td[data-hide-below=sm]]:hidden [&_tbody_tr]:relative [&_tbody_tr]:transition-[background-color] [&_tbody_tr]:duration-(--duration-fast) [&_tbody_tr]:ease-linear [&_tbody_tr:hover]:bg-gray-800/70 [&_tbody_tr[data-highlight=true]]:bg-blue-500/7"
+        className="w-full table-auto [&_td]:p-3 [&_td]:border-b [&_td]:border-line [&_td]:align-middle [&_td[data-align=end]]:text-right max-[1120px]:[&_td[data-hide-below=md]]:hidden max-[940px]:[&_td[data-hide-below=sm]]:hidden [&_tbody_tr]:relative [&_tbody_tr]:transition-[background-color] [&_tbody_tr]:duration-(--duration-fast) [&_tbody_tr]:ease-linear [&_tbody_tr:hover]:bg-surface-raised/70 [&_tbody_tr[data-highlight=true]]:bg-blue-500/7"
         aria-label={label}
       >
         <thead>
