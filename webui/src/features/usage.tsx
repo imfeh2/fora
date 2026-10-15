@@ -27,6 +27,7 @@ import {
   Input,
   LoadingSkeleton,
   Meter,
+  Select,
   Skeleton,
   toast,
 } from "@/components/ui/index";
@@ -389,6 +390,7 @@ export function trendPoints(daily: UsageResult["daily"]): {
 }
 
 function Trend({ result }: { result: UsageResult }) {
+  const daySelectId = useId();
   const { points, scale } = trendPoints(result.daily);
   const reduced = useReducedMotion();
   const [focused, setFocused] = useState<string | null>(null);
@@ -467,9 +469,10 @@ function Trend({ result }: { result: UsageResult }) {
             </ResponsiveContainer>
           </div>
           <div className="sr-only focus-within:not-sr-only focus-within:mt-3">
-            <label>
+            <label htmlFor={daySelectId}>
               Read daily usage{" "}
-              <select
+              <Select
+                id={daySelectId}
                 value={focused ?? ""}
                 onChange={(event) => setFocused(event.target.value)}
               >
@@ -479,7 +482,7 @@ function Trend({ result }: { result: UsageResult }) {
                     {day.date}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <output aria-live="polite">
               {selected

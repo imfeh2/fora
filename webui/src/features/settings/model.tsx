@@ -30,6 +30,7 @@ import {
   Input,
   LoadingSkeleton,
   SearchField,
+  Select,
   Spinner,
   Textarea,
   toast,
@@ -81,9 +82,6 @@ export function modelTestDescription(latency: number, reply: string): string {
   return `${latency.toLocaleString("en-US")} ms · ${reply.trim().replace(/\s+/g, " ").slice(0, 80)}`;
 }
 
-const selectClass =
-  "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg";
-
 export function ModelSelection({
   catalog,
   value,
@@ -105,9 +103,8 @@ export function ModelSelection({
   return (
     <div className="flex flex-col gap-4">
       <Field label="Model" htmlFor={`${id}-model`}>
-        <select
+        <Select
           id={`${id}-model`}
-          className={selectClass}
           value={value.model_id ?? ""}
           onChange={(event) =>
             onChange({ ...value, model_id: event.target.value || null })
@@ -135,12 +132,11 @@ export function ModelSelection({
                 ))}
             </optgroup>
           ))}
-        </select>
+        </Select>
       </Field>
       <Field label="Thinking effort" htmlFor={`${id}-thinking`}>
-        <select
+        <Select
           id={`${id}-thinking`}
-          className={selectClass}
           value={value.thinking ?? ""}
           onChange={(event) =>
             onChange({
@@ -164,7 +160,7 @@ export function ModelSelection({
               {thinkingLabel(option, selected?.thinking_budget_tokens)}
             </option>
           ))}
-        </select>
+        </Select>
       </Field>
       <p className="text-sm text-fg-muted">
         {selected
@@ -1950,8 +1946,7 @@ function ProviderTest({
         ) : (
           <>
             <Field label="Saved model">
-              <select
-                className={selectClass}
+              <Select
                 aria-label="Saved model"
                 value={selected}
                 onChange={(event) => {
@@ -1965,11 +1960,10 @@ function ProviderTest({
                     {item.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="Test thinking effort">
-              <select
-                className={selectClass}
+              <Select
                 aria-label="Test thinking effort"
                 value={thinking}
                 onChange={(event) =>
@@ -1981,7 +1975,7 @@ function ProviderTest({
                     {thinkingLabel(option, model?.thinking_budget_tokens)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <p className="text-sm text-fg-muted">
               Uses the saved provider and model configuration for one request.
@@ -2416,9 +2410,8 @@ function ModelForm({
         Enabled
       </label>
       <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
-        <select
+        <Select
           id={`${id}-thinking`}
-          className={selectClass}
           value={thinking}
           onChange={(event) => setThinking(event.target.value as Thinking)}
         >
@@ -2427,7 +2420,7 @@ function ModelForm({
               {thinkingLabel(option, parsedBudget)}
             </option>
           ))}
-        </select>
+        </Select>
       </Field>
       {connectionDirty ? (
         <p className="text-sm text-fg-muted">Save provider connection first.</p>
