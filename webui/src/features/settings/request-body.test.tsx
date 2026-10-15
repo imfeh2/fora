@@ -9,6 +9,7 @@ import {
   vi,
 } from "vitest";
 import { parseRequestBody } from "@/features/settings/request-body";
+import { TestInitialization } from "@/features/settings/request-body-test-lifecycle";
 import {
   BackendError,
   type BackendEvent,
@@ -23,52 +24,101 @@ let dom: { window: Window & { close: () => void } };
 let testing: typeof import("@testing-library/react");
 let events: Set<(event: BackendEvent) => void>;
 
-beforeAll(async () => {
-  const packageName = "jsdom";
-  const { JSDOM } = await import(packageName);
-  dom = new JSDOM("<!doctype html><html><body></body></html>", {
-    url: "http://localhost",
-  });
-  for (const key of [
-    "window",
-    "document",
-    "navigator",
-    "HTMLElement",
-    "HTMLInputElement",
-    "HTMLFormElement",
-    "Node",
-    "NodeFilter",
-    "MutationObserver",
-    "Event",
-    "EventTarget",
-    "CustomEvent",
-    "MouseEvent",
-    "KeyboardEvent",
-    "getComputedStyle",
-  ])
-    vi.stubGlobal(
-      key,
-      key === "window" ? dom.window : Reflect.get(dom.window, key),
+const initialization = new TestInitialization();
+
+beforeAll(() =>
+  initialization.run(async () => {
+    const packageName = "jsdom";
+    if (
+      !(await initialization.acquire(
+        () => import(packageName),
+        ({ JSDOM }) => {
+          dom = new JSDOM("<!doctype html><html><body></body></html>", {
+            url: "http://localhost",
+          });
+          initialization.ownDom(() => dom.window.close());
+          initialization.ownGlobals(() => vi.unstubAllGlobals());
+          for (const key of [
+            "window",
+            "document",
+            "navigator",
+            "HTMLElement",
+            "HTMLInputElement",
+            "HTMLFormElement",
+            "Node",
+            "NodeFilter",
+            "MutationObserver",
+            "Event",
+            "EventTarget",
+            "CustomEvent",
+            "MouseEvent",
+            "KeyboardEvent",
+            "getComputedStyle",
+          ])
+            vi.stubGlobal(
+              key,
+              key === "window" ? dom.window : Reflect.get(dom.window, key),
+            );
+          dom.window.requestAnimationFrame = vi.fn();
+          dom.window.cancelAnimationFrame = vi.fn();
+          vi.stubGlobal(
+            "requestAnimationFrame",
+            (callback: FrameRequestCallback) =>
+              setTimeout(() => callback(0), 0),
+          );
+          vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+          vi.stubGlobal(
+            "ResizeObserver",
+            class {
+              observe() {}
+              unobserve() {}
+              disconnect() {}
+            },
+          );
+        },
+      ))
+    )
+      return;
+    if (
+      !(await initialization.acquire(
+        () => import("@testing-library/react"),
+        (module) => {
+          testing = module;
+          initialization.ownDrain(() =>
+            testing.act(async () => {
+              await new Promise<void>((resolve) => setImmediate(resolve));
+            }),
+          );
+        },
+      ))
+    )
+      return;
+    if (
+      !(await initialization.acquire(
+        () => import("@/app/router"),
+        (module) => {
+          RouterProvider = module.RouterProvider;
+        },
+      ))
+    )
+      return;
+    if (
+      !(await initialization.acquire(
+        () => import("@/components/ui/tooltip"),
+        (module) => {
+          TooltipProvider = module.TooltipProvider;
+        },
+      ))
+    )
+      return;
+    await initialization.acquire(
+      () => import("@/features/settings/model"),
+      (module) => {
+        ModelPanel = module.ModelPanel;
+      },
     );
-  dom.window.requestAnimationFrame = vi.fn();
-  dom.window.cancelAnimationFrame = vi.fn();
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-    setTimeout(() => callback(0), 0),
-  );
-  vi.stubGlobal("cancelAnimationFrame", clearTimeout);
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-  testing = await import("@testing-library/react");
-  ({ RouterProvider } = await import("@/app/router"));
-  ({ TooltipProvider } = await import("@/components/ui/tooltip"));
-  ({ ModelPanel } = await import("@/features/settings/model"));
-});
+  }),
+);
 afterEach(async () => {
   testing.cleanup();
   await testing.act(async () => {
@@ -76,13 +126,7 @@ afterEach(async () => {
   });
   vi.restoreAllMocks();
 });
-afterAll(async () => {
-  await testing.act(async () => {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  });
-  dom.window.close();
-  vi.unstubAllGlobals();
-});
+afterAll(() => initialization.close());
 
 const catalog: ModelCatalog = {
   version: 2,
