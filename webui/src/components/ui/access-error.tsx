@@ -37,10 +37,6 @@ export function AccessError({
 }) {
   const titleId = useId();
   const descriptionId = useId();
-  const authentication =
-    !loadingData &&
-    (error.code === "authentication_missing" ||
-      error.code === "authentication_failed");
   const startup = !loadingData && error.code === "startup_failed";
   const preparation = [
     "storage_read_failed",
@@ -50,15 +46,13 @@ export function AccessError({
   ].includes(error.code);
   const title = loadingData
     ? "Could not load Fora"
-    : authentication
-      ? "Access to Fora requires authentication"
-      : startup
-        ? "Unable to start Fora"
-        : error.code === "protocol_error"
-          ? "Fora sent an invalid response"
-          : preparation
-            ? "Unable to prepare the connection"
-            : "Could not connect to Fora";
+    : startup
+      ? "Unable to start Fora"
+      : error.code === "protocol_error"
+        ? "Fora sent an invalid response"
+        : preparation
+          ? "Unable to prepare the connection"
+          : "Could not connect to Fora";
 
   return (
     <section className="flex min-h-0 flex-1 w-full overflow-auto bg-app p-6">
@@ -75,13 +69,7 @@ export function AccessError({
           <AlertTitle id={titleId}>{title}</AlertTitle>
           <AlertDescription id={descriptionId}>
             <p className="whitespace-pre-wrap">{error.message}</p>
-            {authentication ? (
-              <p>
-                Open Fora from the application, or use the access link provided
-                when Fora starts. That link includes the credentials needed to
-                connect.
-              </p>
-            ) : startup ? (
+            {startup ? (
               <p>Close this window and start Fora again.</p>
             ) : reconnect ? (
               <div className="flex flex-wrap items-center gap-2 pt-1">

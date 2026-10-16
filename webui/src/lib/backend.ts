@@ -834,13 +834,7 @@ export async function diagnoseConnection(url: string): Promise<BackendError> {
   } catch {
     return failure;
   }
-  return response.status === 401
-    ? new BackendError(
-        "authentication_failed",
-        "The access credentials are no longer valid.",
-        true,
-      )
-    : failure;
+  return failure;
 }
 
 export function connectionFrom(search: string, origin: string): Connection {

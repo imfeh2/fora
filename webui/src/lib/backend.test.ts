@@ -455,7 +455,6 @@ describe("Backend", () => {
   });
 
   it.each([
-    [401, "authentication_failed"],
     [204, "connection_failed"],
     [503, "connection_failed"],
   ])("classifies a refused socket using HTTP %s", async (status, code) => {
@@ -499,7 +498,7 @@ describe("Backend", () => {
     expect(await pending).toMatchObject({ code: "connection_failed" });
   });
 
-  it("ignores an old authentication diagnosis after recovery", async () => {
+  it("ignores an old connection diagnosis after recovery", async () => {
     vi.useFakeTimers();
     let finishDiagnosis!: (response: Response) => void;
     const diagnosis = new Promise<Response>((resolve) => {
@@ -516,7 +515,7 @@ describe("Backend", () => {
     const recovered = backend.reconnect();
     socket().open();
     await recovered;
-    finishDiagnosis(new Response(null, { status: 401 }));
+    finishDiagnosis(new Response(null, { status: 503 }));
     await vi.advanceTimersByTimeAsync(0);
     expect(backend.disconnected).toBe(false);
     expect(failures).toHaveBeenCalledTimes(1);
@@ -1263,24 +1262,21 @@ describe("Backend", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([
-    "authentication_missing",
-    "authentication_failed",
-    "protocol_error",
-    "storage_read_failed",
-    "invalid_connection",
-  ])("requires explicit recovery for %s", async (code) => {
-    let attempts = 0;
-    const backend = new Backend(() => {
-      attempts += 1;
-      throw new BackendError(code, "Explicit recovery required", true);
-    });
-    await expect(backend.connect()).rejects.toMatchObject({ code });
-    await backend.reconnect(true);
-    expect(attempts).toBe(1);
-    await expect(backend.reconnect()).rejects.toMatchObject({ code });
-    expect(attempts).toBe(2);
-  });
+  it.each(["protocol_error", "storage_read_failed", "invalid_connection"])(
+    "requires explicit recovery for %s",
+    async (code) => {
+      let attempts = 0;
+      const backend = new Backend(() => {
+        attempts += 1;
+        throw new BackendError(code, "Explicit recovery required", true);
+      });
+      await expect(backend.connect()).rejects.toMatchObject({ code });
+      await backend.reconnect(true);
+      expect(attempts).toBe(1);
+      await expect(backend.reconnect()).rejects.toMatchObject({ code });
+      expect(attempts).toBe(2);
+    },
+  );
 
   it("does not publish restoration for a connection that closes immediately after opening", async () => {
     const { backend, socket, connected } = harness();
