@@ -4,7 +4,6 @@ import asyncio
 import contextvars
 import logging
 import os
-import secrets
 import socket
 import sys
 import threading
@@ -23,7 +22,6 @@ from aiohttp import WSMsgType, web
 from yarl import URL
 
 from fora.adapters.jsonl.protocol import Dispatcher, RequestScope, encode, parse
-from fora.adapters.websocket.access_error import ACCESS_ERROR_PAGE
 from fora.adapters.websocket.address import (
     HOST,
     http_origin,
@@ -395,7 +393,6 @@ class WebServer:
     def __init__(
         self,
         dispatcher: Dispatcher,
-        token: str,
         directory: Path | None,
         port: int = 0,
         *,
@@ -405,7 +402,6 @@ class WebServer:
         public_hosts: frozenset[str] = frozenset(),
     ) -> None:
         self._dispatcher = dispatcher
-        self._token = token
         self._directory = directory
         self._uploads = uploads
         self._library = library
@@ -511,9 +507,6 @@ class WebServer:
             host = "::1" if self.ipv6 else HOST
         return http_origin(host, self._port)
 
-    def access_url(self, token: str) -> str:
-        return str(URL(self.access_origin).with_path("/").with_query(token=token))
-
     def _authority(self, request: web.Request, scheme: str = "http") -> URL:
         values = request.headers.getall("Host", [])
         if len(values) != 1:
@@ -585,7 +578,6 @@ class WebServer:
             raise RuntimeError("Register routes before starting the server")
 
         async def connected(request: web.Request) -> web.StreamResponse:
-            self._authenticate(request, websocket=True)
             connection = web.WebSocketResponse(
                 max_msg_size=max_msg_size,
                 compress=False,
@@ -710,21 +702,6 @@ class WebServer:
             await asyncio.sleep(15)
             if self._uploads is not None:
                 await worker(self._uploads.cleanup)
-
-    def _authenticate(self, request: web.Request, *, websocket: bool = False) -> None:
-        supplied = (
-            request.query.get("token", "")
-            if websocket
-            else request.headers.get("Authorization", "").removeprefix("Bearer ")
-        )
-        if not supplied or not secrets.compare_digest(
-            supplied.encode(), self._token.encode()
-        ):
-            if request.path == "/ws":
-                raise web.HTTPUnauthorized(
-                    text=ACCESS_ERROR_PAGE.decode(), content_type="text/html"
-                )
-            raise web.HTTPUnauthorized(text="Unauthorized")
 
     @web.middleware
     async def _boundary(
@@ -1024,7 +1001,6 @@ class WebServer:
         return self._uploads
 
     async def _upload(self, request: web.Request) -> web.Response:
-        self._authenticate(request)
         uploads = self._uploads_service()
         task = asyncio.current_task()
         assert task is not None
@@ -1075,7 +1051,6 @@ class WebServer:
             self._http.discard(task)
 
     async def _download(self, request: web.Request) -> web.StreamResponse:
-        self._authenticate(request)
         uploads = self._uploads_service()
         task = asyncio.current_task()
         assert task is not None
@@ -1111,7 +1086,6 @@ class WebServer:
             self._http.discard(task)
 
     async def _library_content(self, request: web.Request) -> web.StreamResponse:
-        self._authenticate(request)
         root = self._library
         if root is None:
             raise web.HTTPNotFound()

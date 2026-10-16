@@ -53,7 +53,7 @@ class FakeSocket implements Socket {
   }
 }
 
-const URL = "ws://127.0.0.1:4321/ws?token=secret";
+const URL = "ws://127.0.0.1:4321/ws";
 
 function harness(connection: Connection = { url: URL }) {
   FakeSocket.instances = [];
@@ -259,7 +259,7 @@ describe("usage index preparation", () => {
 describe("connectionFrom", () => {
   it("derives the same-origin socket for the full-stack page", () => {
     expect(connectionFrom("?token=abc", "http://127.0.0.1:8000")).toEqual({
-      url: "ws://127.0.0.1:8000/ws?token=abc",
+      url: "ws://127.0.0.1:8000/ws",
     });
   });
 
@@ -269,7 +269,7 @@ describe("connectionFrom", () => {
         "?ws=ws://127.0.0.1:4321/ws&token=abc",
         "http://127.0.0.1:1420",
       ),
-    ).toEqual({ url: "ws://127.0.0.1:4321/ws?token=abc" });
+    ).toEqual({ url: "ws://127.0.0.1:4321/ws" });
   });
 
   it("uses the ws parameter from the Tauri page", () => {
@@ -278,13 +278,13 @@ describe("connectionFrom", () => {
         "?ws=ws://127.0.0.1:4321/ws&token=abc",
         "tauri://localhost",
       ),
-    ).toEqual({ url: "ws://127.0.0.1:4321/ws?token=abc" });
+    ).toEqual({ url: "ws://127.0.0.1:4321/ws" });
     expect(
       connectionFrom(
         "?ws=ws://127.0.0.1:4321/ws&token=abc",
         "http://tauri.localhost",
       ),
-    ).toEqual({ url: "ws://127.0.0.1:4321/ws?token=abc" });
+    ).toEqual({ url: "ws://127.0.0.1:4321/ws" });
   });
 
   it("reports the error parameter instead of a url", () => {
@@ -299,8 +299,8 @@ describe("resolveConnection", () => {
     expect(
       resolveConnection("?token=abc", "http://127.0.0.1:8000", null),
     ).toEqual({
-      connection: { url: "ws://127.0.0.1:8000/ws?token=abc" },
-      remember: "ws://127.0.0.1:8000/ws?token=abc",
+      connection: { url: "ws://127.0.0.1:8000/ws" },
+      remember: "ws://127.0.0.1:8000/ws",
       scrub: true,
     });
     expect(
@@ -310,29 +310,25 @@ describe("resolveConnection", () => {
         "ws://stale/ws?token=old",
       ),
     ).toEqual({
-      connection: { url: "ws://127.0.0.1:4321/ws?token=abc" },
-      remember: "ws://127.0.0.1:4321/ws?token=abc",
+      connection: { url: "ws://127.0.0.1:4321/ws" },
+      remember: "ws://127.0.0.1:4321/ws",
       scrub: true,
     });
   });
 
   it("reuses the remembered connection after the address was scrubbed", () => {
     expect(
-      resolveConnection(
-        "",
-        "http://127.0.0.1:8000",
-        "ws://127.0.0.1:8000/ws?token=abc",
-      ),
+      resolveConnection("", "http://127.0.0.1:8000", "ws://127.0.0.1:8000/ws"),
     ).toEqual({
-      connection: { url: "ws://127.0.0.1:8000/ws?token=abc" },
+      connection: { url: "ws://127.0.0.1:8000/ws" },
       remember: null,
       scrub: false,
     });
   });
 
-  it("falls back to the same-origin socket without a token when nothing is known", () => {
+  it("falls back to the same-origin socket when nothing is known", () => {
     expect(resolveConnection("", "http://127.0.0.1:8000", null)).toEqual({
-      connection: { url: "ws://127.0.0.1:8000/ws?token=" },
+      connection: { url: "ws://127.0.0.1:8000/ws" },
       remember: null,
       scrub: false,
     });
@@ -340,11 +336,7 @@ describe("resolveConnection", () => {
 
   it("keeps the error page address untouched", () => {
     expect(
-      resolveConnection(
-        "?error=boom",
-        "tauri://localhost",
-        "ws://x/ws?token=y",
-      ),
+      resolveConnection("?error=boom", "tauri://localhost", "ws://x/ws"),
     ).toEqual({ connection: { error: "boom" }, remember: null, scrub: false });
   });
 });
@@ -432,7 +424,7 @@ describe("Backend", () => {
   });
 
   it("uses the authenticated active connection for voice", async () => {
-    let connection = "wss://example.test/ws?token=voice-test";
+    let connection = "wss://example.test/ws";
     let socket!: FakeSocket;
     const backend = new Backend(
       () => ({ url: connection }),
@@ -444,10 +436,8 @@ describe("Backend", () => {
     const connected = backend.connect();
     socket.open();
     await connected;
-    connection = "wss://other.test/ws?token=other-test";
-    await expect(backend.voiceUrl()).resolves.toBe(
-      "wss://example.test/voice?token=voice-test",
-    );
+    connection = "wss://other.test/ws";
+    await expect(backend.voiceUrl()).resolves.toBe("wss://example.test/voice");
     socket.fail();
     await expect(backend.voiceUrl()).rejects.toMatchObject({
       code: "disconnected",
@@ -455,9 +445,7 @@ describe("Backend", () => {
     const recovery = backend.reconnect();
     socket.open();
     await recovery;
-    await expect(backend.voiceUrl()).resolves.toBe(
-      "wss://other.test/voice?token=other-test",
-    );
+    await expect(backend.voiceUrl()).resolves.toBe("wss://other.test/voice");
   });
 
   it("opens a socket at the resolved url", async () => {
@@ -483,7 +471,7 @@ describe("Backend", () => {
     expect(await pending).toMatchObject({ code, transport: true });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(
-      new globalThis.URL("http://127.0.0.1:4321/ws?token=secret"),
+      new globalThis.URL("http://127.0.0.1:4321/ws"),
       expect.objectContaining({
         credentials: "omit",
         cache: "no-store",
@@ -497,12 +485,10 @@ describe("Backend", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("rejects missing credentials without creating a socket", async () => {
-    const { backend } = harness({ url: "ws://localhost/ws" });
-    await expect(backend.connect()).rejects.toMatchObject({
-      code: "authentication_missing",
-    });
-    expect(FakeSocket.instances).toHaveLength(0);
+  it("connects without access credentials", async () => {
+    const { connected } = harness({ url: "ws://localhost/ws" });
+    const socket = await connected();
+    expect(socket.url).toBe("ws://localhost/ws");
   });
 
   it("reports a failed diagnostic request as a connection failure", async () => {

@@ -12,7 +12,7 @@ fora-web --host 0.0.0.0 --port 2461
 
 Point your domain at the machine and open `http://your-domain:2461/`. Routing and
 firewall rules must permit access. `::` listens on IPv6; a specific non-loopback
-address also accepts domain names. An access token is still required. DNS
+address also accepts domain names. DNS
 rebinding protection applies to loopback listeners; non-loopback listeners accept
 any valid hostname and allow HTTP or HTTPS origins matching the requested host
 and external port.

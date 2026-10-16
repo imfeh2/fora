@@ -25,7 +25,7 @@ def servers(tmp_path, monkeypatch):
     (library / "artifacts").mkdir(parents=True)
 
     def create():
-        server = WebServer(Dispatcher(), "test-token", None, library=library)
+        server = WebServer(Dispatcher(), None, library=library)
         server.start()
         active.append(server)
         return server
@@ -37,11 +37,8 @@ def servers(tmp_path, monkeypatch):
             server.stop()
 
 
-def headers_for(server, token="test-token"):
-    values = [("Host", f"127.0.0.1:{server.port}")]
-    if token is not None:
-        values.append(("Authorization", f"Bearer {token}"))
-    return values
+def headers_for(server):
+    return [("Host", f"127.0.0.1:{server.port}")]
 
 
 def request(server, path, headers=(), method="GET"):
@@ -132,16 +129,16 @@ def test_keeps_the_path_inside_the_library(servers, tmp_path):
         assert status == 404
 
 
-def test_authenticates_and_answers_preflight(servers):
+def test_answers_preflight_without_credentials(servers):
     create, _ = servers
     server = create()
     assert (
         request(
             server,
             "/library/content?path=artifacts/picture.png",
-            headers_for(server, token=None),
+            headers_for(server),
         )[0]
-        == 401
+        == 404
     )
     status, received, _ = request(
         server,

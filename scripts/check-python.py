@@ -135,7 +135,7 @@ def check_core(directory: Path) -> None:
     with kernel("fora", directory) as (_process, _frames, ready):
         assert ready["type"] == "ready", ready
         with connect(
-            f"ws://127.0.0.1:{ready['port']}/ws?token={ready['token']}",
+            f"ws://127.0.0.1:{ready['port']}/ws",
             open_timeout=TIMEOUT,
         ) as connection:
             assert_answered(exchange(connection))
@@ -153,7 +153,7 @@ def check_web(directory: Path) -> None:
             body = response.read()
         assert b'<div id="root">' in body, body[:200]
         with connect(
-            f"ws://127.0.0.1:{ready['port']}/ws?token={ready['token']}",
+            f"ws://127.0.0.1:{ready['port']}/ws",
             open_timeout=TIMEOUT,
         ) as connection:
             assert_answered(exchange(connection))

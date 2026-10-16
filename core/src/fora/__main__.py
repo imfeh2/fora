@@ -4,7 +4,6 @@ import argparse
 import json
 import logging
 import os
-import secrets
 import sys
 import threading
 from contextlib import ExitStack
@@ -15,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 from fora.adapters.host import (
     configure_stdio,
     install_signal_handlers,
-    read_private,
     stdin_is_piped,
     write_private,
 )
@@ -31,7 +29,6 @@ DATA_DIRECTORY_ENV = "FORA_DATA_DIR"
 PORT_ENV = "FORA_PORT"
 HOST_ENV = "FORA_HOST"
 PUBLIC_HOSTS_ENV = "FORA_PUBLIC_HOSTS"
-TOKEN_ENV = "FORA_TOKEN"
 WEBUI_DIRECTORY_ENV = "FORA_WEBUI_DIR"
 DEVELOPMENT_PORT = 2461
 ALREADY_RUNNING = 2
@@ -67,7 +64,7 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         help=(
             "websocket hostname or IP (default: FORA_HOST or 127.0.0.1); "
             "0.0.0.0 and :: listen on all IPv4 or IPv6 interfaces; "
-            "other devices use this machine's actual IP, the same port and token; "
+            "other devices use this machine's actual IP and the same port; "
             "non-loopback binding exposes the organization to reachable devices; "
             "routing and firewall rules must allow access; "
             "non-loopback listeners accept domain names without registration"
@@ -88,11 +85,6 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         type=int,
         default=os.environ.get(PORT_ENV) or default_port(),
         help="websocket port; 0 selects a free port",
-    )
-    parser.add_argument(
-        "--token",
-        default=os.environ.get(TOKEN_ENV) or None,
-        help="websocket token (default: the data directory's token file)",
     )
     parser.add_argument(
         "--webui-dir",
@@ -122,19 +114,6 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         except ValueError as error:
             parser.error(f"invalid public host: {error}")
     return options
-
-
-def load_token(directory: Path, override: str | None) -> str:
-    if override:
-        return override
-    path = directory / "token"
-    if path.is_file():
-        stored = read_private(path).strip()
-        if stored:
-            return stored
-    token = secrets.token_urlsafe(24)
-    write_private(path, token)
-    return token
 
 
 def running_instance(run_file: Path) -> dict[str, Any] | None:
@@ -186,8 +165,8 @@ def configure_logging(directory: Path) -> list[logging.Handler]:
     return handlers
 
 
-def write_run_file(path: Path, port: int | None, token: str | None) -> None:
-    write_private(path, json.dumps({"port": port, "token": token, "pid": os.getpid()}))
+def write_run_file(path: Path, port: int | None) -> None:
+    write_private(path, json.dumps({"port": port, "pid": os.getpid()}))
 
 
 def announce(payload: dict[str, Any]) -> None:
@@ -346,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
             scheduler.start()
             sink = stdio_sink(stop)
             dispatcher.attach(sink)
-            write_run_file(run_file, None, None)
+            write_run_file(run_file, None)
             announced = True
             log.info("Reading stdio requests with data directory %s", directory)
             announce({"type": "ready", "transport": STDIO, **runtime_info.as_dict()})
@@ -357,10 +336,8 @@ def main(argv: list[str] | None = None) -> int:
                 daemon=True,
             ).start()
         else:
-            token = load_token(directory, options.token)
             server = WebServer(
                 dispatcher,
-                token,
                 webui_directory(options.webui_dir),
                 port=options.port,
                 uploads=uploads,
@@ -373,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
             server.add_websocket_route("/voice", voice.handle, max_msg_size=1048576)
             server.start()
             scheduler.start()
-            write_run_file(run_file, server.port, token)
+            write_run_file(run_file, server.port)
             announced = True
             log.info(
                 "Listening on %s with data directory %s",
@@ -383,13 +360,13 @@ def main(argv: list[str] | None = None) -> int:
             if server.wildcard:
                 log.info(
                     "Listening on all %s interfaces; other devices use this machine's actual IP "
-                    "with the same port and token from the access link. Routing and firewall rules "
+                    "and the same port. Routing and firewall rules "
                     "must allow access.",
                     "IPv6" if server.ipv6 else "IPv4",
                 )
             if not server.loopback:
                 log.warning(
-                    "Reachable devices can access this organization using its access token. "
+                    "Reachable devices can access this organization. "
                     "This non-loopback listener accepts domain names without registration; "
                     "DNS rebinding protection applies only to loopback listeners."
                 )
@@ -397,8 +374,6 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "type": "ready",
                     "port": server.port,
-                    "token": token,
-                    "url": server.access_url(token),
                     **runtime_info.as_dict(),
                 }
             )

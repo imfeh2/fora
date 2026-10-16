@@ -162,7 +162,6 @@ def servers(tmp_path, monkeypatch):
     def create(host="127.0.0.1", allowed=()):
         server = WebServer(
             Dispatcher(),
-            "test-token",
             tmp_path,
             host=host,
             public_hosts=public_hosts(list(allowed)),
@@ -194,10 +193,10 @@ def request(server, method, path, headers=()):
         return response.status, dict(response.getheaders()), response.read()
 
 
-def handshake(server, host, origin, token="test-token", path="ws"):
+def handshake(server, host, origin, path="ws"):
     target = "::1" if server.ipv6 else "127.0.0.1"
     return connect(
-        f"ws://{host}/{path}?token={token}",
+        f"ws://{host}/{path}",
         origin=origin,
         sock=socket.create_connection((target, server.port)),
         proxy=None,
@@ -244,16 +243,7 @@ def test_external_domain_without_configuration(servers, binding):
         ("PUT", "/uploads/missing/content"),
         ("GET", "/discussions/1/messages/1/attachments/missing/content"),
     ):
-        assert request(server, method, path, headers)[0] == 401
-        assert (
-            request(
-                server, method, path, headers + [("Authorization", "Bearer test-token")]
-            )[0]
-            == 404
-        )
-    with pytest.raises(InvalidStatus) as failure:
-        handshake(server, authority, origin, token="wrong")
-    assert failure.value.response.status_code == 401
+        assert request(server, method, path, headers)[0] == 404
 
 
 @pytest.mark.parametrize("binding", ["127.0.0.1", "0.0.0.0"])
@@ -335,8 +325,8 @@ def test_external_cross_site_rejected_on_every_route(servers, origin):
         ("GET", "/"),
         ("GET", "/entry.js"),
         ("GET", "/style.css"),
-        ("GET", "/ws?token=test-token"),
-        ("GET", "/voice?token=test-token"),
+        ("GET", "/ws"),
+        ("GET", "/voice"),
         ("PUT", "/uploads/missing/content"),
         ("GET", "/discussions/1/messages/1/attachments/missing/content"),
         ("OPTIONS", "/voice"),
@@ -376,13 +366,12 @@ def test_loopback_unregistered_host_and_notice(servers):
             b"<script" not in body
             and b"<link" not in body
             and b"external.example" not in body
-            and b"token=" not in body
         )
         for method, path in (
             ("GET", "/entry.js"),
             ("GET", "/style.css"),
-            ("GET", "/ws?token=test-token"),
-            ("GET", "/voice?token=test-token"),
+            ("GET", "/ws"),
+            ("GET", "/voice"),
             ("OPTIONS", "/"),
             ("PUT", "/uploads/missing/content"),
         ):
@@ -424,7 +413,7 @@ def test_invalid_or_duplicate_headers_rejected(servers, binding, headers):
         ("GET", "/"),
         ("GET", "/entry.js"),
         ("OPTIONS", "/voice"),
-        ("GET", "/ws?token=test-token"),
+        ("GET", "/ws"),
     ):
         status, received, _ = request(server, method, path, headers)
         assert status in (400, 403)

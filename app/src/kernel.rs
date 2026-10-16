@@ -55,7 +55,6 @@ pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher
 #[derive(Debug, PartialEq, Eq)]
 pub struct Ready {
     pub port: u16,
-    pub token: String,
 }
 
 pub fn parse_ready(line: &str) -> Result<Ready, String> {
@@ -69,12 +68,7 @@ pub fn parse_ready(line: &str) -> Result<Ready, String> {
         .and_then(Value::as_u64)
         .and_then(|port| u16::try_from(port).ok())
         .ok_or("Invalid ready line: missing port")?;
-    let token = message
-        .get("token")
-        .and_then(Value::as_str)
-        .ok_or("Invalid ready line: missing token")?
-        .to_string();
-    Ok(Ready { port, token })
+    Ok(Ready { port })
 }
 
 pub(crate) fn spawn_kernel(launcher: Launcher) -> Result<(Child, Ready), String> {

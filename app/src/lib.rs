@@ -9,11 +9,7 @@ use kernel::{shutdown_kernel, spawn_kernel};
 
 pub fn window_url(outcome: Result<&Ready, &str>) -> String {
     match outcome {
-        Ok(ready) => format!(
-            "index.html?ws=ws://127.0.0.1:{}/ws&token={}",
-            ready.port,
-            url_encode(&ready.token)
-        ),
+        Ok(ready) => format!("index.html?ws=ws://127.0.0.1:{}/ws", ready.port),
         Err(message) => format!("index.html?error={}", url_encode(message)),
     }
 }
@@ -130,31 +126,26 @@ mod tests {
 
     #[test]
     fn parses_a_valid_ready_line() {
-        let ready = parse_ready(
-            r#"{"type":"ready","port":4567,"token":"abc-_","url":"http://127.0.0.1:4567/?token=abc-_"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            ready,
-            Ready {
-                port: 4567,
-                token: "abc-_".to_string()
-            }
-        );
+        let ready = parse_ready(r#"{"type":"ready","port":4567}"#).unwrap();
+        assert_eq!(ready, Ready { port: 4567 });
+    }
+
+    #[test]
+    fn ignores_a_legacy_token_field() {
+        let ready =
+            parse_ready(r#"{"type":"ready","port":4567,"token":"abc-_","url":"http://127.0.0.1:4567/?token=abc-_"}"#)
+                .unwrap();
+        assert_eq!(ready, Ready { port: 4567 });
     }
 
     #[test]
     fn rejects_ready_lines_with_missing_fields() {
         assert_eq!(
-            parse_ready(r#"{"type":"ready","token":"abc"}"#).unwrap_err(),
+            parse_ready(r#"{"type":"ready"}"#).unwrap_err(),
             "Invalid ready line: missing port"
         );
         assert_eq!(
-            parse_ready(r#"{"type":"ready","port":1}"#).unwrap_err(),
-            "Invalid ready line: missing token"
-        );
-        assert_eq!(
-            parse_ready(r#"{"type":"log","port":1,"token":"abc"}"#).unwrap_err(),
+            parse_ready(r#"{"type":"log","port":1}"#).unwrap_err(),
             "Invalid ready line: type is not ready"
         );
     }
@@ -170,13 +161,10 @@ mod tests {
 
     #[test]
     fn builds_the_window_url_from_the_ready_line() {
-        let ready = Ready {
-            port: 4567,
-            token: "abc-_".to_string(),
-        };
+        let ready = Ready { port: 4567 };
         assert_eq!(
             window_url(Ok(&ready)),
-            "index.html?ws=ws://127.0.0.1:4567/ws&token=abc-_"
+            "index.html?ws=ws://127.0.0.1:4567/ws"
         );
     }
 

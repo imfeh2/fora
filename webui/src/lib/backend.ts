@@ -851,7 +851,6 @@ export function connectionFrom(search: string, origin: string): Connection {
     params.get("ws") ??
     `${origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")}/ws`;
   const url = new URL(ws);
-  url.searchParams.set("token", params.get("token") ?? "");
   return { url: url.toString() };
 }
 
@@ -1057,12 +1056,6 @@ export class Backend {
     const connection = this.#locate();
     if ("error" in connection)
       throw new BackendError("startup_failed", connection.error, true);
-    if (!new URL(connection.url).searchParams.get("token"))
-      throw new BackendError(
-        "authentication_missing",
-        "This page was opened without access credentials.",
-        true,
-      );
     this.#connectionUrl = new URL(connection.url);
     return new Promise<Socket>((resolve, reject) => {
       const socket = this.#socket(connection.url);
@@ -1483,16 +1476,10 @@ export class Backend {
     await this.#open();
     if (!this.#connectionUrl) throw new Error("Connection address is missing");
     const url = new URL(this.#connectionUrl);
-    const token = url.searchParams.get("token");
-    if (!token)
-      throw new BackendError(
-        "unauthorized",
-        "Connection authentication is missing",
-      );
     url.protocol = url.protocol === "wss:" ? "https:" : "http:";
     url.pathname = path;
     url.search = "";
-    return { url: url.toString(), authorization: `Bearer ${token}` };
+    return url.toString();
   }
 
   async uploadFile(
@@ -1501,7 +1488,7 @@ export class Backend {
     signal: AbortSignal,
     progress: (sent: number) => void,
   ) {
-    const connection = await this.#fileConnection(
+    const url = await this.#fileConnection(
       `/uploads/${encodeURIComponent(id)}/content`,
     );
     signal.throwIfAborted();
@@ -1509,8 +1496,7 @@ export class Backend {
       const request = new XMLHttpRequest();
       const abort = () => request.abort();
       const finish = () => signal.removeEventListener("abort", abort);
-      request.open("PUT", connection.url);
-      request.setRequestHeader("Authorization", connection.authorization);
+      request.open("PUT", url);
       request.setRequestHeader("Content-Type", "application/octet-stream");
       request.timeout = 125_000;
       request.responseType = "json";
@@ -1551,11 +1537,10 @@ export class Backend {
     attachment: Attachment,
     signal: AbortSignal,
   ) {
-    const connection = await this.#fileConnection(
+    const url = await this.#fileConnection(
       `/discussions/${discussion}/messages/${message}/attachments/${encodeURIComponent(attachment.id)}/content`,
     );
-    const response = await fetch(connection.url, {
-      headers: { Authorization: connection.authorization },
+    const response = await fetch(url, {
       signal,
       cache: "no-store",
     });
@@ -1580,11 +1565,9 @@ export class Backend {
   }
 
   async libraryFile(path: string, signal: AbortSignal) {
-    const connection = await this.#fileConnection("/library/content");
-    const url = new URL(connection.url);
+    const url = new URL(await this.#fileConnection("/library/content"));
     url.searchParams.set("path", path);
     const response = await fetch(url, {
-      headers: { Authorization: connection.authorization },
       signal,
       cache: "no-store",
     });
