@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 
@@ -20,7 +21,9 @@ class VoiceConfig:
         model = values.get("model", cls.model)
         api_key = values.get("api_key", "")
         if not all(isinstance(value, str) for value in (address, model, api_key)):
-            raise DomainError("voice_config", "Voice settings must contain text values")
+            raise DomainError(
+                ErrorCode.VOICE_CONFIG, "Voice settings must contain text values"
+            )
         parsed = urlsplit(address)
         if (
             parsed.scheme != "wss"
@@ -30,13 +33,13 @@ class VoiceConfig:
             or parsed.fragment
         ):
             raise DomainError(
-                "voice_config", "Use a WSS service address without credentials"
+                ErrorCode.VOICE_CONFIG, "Use a WSS service address without credentials"
             )
         if not model.strip():
             model = cls.model
         if any(character in api_key for character in "\r\n"):
             raise DomainError(
-                "voice_config", "API key contains an invalid header character"
+                ErrorCode.VOICE_CONFIG, "API key contains an invalid header character"
             )
         return cls(address=address, model=model.strip(), api_key=api_key)
 

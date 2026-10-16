@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any, cast
 
 from fora.core.discussion import Message
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.store import OrganizationStore, ReadSummary
 
@@ -30,7 +31,8 @@ def result_length(result: dict[str, Any]) -> int:
 def integer(name: str, value: object, low: int, high: int = 2**63 - 1) -> int:
     if type(value) is not int or not low <= value <= high:
         raise DomainError(
-            "invalid_pagination", f"{name} must be an integer from {low} to {high}"
+            ErrorCode.INVALID_PAGINATION,
+            f"{name} must be an integer from {low} to {high}",
         )
     return cast(int, value)
 
@@ -58,7 +60,7 @@ class Position:
     def decode(cls, cursor: str, discussion_id: int, section: str) -> Position:
         if type(cursor) is not str or not 1 <= len(cursor) <= 2048:
             raise DomainError(
-                "invalid_cursor", "cursor must contain 1 to 2048 characters"
+                ErrorCode.INVALID_CURSOR, "cursor must contain 1 to 2048 characters"
             )
         try:
             data = json.loads(
@@ -66,7 +68,7 @@ class Position:
             )
         except (ValueError, UnicodeError, binascii.Error) as error:
             raise DomainError(
-                "invalid_cursor", "cursor is not valid encoded JSON"
+                ErrorCode.INVALID_CURSOR, "cursor is not valid encoded JSON"
             ) from error
         if type(data) is not dict or set(data) != {
             "d",
@@ -81,11 +83,12 @@ class Position:
             "t",
             "v",
         }:
-            raise DomainError("invalid_cursor", "cursor has invalid fields")
+            raise DomainError(ErrorCode.INVALID_CURSOR, "cursor has invalid fields")
         for key in ("d", "l", "h", "a", "m", "o", "w", "t", "v"):
             if type(data[key]) is not int or not 0 <= data[key] <= 2**63 - 1:
                 raise DomainError(
-                    "invalid_cursor", "cursor positions must be nonnegative integers"
+                    ErrorCode.INVALID_CURSOR,
+                    "cursor positions must be nonnegative integers",
                 )
         if (
             data["v"] != 1
@@ -94,21 +97,28 @@ class Position:
             or type(data["r"]) is not bool
         ):
             raise DomainError(
-                "invalid_cursor", "cursor version, Discussion or section does not match"
+                ErrorCode.INVALID_CURSOR,
+                "cursor version, Discussion or section does not match",
             )
         if data["l"] > data["h"] + 1 or data["h"] > data["t"]:
-            raise DomainError("invalid_cursor", "cursor range is invalid")
+            raise DomainError(ErrorCode.INVALID_CURSOR, "cursor range is invalid")
         if section == "messages" and (
             data["m"] and not data["l"] <= data["m"] <= data["h"]
         ):
-            raise DomainError("invalid_cursor", "cursor message is outside its range")
+            raise DomainError(
+                ErrorCode.INVALID_CURSOR, "cursor message is outside its range"
+            )
         if data["a"] or (section == "messages" and data["o"] and not data["m"]):
-            raise DomainError("invalid_cursor", "cursor message position is invalid")
+            raise DomainError(
+                ErrorCode.INVALID_CURSOR, "cursor message position is invalid"
+            )
         if section in ("mentions", "attachments") and not data["m"]:
-            raise DomainError("invalid_cursor", "metadata cursor requires a message")
+            raise DomainError(
+                ErrorCode.INVALID_CURSOR, "metadata cursor requires a message"
+            )
         if section in ("members", "awaiting_ack", "acknowledged") and data["m"]:
             raise DomainError(
-                "invalid_cursor", "metadata cursor cannot select a message"
+                ErrorCode.INVALID_CURSOR, "metadata cursor cannot select a message"
             )
         return cls(**data)
 
@@ -139,7 +149,7 @@ class DiscussionReader:
         size = self.size(result)
         if size > self.max_chars:
             raise DomainError(
-                "read_budget", f"Necessary result requires max_chars >= {size}"
+                ErrorCode.READ_BUDGET, f"Necessary result requires max_chars >= {size}"
             )
 
     def request(self, position: Position) -> dict[str, Any]:
@@ -188,7 +198,9 @@ class DiscussionReader:
             position.s, position.m or None, position.o, self.limit
         )
         if position.o > total:
-            raise DomainError("invalid_cursor", "metadata offset is out of range")
+            raise DomainError(
+                ErrorCode.INVALID_CURSOR, "metadata offset is out of range"
+            )
         result = self.base(position.s)
         if position.m:
             message = self.store.read_message(position.d, position.m)
@@ -410,7 +422,7 @@ class DiscussionReader:
     def messages(self, position: Position) -> dict[str, Any]:
         if position.t > self.summary.latest_id:
             raise DomainError(
-                "invalid_cursor", "cursor snapshot is beyond this Discussion"
+                ErrorCode.INVALID_CURSOR, "cursor snapshot is beyond this Discussion"
             )
         if position.a:
             ids = self.context_ids(position)
@@ -437,7 +449,9 @@ class DiscussionReader:
             if offset > len(message.body) or (
                 offset == len(message.body) and offset != 0
             ):
-                raise DomainError("invalid_cursor", "body offset is out of range")
+                raise DomainError(
+                    ErrorCode.INVALID_CURSOR, "body offset is out of range"
+                )
             full = self.bare(message, position, offset, len(message.body))
             trial = sorted([*chosen, full], key=lambda item: item["id"])
             result = self.messages_result(position, trial)
@@ -482,7 +496,7 @@ def read_position(
     cursor: str | None,
 ) -> Position:
     if type(section) is not str or section not in SECTIONS:
-        raise DomainError("invalid_pagination", "Unknown read section")
+        raise DomainError(ErrorCode.INVALID_PAGINATION, "Unknown read section")
     for name, value, low in (
         ("message_id", message_id, 1),
         ("before", before, 0),
@@ -493,32 +507,35 @@ def read_position(
     if cursor is not None:
         if message_id is not None or before is not None or after is not None:
             raise DomainError(
-                "invalid_cursor", "cursor cannot be combined with message_id or bounds"
+                ErrorCode.INVALID_CURSOR,
+                "cursor cannot be combined with message_id or bounds",
             )
         position = Position.decode(cursor, summary.id, section)
         if position.t > summary.latest_id:
             raise DomainError(
-                "invalid_cursor", "cursor snapshot is beyond this Discussion"
+                ErrorCode.INVALID_CURSOR, "cursor snapshot is beyond this Discussion"
             )
         return position
     if message_id is not None and (before is not None or after is not None):
         raise DomainError(
-            "invalid_pagination", "message_id cannot be combined with bounds"
+            ErrorCode.INVALID_PAGINATION, "message_id cannot be combined with bounds"
         )
     if before is not None and after is not None and before <= after:
-        raise DomainError("invalid_pagination", "before must exceed after")
+        raise DomainError(ErrorCode.INVALID_PAGINATION, "before must exceed after")
     if section != "messages":
         if before is not None or after is not None:
-            raise DomainError("invalid_pagination", "metadata uses cursor pagination")
+            raise DomainError(
+                ErrorCode.INVALID_PAGINATION, "metadata uses cursor pagination"
+            )
         if section in ("mentions", "attachments"):
             if message_id is None:
                 raise DomainError(
-                    "invalid_pagination", "This section requires message_id"
+                    ErrorCode.INVALID_PAGINATION, "This section requires message_id"
                 )
             store.read_message(summary.id, message_id)
         elif message_id is not None:
             raise DomainError(
-                "invalid_pagination",
+                ErrorCode.INVALID_PAGINATION,
                 "message_id only selects messages, mentions or attachments",
             )
         return Position(

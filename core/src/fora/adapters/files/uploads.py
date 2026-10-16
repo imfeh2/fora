@@ -21,19 +21,20 @@ from fora.core.attachment import (
     Upload,
     identifier,
 )
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 
 def decode_image(data: bytes) -> ImageData:
     if len(data) > MAX_IMAGE_BYTES:
-        raise DomainError("image_too_large", "Images must be at most 5 MiB")
+        raise DomainError(ErrorCode.IMAGE_TOO_LARGE, "Images must be at most 5 MiB")
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(data)) as image:
                 if image.format not in {"PNG", "JPEG", "WEBP"}:
                     raise DomainError(
-                        "unsupported_image", "Choose a PNG, JPEG or WebP image"
+                        ErrorCode.UNSUPPORTED_IMAGE, "Choose a PNG, JPEG or WebP image"
                     )
                 width, height = image.size
                 if (
@@ -41,11 +42,11 @@ def decode_image(data: bytes) -> ImageData:
                     or width * height > MAX_IMAGE_PIXELS
                 ):
                     raise DomainError(
-                        "image_dimensions_exceeded",
+                        ErrorCode.IMAGE_DIMENSIONS_EXCEEDED,
                         "Images must fit 8192 pixels per side and 20 MP",
                     )
                 if getattr(image, "n_frames", 1) != 1:
-                    raise DomainError("animated_image", "Choose a static image")
+                    raise DomainError(ErrorCode.ANIMATED_IMAGE, "Choose a static image")
                 media_type = Image.MIME[image.format]
                 image.verify()
             with Image.open(BytesIO(data)) as image:
@@ -56,7 +57,9 @@ def decode_image(data: bytes) -> ImageData:
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
     ) as error:
-        raise DomainError("invalid_image", "The image cannot be decoded") from error
+        raise DomainError(
+            ErrorCode.INVALID_IMAGE, "The image cannot be decoded"
+        ) from error
     return ImageData(data, media_type, width, height)
 
 
@@ -80,7 +83,7 @@ class DirectoryUploads:
         with temporary.open("rb") as source:
             if os.fstat(source.fileno()).st_size != upload.size:
                 raise DomainError(
-                    "upload_incomplete", "The uploaded file size does not match"
+                    ErrorCode.UPLOAD_INCOMPLETE, "The uploaded file size does not match"
                 )
             digest = hashlib.file_digest(source, "sha256").hexdigest()
         media_type = "application/octet-stream"
@@ -106,12 +109,13 @@ class DirectoryUploads:
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_size != attachment.size:
                 raise DomainError(
-                    "attachment_invalid", "The stored attachment is not a valid file"
+                    ErrorCode.ATTACHMENT_INVALID,
+                    "The stored attachment is not a valid file",
                 )
             source = path.open("rb")
         except FileNotFoundError as error:
             raise DomainError(
-                "attachment_missing", "The attachment file is missing"
+                ErrorCode.ATTACHMENT_MISSING, "The attachment file is missing"
             ) from error
         try:
             opened = os.fstat(source.fileno())
@@ -121,11 +125,12 @@ class DirectoryUploads:
                 or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
             ):
                 raise DomainError(
-                    "attachment_invalid", "The stored attachment is not a valid file"
+                    ErrorCode.ATTACHMENT_INVALID,
+                    "The stored attachment is not a valid file",
                 )
             if hashlib.file_digest(source, "sha256").hexdigest() != attachment.sha256:
                 raise DomainError(
-                    "attachment_changed", "The attachment content has changed"
+                    ErrorCode.ATTACHMENT_CHANGED, "The attachment content has changed"
                 )
             source.seek(0)
         except BaseException:
@@ -136,7 +141,7 @@ class DirectoryUploads:
     def image(self, attachment: Attachment) -> ImageData:
         if attachment.media_type not in IMAGE_TYPES:
             raise DomainError(
-                "unsupported_image", "This attachment is not a supported image"
+                ErrorCode.UNSUPPORTED_IMAGE, "This attachment is not a supported image"
             )
         with self.reader(attachment) as source:
             data = source.read(MAX_IMAGE_BYTES + 1)
@@ -145,7 +150,7 @@ class DirectoryUploads:
             or hashlib.sha256(data).hexdigest() != attachment.sha256
         ):
             raise DomainError(
-                "attachment_changed", "The attachment content has changed"
+                ErrorCode.ATTACHMENT_CHANGED, "The attachment content has changed"
             )
         image = decode_image(data)
         if (image.media_type, image.width, image.height) != (
@@ -154,6 +159,7 @@ class DirectoryUploads:
             attachment.height,
         ):
             raise DomainError(
-                "attachment_changed", "The attachment image details have changed"
+                ErrorCode.ATTACHMENT_CHANGED,
+                "The attachment image details have changed",
             )
         return image

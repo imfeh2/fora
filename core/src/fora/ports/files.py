@@ -13,14 +13,6 @@ class TreeEntry:
     modified_at: str
 
 
-class ConflictError(Exception):
-    def __init__(self, path: str, expected: str | None, actual: str) -> None:
-        super().__init__(f"{path} changed since it was read")
-        self.path = path
-        self.expected = expected
-        self.actual = actual
-
-
 class FileTree(Protocol):
     @property
     def root(self) -> Path: ...

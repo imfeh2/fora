@@ -8,8 +8,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from fora.adapters.execution.editing import edit_file
 from fora.adapters.file_writes import directory_lock, replace_file
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.ports.files import ConflictError, TreeEntry
+from fora.ports.files import TreeEntry
 
 
 def content_hash(content: str) -> str:
@@ -18,19 +19,19 @@ def content_hash(content: str) -> str:
 
 def relative_path(path: str, *, allow_root: bool = False) -> PurePosixPath:
     if not isinstance(path, str) or "\0" in path:
-        raise DomainError("invalid_path", "Path must be a string without NUL")
+        raise DomainError(ErrorCode.INVALID_PATH, "Path must be a string without NUL")
     if path in (".", "./") or not path.replace("/", "").strip():
         if allow_root:
             return PurePosixPath()
         raise DomainError(
-            "invalid_path", "Path must name a file or folder inside the tree"
+            ErrorCode.INVALID_PATH, "Path must name a file or folder inside the tree"
         )
     path = path.removeprefix("./")
     pure = PurePosixPath(path.replace("\\", "/"))
     if PureWindowsPath(path).drive or pure.is_absolute() or ".." in pure.parts:
-        raise DomainError("invalid_path", "Path must be relative without '..'")
+        raise DomainError(ErrorCode.INVALID_PATH, "Path must be relative without '..'")
     if not pure.parts:
-        raise DomainError("invalid_path", "Path must stay inside the tree")
+        raise DomainError(ErrorCode.INVALID_PATH, "Path must stay inside the tree")
     return pure
 
 
@@ -52,7 +53,7 @@ class DirectoryTree:
         entry = self._root / pure
         target = entry.resolve()
         if target == self._root or self._root not in target.parents:
-            raise DomainError("invalid_path", "Path must stay inside the tree")
+            raise DomainError(ErrorCode.INVALID_PATH, "Path must stay inside the tree")
         return target if follow_symlinks else entry.parent.resolve() / entry.name
 
     def _relative(self, target: Path) -> str:
@@ -62,7 +63,9 @@ class DirectoryTree:
         try:
             return target.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as error:
-            raise DomainError("not_readable", "File cannot be read as UTF-8") from error
+            raise DomainError(
+                ErrorCode.NOT_READABLE, "File cannot be read as UTF-8"
+            ) from error
 
     def _entry(self, target: Path) -> TreeEntry:
         try:
@@ -93,7 +96,7 @@ class DirectoryTree:
     def read(self, path: str) -> tuple[str, str]:
         target = self._resolve(path)
         if not target.is_file():
-            raise DomainError("not_found", f"{path} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"{path} does not exist")
         content = self._content(target)
         return content, content_hash(content)
 
@@ -101,21 +104,23 @@ class DirectoryTree:
         self, path: str, content: str, *, expected_hash: str | None = None
     ) -> TreeEntry:
         if not isinstance(content, str):
-            raise DomainError("invalid_content", "Content must be a string")
+            raise DomainError(ErrorCode.INVALID_CONTENT, "Content must be a string")
         target = self._resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with directory_lock(target):
             if target.is_dir():
-                raise DomainError("invalid_path", "Path is a directory")
+                raise DomainError(ErrorCode.INVALID_PATH, "Path is a directory")
             if target.exists():
                 current = content_hash(self._content(target))
                 if expected_hash is None:
                     raise DomainError(
-                        "expected_hash_required",
+                        ErrorCode.EXPECTED_HASH_REQUIRED,
                         "expected_hash is required when overwriting an existing document",
                     )
                 if expected_hash != current:
-                    raise ConflictError(path, expected_hash, current)
+                    raise DomainError(
+                        ErrorCode.CONTENT_CHANGED, f"{path} changed since it was read"
+                    )
             with replace_file(target, content):
                 return self._entry(target)
 
@@ -124,7 +129,7 @@ class DirectoryTree:
     ) -> tuple[TreeEntry, str]:
         target = self._resolve(path)
         if not target.parent.is_dir():
-            raise DomainError("not_found", f"{path} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"{path} does not exist")
         with directory_lock(target):
             self.read(path)
             result = edit_file(
@@ -142,20 +147,21 @@ class DirectoryTree:
                 return self._entry(target), result.diff
             except Exception as error:
                 raise DomainError(
-                    "write_published", f"File already published at {target}: {error}"
+                    ErrorCode.WRITE_PUBLISHED,
+                    f"File already published at {target}: {error}",
                 ) from error
 
     def mkdir(self, path: str) -> TreeEntry:
         target = self._resolve(path, allow_root=True)
         if target.exists() and not target.is_dir():
-            raise DomainError("invalid_path", "Path is a file")
+            raise DomainError(ErrorCode.INVALID_PATH, "Path is a file")
         target.mkdir(parents=True, exist_ok=True)
         return self._entry(target)
 
     def delete(self, path: str) -> None:
         target = self._resolve(path, follow_symlinks=False)
         if not target.exists() and not target.is_symlink():
-            raise DomainError("not_found", f"{path} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"{path} does not exist")
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         else:
@@ -164,15 +170,17 @@ class DirectoryTree:
     def move(self, source: str, destination: str) -> TreeEntry:
         origin = self._resolve(source, follow_symlinks=False)
         if not origin.exists() and not origin.is_symlink():
-            raise DomainError("not_found", f"{source} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"{source} does not exist")
         target = self._resolve(destination)
         if origin.is_dir() and (target == origin or origin in target.parents):
-            raise DomainError("invalid_path", "Cannot move a directory into itself")
+            raise DomainError(
+                ErrorCode.INVALID_PATH, "Cannot move a directory into itself"
+            )
         if (
             target.exists()
             or (self._root / destination.replace("\\", "/")).is_symlink()
         ):
-            raise DomainError("already_exists", f"{destination} already exists")
+            raise DomainError(ErrorCode.ALREADY_EXISTS, f"{destination} already exists")
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(origin, target)
         return self._entry(target)

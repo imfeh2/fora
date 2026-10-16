@@ -14,11 +14,12 @@ from fora.core.attachment import (
     identifier,
 )
 from fora.core.discussion import Discussion, Message, validate_body, validate_topic
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import validate_name
 from fora.ports.agent import GenerationKey, HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
-from fora.ports.files import ConflictError, FileTree
+from fora.ports.files import FileTree
 from fora.ports.store import OrganizationStore
 from fora.ports.usage import UsageCache, UsageObservation
 from fora.services.history import History
@@ -92,18 +93,23 @@ class AgentTools:
     def _discussion(self, discussion_id: int) -> Discussion:
         discussion = self._deps.store.get_discussion(discussion_id)
         if discussion is None:
-            raise DomainError("not_found", f"Discussion {discussion_id} does not exist")
+            raise DomainError(
+                ErrorCode.NOT_FOUND, f"Discussion {discussion_id} does not exist"
+            )
         return discussion
 
     def _require_membership(self, discussion_id: int) -> None:
         if not self._discussion(discussion_id).has_member(self._actor.member_id):
             raise DomainError(
-                "not_a_member", f"You do not belong to Discussion {discussion_id}"
+                ErrorCode.NOT_A_MEMBER,
+                f"You do not belong to Discussion {discussion_id}",
             )
 
     def _authorize_usage(self) -> None:
         if self._actor.is_agent:
-            raise DomainError("not_permitted", "Agent history is restricted to Humans")
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED, "Agent history is restricted to Humans"
+            )
         for member in self._deps.store.list_members(include_deleted=True):
             if member.is_agent:
                 self.authorize_agent_history(member.id, include_deleted=True)
@@ -140,14 +146,16 @@ class AgentTools:
     ) -> None:
         self._check("agent.history", agent_id)
         if self._actor.is_agent:
-            raise DomainError("not_permitted", "Agent history is restricted to Humans")
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED, "Agent history is restricted to Humans"
+            )
         member = self._deps.store.get_member(agent_id)
         if (
             member is None
             or not member.is_agent
             or (member.deleted and not include_deleted)
         ):
-            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
 
     def list_member_records(
         self, include_deleted: bool = False
@@ -187,7 +195,7 @@ class AgentTools:
         self._check("organization.get_model", agent_id)
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent or member.deleted:
-            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
         return self._deps.settings.agent_model_selection(agent_id)
 
     def rename_member(self, member_id: int, name: str) -> dict[str, Any]:
@@ -195,9 +203,9 @@ class AgentTools:
         validated = validate_name(name)
         existing = self._deps.store.get_member(member_id)
         if existing is None:
-            raise DomainError("not_found", f"Member {member_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Member {member_id} does not exist")
         if existing.name != validated and self._deps.store.name_taken(validated):
-            raise DomainError("duplicate_name", "Member names must be unique")
+            raise DomainError(ErrorCode.DUPLICATE_NAME, "Member names must be unique")
         member = self._deps.store.rename_member(member_id, validated)
         return {"id": member.id, "name": member.name}
 
@@ -214,18 +222,19 @@ class AgentTools:
             return self._resume(agent_id, self._actor.is_agent)
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent:
-            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
         if (
             self._deps.history.pause_reason(agent_id) is not None
             and self._actor.is_agent
         ):
             raise DomainError(
-                "not_permitted", "Only a Human can resume a safety-paused Agent"
+                ErrorCode.NOT_PERMITTED, "Only a Human can resume a safety-paused Agent"
             )
         runs = self._deps.history.run_summaries(agent_id, limit=1)
         if runs and runs[0].status == "running":
             raise DomainError(
-                "agent_running", "Wait for the active Turn to finish before resuming"
+                ErrorCode.AGENT_RUNNING,
+                "Wait for the active Turn to finish before resuming",
             )
         if member.state == "paused":
             self._deps.history.reset_safety(agent_id)
@@ -244,7 +253,7 @@ class AgentTools:
     def _delete_agent(self, agent_id: int) -> dict[str, Any]:
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent:
-            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
         state = (
             self._agent_status(agent_id)["state"]
             if self._agent_status is not None
@@ -252,7 +261,7 @@ class AgentTools:
         )
         if state == "running":
             raise DomainError(
-                "agent_running",
+                ErrorCode.AGENT_RUNNING,
                 "Pause the Agent and let its Turn finish before deleting",
             )
         self._deps.settings.delete_agent_with_model(agent_id)
@@ -270,12 +279,12 @@ class AgentTools:
         ]
         if not others:
             raise DomainError(
-                "needs_members", "A Discussion needs at least one other Member"
+                ErrorCode.NEEDS_MEMBERS, "A Discussion needs at least one other Member"
             )
         known = {item.id for item in self._deps.store.list_members()}
         unknown = [item for item in others if item not in known]
         if unknown:
-            raise DomainError("not_found", f"Unknown Members: {unknown}")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Unknown Members: {unknown}")
         discussion = self._deps.store.create_discussion(
             validated, [self._actor.member_id, *others]
         )
@@ -293,7 +302,9 @@ class AgentTools:
     ) -> list[dict[str, Any]]:
         self._check("discussion.list")
         if limit is not None and (type(limit) is not int or limit < 1):
-            raise DomainError("invalid_pagination", "limit must be an integer >= 1")
+            raise DomainError(
+                ErrorCode.INVALID_PAGINATION, "limit must be an integer >= 1"
+            )
         with self._deps.reading():
             unread = self._deps.store.unread_counts(self._actor.member_id)
             discussions = self._deps.store.list_discussions(
@@ -387,18 +398,18 @@ class AgentTools:
         self._check(capability, discussion_id)
         if self._actor.is_agent:
             raise DomainError(
-                "not_permitted", "This operation is for the Human interface"
+                ErrorCode.NOT_PERMITTED, "This operation is for the Human interface"
             )
         if type(discussion_id) is not int or discussion_id < 1:
             raise DomainError(
-                "invalid_discussion", "discussion_id must be a positive integer"
+                ErrorCode.INVALID_DISCUSSION, "discussion_id must be a positive integer"
             )
 
     @staticmethod
     def _message_id(value: int) -> None:
         if type(value) is not int or value < 1:
             raise DomainError(
-                "invalid_message", "message_id must be a positive integer"
+                ErrorCode.INVALID_MESSAGE, "message_id must be a positive integer"
             )
 
     def discussion_page(
@@ -414,23 +425,23 @@ class AgentTools:
         self._human_discussion("discussion.page", discussion_id)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise DomainError(
-                "invalid_pagination", "limit must be an integer from 1 to 100"
+                ErrorCode.INVALID_PAGINATION, "limit must be an integer from 1 to 100"
             )
         if type(entry) is not bool or type(metadata) is not bool:
             raise DomainError(
-                "invalid_pagination", "entry and metadata must be boolean"
+                ErrorCode.INVALID_PAGINATION, "entry and metadata must be boolean"
             )
         for bound in (before, after):
             if bound is not None and (type(bound) is not int or bound < 0):
                 raise DomainError(
-                    "invalid_pagination", "bounds must be nonnegative integers"
+                    ErrorCode.INVALID_PAGINATION, "bounds must be nonnegative integers"
                 )
         if entry and (before is not None or after is not None):
             raise DomainError(
-                "invalid_pagination", "entry cannot be combined with bounds"
+                ErrorCode.INVALID_PAGINATION, "entry cannot be combined with bounds"
             )
         if before is not None and after is not None and before <= after:
-            raise DomainError("invalid_pagination", "before must exceed after")
+            raise DomainError(ErrorCode.INVALID_PAGINATION, "before must exceed after")
         page = self._deps.store.discussion_page(
             discussion_id,
             self._actor.member_id,
@@ -540,7 +551,7 @@ class AgentTools:
     def upload_status(self, upload_ids: Sequence[str]) -> list[dict[str, Any]]:
         self._check("upload.status")
         if len(upload_ids) > 40:
-            raise DomainError("invalid_uploads", "Query at most 40 uploads")
+            raise DomainError(ErrorCode.INVALID_UPLOADS, "Query at most 40 uploads")
         result = []
         for upload_id in upload_ids:
             record = self._uploads().store.get_upload(
@@ -601,23 +612,27 @@ class AgentTools:
             or generation_key.sequence != self._turn.sequence
         ):
             raise DomainError(
-                "invalid_generation", "Generation does not belong to this Turn"
+                ErrorCode.INVALID_GENERATION, "Generation does not belong to this Turn"
             )
         if type(mark_read) is not bool or (self._actor.is_agent and not mark_read):
             raise DomainError(
-                "not_permitted",
+                ErrorCode.NOT_PERMITTED,
                 "Only the Human interface can send without marking read",
             )
         validated = validate_body(body, has_attachments=bool(attachment_ids))
         if len(attachment_ids) > 10:
-            raise DomainError("invalid_attachments", "Choose up to 10 distinct files")
+            raise DomainError(
+                ErrorCode.INVALID_ATTACHMENTS, "Choose up to 10 distinct files"
+            )
         state = "unknown"
         if client_message_id is not None:
             state, _ = self._deps.store.send_outcome(
                 discussion_id, self._actor.member_id, identifier(client_message_id)
             )
         if state == "cancelled":
-            raise DomainError("send_cancelled", "This send attempt was cancelled")
+            raise DomainError(
+                ErrorCode.SEND_CANCELLED, "This send attempt was cancelled"
+            )
         if state == "unknown":
             try:
                 for upload_id in attachment_ids:
@@ -633,7 +648,7 @@ class AgentTools:
                     )
                     if state == "cancelled":
                         raise DomainError(
-                            "send_cancelled", "This send attempt was cancelled"
+                            ErrorCode.SEND_CANCELLED, "This send attempt was cancelled"
                         ) from None
                 raise
         options: dict[str, Any] = {
@@ -685,7 +700,7 @@ class AgentTools:
         unread = [item for item in message_ids if item > watermark]
         if unread:
             raise DomainError(
-                "not_read", f"Read messages {unread} before acknowledging them"
+                ErrorCode.NOT_READ, f"Read messages {unread} before acknowledging them"
             )
         acked = self._deps.store.ack(
             discussion_id, list(message_ids), self._actor.member_id
@@ -709,7 +724,9 @@ class AgentTools:
 
     def _member_ids(self, member_ids: Sequence[int]) -> None:
         if any(type(item) is not int or item <= 0 for item in member_ids):
-            raise DomainError("invalid_members", "Member IDs must be positive integers")
+            raise DomainError(
+                ErrorCode.INVALID_MEMBERS, "Member IDs must be positive integers"
+            )
 
     def set_discussion_members(
         self, discussion_id: int, member_ids: Sequence[int]
@@ -887,7 +904,7 @@ class AgentTools:
         if agent_id is None:
             agent_id = self._actor.member_id
         if self._actor.is_agent and agent_id != self._actor.member_id:
-            raise DomainError("not_allowed", "Workspace is private")
+            raise DomainError(ErrorCode.NOT_ALLOWED, "Workspace is private")
         return Workspace(self._deps.workspace_tree_for(agent_id))
 
     def list_workspace(
@@ -951,11 +968,13 @@ class AgentTools:
         self._check("library.write", path)
         try:
             entry = self._library().write(path, content, expected_hash=expected_hash)
-        except ConflictError as conflict:
+        except DomainError as conflict:
+            if conflict.code != ErrorCode.CONTENT_CHANGED:
+                raise
             current, digest = self._library()._tree.read(path)
             return {
                 "conflict": True,
-                "path": conflict.path,
+                "path": path,
                 "current_hash": digest,
                 "current_content": current,
             }
@@ -1019,7 +1038,7 @@ class AgentTools:
         self._check("history.read", sequence)
         run = self._history().read(sequence, offset)
         if run is None:
-            raise DomainError("not_found", f"Run {sequence} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Run {sequence} does not exist")
         next_offset = (
             run.offset + len(run.messages)
             if run.offset + len(run.messages) < run.total_length

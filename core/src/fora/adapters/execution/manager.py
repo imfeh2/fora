@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from fora.adapters.execution.local import LocalExecution
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.execution import EditResult, ExecutionEnvironment, RunResult
 
@@ -15,7 +16,7 @@ def setting_directories(value: object) -> list[str]:
         return []
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise DomainError(
-            "invalid_directory", "Writable directories must be a list of paths"
+            ErrorCode.INVALID_DIRECTORY, "Writable directories must be a list of paths"
         )
     return list(value)
 
@@ -88,7 +89,9 @@ class ExecutionManager:
         stored = settings or {}
         try:
             if set(stored) - {"write_directories"}:
-                raise DomainError("invalid_setting", "Unknown execution setting")
+                raise DomainError(
+                    ErrorCode.INVALID_SETTING, "Unknown execution setting"
+                )
             self._directories = setting_directories(stored.get("write_directories"))
             self._environment = LocalExecution(
                 self._directories,
@@ -103,11 +106,11 @@ class ExecutionManager:
             with self._lock:
                 if self._closed:
                     raise DomainError(
-                        "execution_closed", "Execution environment is closed"
+                        ErrorCode.EXECUTION_CLOSED, "Execution environment is closed"
                     )
                 if self._environment is None:
                     raise DomainError(
-                        "execution_unavailable",
+                        ErrorCode.EXECUTION_UNAVAILABLE,
                         self._error or "Execution environment is unavailable",
                     )
                 return self._environment
@@ -129,10 +132,12 @@ class ExecutionManager:
         self, values: dict[str, Any], persist: Callable[[dict[str, object]], None]
     ) -> dict[str, Any]:
         if set(values) - {"write_directories"}:
-            raise DomainError("invalid_setting", "Unknown execution setting")
+            raise DomainError(ErrorCode.INVALID_SETTING, "Unknown execution setting")
         with self._lock:
             if self._closed:
-                raise DomainError("execution_closed", "Execution environment is closed")
+                raise DomainError(
+                    ErrorCode.EXECUTION_CLOSED, "Execution environment is closed"
+                )
             directories = setting_directories(
                 values.get("write_directories", self._directories)
             )

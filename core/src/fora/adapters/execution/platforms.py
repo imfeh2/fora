@@ -18,6 +18,7 @@ from fora.adapters.sandbox.commands import (
     macos_command,
     windows_command,
 )
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 if TYPE_CHECKING:
@@ -65,7 +66,7 @@ class ExecutionBackend:
         self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
     ) -> list[str]:
         raise DomainError(
-            "sandbox_unavailable",
+            ErrorCode.SANDBOX_UNAVAILABLE,
             "Filesystem write protection is unavailable on this platform",
         )
 
@@ -261,7 +262,9 @@ class WindowsBackend(ExecutionBackend):
         record = ExecutionRecord(tuple(root for root in roots if root.is_dir()))
         with self._lock:
             if self._closed:
-                raise DomainError("execution_closed", "Command creation is closed")
+                raise DomainError(
+                    ErrorCode.EXECUTION_CLOSED, "Command creation is closed"
+                )
             previous = tuple(self._jobs)
             self._records.add(record)
             self._pending.add(record)
@@ -283,7 +286,9 @@ class WindowsBackend(ExecutionBackend):
                 environment = dict(os.environ)
                 environment["__PYVENV_LAUNCHER__"] = sys.executable
             if record.cancel_requested.is_set():
-                raise DomainError("execution_closed", "Command creation was cancelled")
+                raise DomainError(
+                    ErrorCode.EXECUTION_CLOSED, "Command creation was cancelled"
+                )
             process = subprocess.Popen(
                 [
                     *entrypoint(),

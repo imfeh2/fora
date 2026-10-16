@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.mention import Mention
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, OVERFLOW_NOTICE_BYTES, bounded_text
@@ -195,12 +196,14 @@ def read_agents_instructions(*trees: FileTree) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
-class HistoryPersistenceError(RuntimeError):
-    pass
+class HistoryPersistenceError(DomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__(ErrorCode.HISTORY_PERSISTENCE, message)
 
 
-class HistoryValidationError(ValueError):
-    pass
+class HistoryValidationError(DomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__(ErrorCode.HISTORY_INVALID, message)
 
 
 @dataclass(frozen=True)

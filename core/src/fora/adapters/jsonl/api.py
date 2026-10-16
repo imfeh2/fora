@@ -17,6 +17,7 @@ from fora.adapters.model.history import (
 )
 from fora.adapters.model.runner import live_coverage
 from fora.adapters.voice.config import VoiceConfig
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import idle_streak
@@ -80,16 +81,18 @@ def _integer_param(
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise DomainError("invalid_params", f"{name} must be a non-negative integer")
+        raise DomainError(
+            ErrorCode.INVALID_PARAMS, f"{name} must be a non-negative integer"
+        )
     if maximum is not None and value > maximum:
-        raise DomainError("invalid_params", f"{name} exceeds its maximum")
+        raise DomainError(ErrorCode.INVALID_PARAMS, f"{name} exceeds its maximum")
     return value
 
 
 def _required_integer(params: dict[str, Any], name: str) -> int:
     value = _integer_param(params, name)
     if value is None:
-        raise DomainError("invalid_params", f"{name} is required")
+        raise DomainError(ErrorCode.INVALID_PARAMS, f"{name} is required")
     return value
 
 
@@ -116,7 +119,9 @@ def _usage_version(result: dict[str, Any]) -> dict[str, Any]:
 def _required_string(params: dict[str, Any], name: str) -> str:
     value = params.get(name)
     if not isinstance(value, str) or not value or len(value) > 256:
-        raise DomainError("invalid_params", f"{name} must be a non-empty string")
+        raise DomainError(
+            ErrorCode.INVALID_PARAMS, f"{name} must be a non-empty string"
+        )
     return value
 
 
@@ -126,7 +131,9 @@ def _generation_bounds(params: dict[str, Any]) -> tuple[int, int, int]:
     limit = _integer_param(params, "limit", default=16384, maximum=65536)
     assert offset is not None and limit is not None
     if revision == 0 or limit == 0:
-        raise DomainError("invalid_params", "revision and limit must be positive")
+        raise DomainError(
+            ErrorCode.INVALID_PARAMS, "revision and limit must be positive"
+        )
     return revision, offset, limit
 
 
@@ -372,14 +379,14 @@ class Api:
             limit = _integer_param(params, "limit", default=30, maximum=50)
             assert limit is not None
             if limit == 0:
-                raise DomainError("invalid_params", "limit must be positive")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "limit must be positive")
             before = params.get("before")
             if before is not None and (
                 not isinstance(before, list)
                 or len(before) != 2
                 or any(not isinstance(item, str) or not item for item in before)
             ):
-                raise DomainError("invalid_params", "before must be a sort key")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "before must be a sort key")
             with self._reading():
                 page = self._scheduler.history.generation.previews(
                     discussion_id,
@@ -429,7 +436,7 @@ class Api:
             limit = _integer_param(params, "limit", default=30, maximum=50)
             assert limit is not None
             if limit == 0:
-                raise DomainError("invalid_params", "limit must be positive")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "limit must be positive")
             with self._reading():
                 self._human().authorize_agent_history(agent_id)
                 page = self._scheduler.history.generation.parts(
@@ -464,7 +471,9 @@ class Api:
                     agent_id, sequence, ordinal
                 )
                 if summary is None:
-                    raise DomainError("not_found", "Model request does not exist")
+                    raise DomainError(
+                        ErrorCode.NOT_FOUND, "Model request does not exist"
+                    )
                 key = GenerationKey(
                     agent_id,
                     sequence,
@@ -604,7 +613,9 @@ class Api:
                 target = root / relative_path(value, allow_root=descendants)
                 resolved = target.resolve()
                 if not resolved.is_relative_to(root):
-                    raise DomainError("invalid_path", "Path must stay inside the tree")
+                    raise DomainError(
+                        ErrorCode.INVALID_PATH, "Path must stay inside the tree"
+                    )
                 return tuple(
                     dict.fromkeys(
                         (
@@ -749,7 +760,9 @@ class Api:
             limit = _integer_param(params, "limit", default=30, maximum=30)
             assert limit is not None
             if limit == 0:
-                raise DomainError("invalid_params", "history limits must be positive")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "history limits must be positive"
+                )
             with self._reading():
                 self._human().authorize_agent_history(agent_id)
                 page = self._scheduler.history.history_windows(
@@ -778,7 +791,9 @@ class Api:
             limit = _integer_param(params, "limit", default=30, maximum=30)
             tool_limit = _integer_param(params, "tool_limit", default=100, maximum=100)
             if not limit or not tool_limit:
-                raise DomainError("invalid_params", "Live limits must be positive")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "Live limits must be positive"
+                )
             turn = next(
                 (
                     item
@@ -860,20 +875,25 @@ class Api:
             part_index = _required_integer(params, "part_index")
             content_source = params.get("content_source", "tool")
             if content_source not in ("tool", "response"):
-                raise DomainError("invalid_params", "Invalid live content source")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "Invalid live content source"
+                )
             captured = self._scheduler.live.capture(agent_id)
             with self._reading():
                 self._human().authorize_agent_history(agent_id)
             epoch = params.get("runtime_epoch")
             version = params.get("content_version")
             if version is not None and not isinstance(version, str):
-                raise DomainError("invalid_params", "Invalid live content version")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "Invalid live content version"
+                )
             if (
                 not isinstance(epoch, str)
                 or epoch != self._scheduler.live.runtime_epoch
             ):
                 raise DomainError(
-                    "live_changed", "The runtime instance changed; refresh the Turn"
+                    ErrorCode.LIVE_CHANGED,
+                    "The runtime instance changed; refresh the Turn",
                 )
             for turn in captured:
                 if turn.sequence != sequence:
@@ -888,7 +908,8 @@ class Api:
                                 and version != request.response_version
                             ):
                                 raise DomainError(
-                                    "live_changed", "The response content changed"
+                                    ErrorCode.LIVE_CHANGED,
+                                    "The response content changed",
                                 )
                             return (
                                 request.response_json,
@@ -905,7 +926,7 @@ class Api:
                         ):
                             if version is not None and version != tool.content_version:
                                 raise DomainError(
-                                    "live_changed", "The tool content changed"
+                                    ErrorCode.LIVE_CHANGED, "The tool content changed"
                                 )
                             return (
                                 tool.result_json,
@@ -915,7 +936,7 @@ class Api:
                                 tool.content_version,
                             )
             raise DomainError(
-                "live_changed", "The temporary result changed; refresh the Turn"
+                ErrorCode.LIVE_CHANGED, "The temporary result changed; refresh the Turn"
             )
 
         def agent_live_read(params: dict[str, Any]) -> Any:
@@ -940,7 +961,9 @@ class Api:
             assert limit is not None
             assert windows_limit is not None
             if limit == 0 or windows_limit == 0:
-                raise DomainError("invalid_params", "history limits must be positive")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "history limits must be positive"
+                )
             before = _integer_param(params, "before", maximum=2**63 - 1)
             window_number: int | None | HistoryWindowFilter = HistoryWindowFilter.ALL
             if "window_number" in params:
@@ -949,7 +972,7 @@ class Api:
                 )
                 if window_number == 0:
                     raise DomainError(
-                        "invalid_params",
+                        ErrorCode.INVALID_PARAMS,
                         "window_number must be a positive integer or null",
                     )
             filtered = window_number is not HistoryWindowFilter.ALL
@@ -1067,12 +1090,18 @@ class Api:
             assert request_limit is not None
             assert windows_limit is not None
             if 0 in (message_limit, input_limit, response_limit, related_limit):
-                raise DomainError("invalid_params", "message limits must be positive")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "message limits must be positive"
+                )
             if 0 in (field_limit, request_limit, windows_limit):
-                raise DomainError("invalid_params", "history limits must be positive")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "history limits must be positive"
+                )
             run = self._scheduler.history.history_run(agent_id, sequence)
             if run is None:
-                raise DomainError("not_found", f"Turn {sequence} does not exist")
+                raise DomainError(
+                    ErrorCode.NOT_FOUND, f"Turn {sequence} does not exist"
+                )
             request_page = self._scheduler.history.model_request_summaries(
                 agent_id,
                 sequence,
@@ -1102,7 +1131,9 @@ class Api:
                     agent_id, sequence, message_offset, 16 * 1024
                 )
                 if legacy is None:
-                    raise DomainError("not_found", f"Turn {sequence} does not exist")
+                    raise DomainError(
+                        ErrorCode.NOT_FOUND, f"Turn {sequence} does not exist"
+                    )
                 next_offset = legacy.offset + len(legacy.messages)
                 messages = {
                     "messages": [{"kind": "legacy", "content": legacy.messages}],
@@ -1148,7 +1179,7 @@ class Api:
             )
             if summary is None:
                 raise DomainError(
-                    "not_found", f"Model request {ordinal} does not exist"
+                    ErrorCode.NOT_FOUND, f"Model request {ordinal} does not exist"
                 )
             input_page = self._scheduler.history.model_request_messages(
                 agent_id, sequence, ordinal, "input", input_offset, input_limit
@@ -1287,7 +1318,7 @@ class Api:
                 "settings",
                 "model",
             ):
-                raise DomainError("invalid_params", "source is invalid")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "source is invalid")
             message_index = _required_integer(params, "message_index")
             offset = _integer_param(params, "offset", default=0, maximum=2**63 - 1)
             limit = _integer_param(
@@ -1296,17 +1327,17 @@ class Api:
             assert offset is not None
             assert limit is not None
             if limit == 0:
-                raise DomainError("invalid_params", "limit must be positive")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "limit must be positive")
             path = params.get("path")
             if not isinstance(path, list) or any(
                 isinstance(item, bool) or not isinstance(item, (str, int))
                 for item in path
             ):
-                raise DomainError("invalid_params", "path must be a list")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "path must be a list")
             if source in ("parameters", "settings", "model"):
                 ordinal = _integer_param(params, "ordinal")
                 if ordinal is None:
-                    raise DomainError("invalid_params", "ordinal is required")
+                    raise DomainError(ErrorCode.INVALID_PARAMS, "ordinal is required")
                 page = self._scheduler.history.model_request_field(
                     agent_id, sequence, ordinal, source, offset, limit
                 )
@@ -1325,13 +1356,13 @@ class Api:
             if source in ("input", "response", "related"):
                 ordinal = _integer_param(params, "ordinal")
                 if ordinal is None:
-                    raise DomainError("invalid_params", "ordinal is required")
+                    raise DomainError(ErrorCode.INVALID_PARAMS, "ordinal is required")
                 raw = self._scheduler.history.model_request_message(
                     agent_id, sequence, ordinal, source, message_index
                 )
                 index = 0
             if raw is None:
-                raise DomainError("not_found", "History content does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "History content does not exist")
             return partial(text_from_history, raw, index, path, offset, limit)
 
         def agent_history_text(params: dict[str, Any]) -> Any:
@@ -1347,14 +1378,14 @@ class Api:
             sequence = _required_integer(params, "sequence")
             source = params.get("source")
             if source not in ("run", "input", "response", "related", "live"):
-                raise DomainError("invalid_params", "source is invalid")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "source is invalid")
             message_index = _required_integer(params, "message_index")
             path = params.get("path")
             if not isinstance(path, list) or any(
                 isinstance(item, bool) or not isinstance(item, (str, int))
                 for item in path
             ):
-                raise DomainError("invalid_params", "path must be a list")
+                raise DomainError(ErrorCode.INVALID_PARAMS, "path must be a list")
             ordinal = _integer_param(params, "ordinal")
             if source == "live":
                 live_raw, _, _, _, _ = live_result(params)
@@ -1366,14 +1397,16 @@ class Api:
             )
             if source in ("input", "response", "related"):
                 if ordinal is None:
-                    raise DomainError("invalid_params", "ordinal is required")
+                    raise DomainError(ErrorCode.INVALID_PARAMS, "ordinal is required")
                 raw = self._scheduler.history.model_request_message(
                     agent_id, sequence, ordinal, source, message_index
                 )
                 if raw is None:
-                    raise DomainError("not_found", "History content does not exist")
+                    raise DomainError(
+                        ErrorCode.NOT_FOUND, "History content does not exist"
+                    )
             if raw is None:
-                raise DomainError("not_found", "History content does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "History content does not exist")
             return (
                 raw,
                 0 if source in ("input", "response", "related") else message_index,
@@ -1491,7 +1524,8 @@ class Api:
                 and type(params["initialization_version"]) is not int
             ):
                 raise DomainError(
-                    "invalid_params", "Initialization version must be an integer"
+                    ErrorCode.INVALID_PARAMS,
+                    "Initialization version must be an integer",
                 )
             result = self._human().usage_advance(
                 params.get("limit", 100),
@@ -1529,7 +1563,7 @@ class Api:
             values = params.get("values", {})
             if not isinstance(values, dict):
                 raise DomainError(
-                    "invalid_setting", "Settings values must be an object"
+                    ErrorCode.INVALID_SETTING, "Settings values must be an object"
                 )
             if section == "execution":
                 result = self._scheduler.execution.configure(

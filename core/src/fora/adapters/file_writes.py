@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import Lock, RLock
 from weakref import WeakValueDictionary
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 _directory_locks: WeakValueDictionary[tuple[int, int], RLock] = WeakValueDictionary()
@@ -48,7 +49,8 @@ def replace_file(
         primary = error
         if published and isinstance(error, Exception):
             primary = DomainError(
-                "write_published", f"File already published at {target}: {error}"
+                ErrorCode.WRITE_PUBLISHED,
+                f"File already published at {target}: {error}",
             )
             raise primary from error
         raise
@@ -65,7 +67,7 @@ def replace_file(
                     ) from None
                 if published:
                     raise DomainError(
-                        "write_published",
+                        ErrorCode.WRITE_PUBLISHED,
                         f"File already published at {target}: {error}",
                     ) from error
                 raise
@@ -86,7 +88,7 @@ def create_file_exclusive(target: Path, content: str, *, prefix: str) -> Iterato
             os.link(temporary, target)
         except FileExistsError as error:
             raise DomainError(
-                "already_exists", f"Path already exists: {target}"
+                ErrorCode.ALREADY_EXISTS, f"Path already exists: {target}"
             ) from error
         published = True
         yield
@@ -94,7 +96,8 @@ def create_file_exclusive(target: Path, content: str, *, prefix: str) -> Iterato
         primary = error
         if published and isinstance(error, Exception):
             primary = DomainError(
-                "write_published", f"File already published at {target}: {error}"
+                ErrorCode.WRITE_PUBLISHED,
+                f"File already published at {target}: {error}",
             )
             raise primary from error
         raise
@@ -111,7 +114,7 @@ def create_file_exclusive(target: Path, content: str, *, prefix: str) -> Iterato
                     ) from None
                 if published:
                     raise DomainError(
-                        "write_published",
+                        ErrorCode.WRITE_PUBLISHED,
                         f"File already published at {target}: {error}",
                     ) from error
                 raise

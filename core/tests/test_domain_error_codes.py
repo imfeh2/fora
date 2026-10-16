@@ -19,7 +19,6 @@ from fora.core.attachment import (
 from fora.core.discussion import MAX_BODY_LENGTH, validate_body, validate_topic
 from fora.core.errors import DomainError
 from fora.core.member import MAX_NAME_LENGTH, validate_name
-from fora.ports.files import ConflictError
 from fora.services.history import History
 from fora.services.library import Library
 from fora.services.workspace import Workspace
@@ -130,13 +129,11 @@ def test_file_tree_requires_a_hash_before_overwriting(tmp_path) -> None:
         tree.write("notes.md", "second")
 
 
-def test_file_tree_reports_a_stale_hash_as_a_conflict(tmp_path) -> None:
+def test_file_tree_reports_a_stale_hash_as_a_content_change(tmp_path) -> None:
     tree = DirectoryTree(tmp_path)
     tree.write("notes.md", "first")
-    with pytest.raises(ConflictError) as failure:
+    with domain_error("content_changed"):
         tree.write("notes.md", "second", expected_hash="stale")
-    assert failure.value.path == "notes.md"
-    assert failure.value.expected == "stale"
 
 
 def test_file_tree_reports_missing_moves_and_existing_targets(tmp_path) -> None:

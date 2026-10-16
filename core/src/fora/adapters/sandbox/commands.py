@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path, PurePath
 
 from fora.adapters.sandbox.paths import bind_order
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 BUBBLEWRAP_CANDIDATES = ("/usr/bin/bwrap", "/bin/bwrap")
@@ -19,7 +20,7 @@ def bubblewrap_executable() -> str:
     found = shutil.which("bwrap")
     if found is None:
         raise DomainError(
-            "sandbox_unavailable",
+            ErrorCode.SANDBOX_UNAVAILABLE,
             "bubblewrap is required for filesystem write protection",
         )
     return str(Path(found).resolve())

@@ -115,6 +115,7 @@ from fora.adapters.model.observability import (
 )
 from fora.adapters.model.prompt import SYSTEM_PROMPT
 from fora.core.attachment import ViewedAttachment, ViewedImage
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, bounded_text
@@ -256,7 +257,7 @@ def build_model(config: ModelConfig) -> Model:
             and any(key in config.extra_body for key in ANTHROPIC_SAMPLING_PARAMS)
         ):
             raise DomainError(
-                "unsupported_request_body",
+                ErrorCode.UNSUPPORTED_REQUEST_BODY,
                 "This model does not support sampling fields. Remove temperature, top_p and top_k.",
             )
         return AnthropicModel(

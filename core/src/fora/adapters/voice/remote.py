@@ -11,6 +11,7 @@ import aiohttp
 
 from fora.adapters.voice.audio import AudioConverter
 from fora.adapters.voice.config import VoiceConfig
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
@@ -32,23 +33,23 @@ class RemoteRecording:
 
     def start(self) -> asyncio.Task[None]:
         if self._task is not None:
-            raise DomainError("voice_state", "Recording has already started")
+            raise DomainError(ErrorCode.VOICE_STATE, "Recording has already started")
         self._task = asyncio.create_task(self._run())
         return self._task
 
     def feed(self, frame: bytes) -> None:
         if not self._ready or self._finishing or self._cancelled:
-            raise DomainError("voice_state", "Recording is not accepting audio")
+            raise DomainError(ErrorCode.VOICE_STATE, "Recording is not accepting audio")
         if not frame or self._queued_bytes + len(frame) > self._limit:
             raise DomainError(
-                "voice_capacity", "Audio upload cannot keep up with recording"
+                ErrorCode.VOICE_CAPACITY, "Audio upload cannot keep up with recording"
             )
         self._queued_bytes += len(frame)
         self._incoming.put_nowait(frame)
 
     def stop(self) -> None:
         if not self._ready or self._finishing:
-            raise DomainError("voice_state", "Recording is not active")
+            raise DomainError(ErrorCode.VOICE_STATE, "Recording is not active")
         self._finishing = True
         self._incoming.put_nowait(None)
 
@@ -63,16 +64,16 @@ class RemoteRecording:
         message = await socket.receive()
         if message.type != aiohttp.WSMsgType.TEXT:
             raise DomainError(
-                "voice_remote_closed", "Transcription service connection closed"
+                ErrorCode.VOICE_REMOTE_CLOSED, "Transcription service connection closed"
             )
         event = json.loads(message.data)
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
             raise DomainError(
-                "voice_remote_protocol", "Invalid transcription service event"
+                ErrorCode.VOICE_REMOTE_PROTOCOL, "Invalid transcription service event"
             )
         if event["type"] == "error" or event["type"].endswith(".failed"):
             raise DomainError(
-                "voice_remote_error",
+                ErrorCode.VOICE_REMOTE_ERROR,
                 "Transcription service rejected the request; check address, model and API key",
             )
         return event
@@ -92,7 +93,7 @@ class RemoteRecording:
                     or not isinstance(event.get("item_id"), str)
                 ):
                     raise DomainError(
-                        "voice_remote_protocol", "Unexpected audio commit"
+                        ErrorCode.VOICE_REMOTE_PROTOCOL, "Unexpected audio commit"
                     )
                 committed_item = event["item_id"]
             elif kind in (
@@ -104,14 +105,15 @@ class RemoteRecording:
                     item is not None and item != event_item
                 ):
                     raise DomainError(
-                        "voice_remote_protocol", "Unexpected transcription item"
+                        ErrorCode.VOICE_REMOTE_PROTOCOL, "Unexpected transcription item"
                     )
                 item = event_item
                 if kind.endswith(".delta"):
                     delta = event.get("delta")
                     if not isinstance(delta, str) or final_text is not None:
                         raise DomainError(
-                            "voice_remote_protocol", "Invalid transcription delta"
+                            ErrorCode.VOICE_REMOTE_PROTOCOL,
+                            "Invalid transcription delta",
                         )
                     text += delta
                     await self._emit(
@@ -122,7 +124,8 @@ class RemoteRecording:
                         event.get("transcript"), str
                     ):
                         raise DomainError(
-                            "voice_remote_protocol", "Unexpected final transcript"
+                            ErrorCode.VOICE_REMOTE_PROTOCOL,
+                            "Unexpected final transcript",
                         )
                     final_text = event["transcript"]
             if (
@@ -131,7 +134,8 @@ class RemoteRecording:
                 and committed_item != item
             ):
                 raise DomainError(
-                    "voice_remote_protocol", "Audio commit and transcript item differ"
+                    ErrorCode.VOICE_REMOTE_PROTOCOL,
+                    "Audio commit and transcript item differ",
                 )
             if committed_item is not None and final_text is not None:
                 await self._emit(
@@ -152,7 +156,7 @@ class RemoteRecording:
                 if reader in done:
                     await reader
                     raise DomainError(
-                        "voice_remote_protocol",
+                        ErrorCode.VOICE_REMOTE_PROTOCOL,
                         "Transcription completed before stopping",
                     )
                 frame = pending.result()

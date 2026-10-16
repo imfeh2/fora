@@ -25,6 +25,7 @@ from fora.adapters.sqlite.store import (
 )
 from fora.adapters.sqlite.usage import UsageIndex
 from fora.adapters.voice.config import VoiceConfig
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import name_key, validate_name
 from fora.core.parameters import validate_parameters
@@ -744,7 +745,7 @@ class SqliteAgentStore:
             " AND ordinal = ? AND request_id = ?",
             (agent_id, sequence, handle.ordinal, handle.request_id),
         ):
-            raise DomainError("not_found", "Model request does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
 
     def finish_model_request(
         self,
@@ -757,7 +758,7 @@ class SqliteAgentStore:
         with self._db:
             saved = self.model_request_summary(agent_id, sequence, handle.ordinal)
             if saved is None or saved.request_id != handle.request_id:
-                raise DomainError("not_found", "Model request does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
             if saved.status in ("responded", "completed"):
                 incoming = (
                     (response_json,)
@@ -769,7 +770,7 @@ class SqliteAgentStore:
                 )
                 if existing.messages != incoming:
                     raise DomainError(
-                        "usage_conflict", "Model response is already saved"
+                        ErrorCode.USAGE_CONFLICT, "Model response is already saved"
                     )
                 return
             response_count, response_length = self._store_message_refs(
@@ -791,7 +792,7 @@ class SqliteAgentStore:
                 ),
             )
             if cursor.rowcount != 1:
-                raise DomainError("not_found", "Model request does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
             self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
     def complete_model_request(
@@ -806,7 +807,7 @@ class SqliteAgentStore:
             )
             if cursor.rowcount != 1:
                 raise DomainError(
-                    "invalid_state", "Model request has no successful response"
+                    ErrorCode.INVALID_STATE, "Model request has no successful response"
                 )
             self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
@@ -836,7 +837,7 @@ class SqliteAgentStore:
                 ),
             )
             if cursor.rowcount != 1:
-                raise DomainError("not_found", "Model request does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
 
     def fail_model_request(
         self,
@@ -860,7 +861,7 @@ class SqliteAgentStore:
                 ),
             )
             if cursor.rowcount != 1:
-                raise DomainError("not_found", "Model request does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
             self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
     def _model_request_summary(self, row: sqlite3.Row) -> AgentModelRequestSummary:
@@ -1123,11 +1124,17 @@ class SqliteAgentStore:
         }
         column = columns.get(field)
         if column is None:
-            raise DomainError("invalid_params", "Model request field is invalid")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "Model request field is invalid"
+            )
         if offset < 0:
-            raise DomainError("invalid_offset", "Model request field offset is invalid")
+            raise DomainError(
+                ErrorCode.INVALID_OFFSET, "Model request field offset is invalid"
+            )
         if limit <= 0 or limit > 16 * 1024:
-            raise DomainError("invalid_params", "Model request field limit is invalid")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "Model request field limit is invalid"
+            )
         row = first(
             self._db.execute(
                 f"SELECT length(CAST({column} AS BLOB)) AS total_bytes FROM agent_model_requests"
@@ -1136,11 +1143,12 @@ class SqliteAgentStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Model request does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
         total_bytes = int(row["total_bytes"])
         if offset > total_bytes:
             raise DomainError(
-                "invalid_offset", "Model request field offset exceeds its length"
+                ErrorCode.INVALID_OFFSET,
+                "Model request field offset exceeds its length",
             )
         start = offset
         value_row = first(
@@ -1335,7 +1343,9 @@ class SqliteAgentStore:
         total_length = int(row["total_length"])
         start = max(total_length - limit, 0) if offset is None else offset
         if start > total_length:
-            raise DomainError("invalid_offset", "History offset exceeds its length")
+            raise DomainError(
+                ErrorCode.INVALID_OFFSET, "History offset exceeds its length"
+            )
         content = first(
             self._db.execute(
                 "SELECT substr(messages_json, ?, ?) AS messages FROM agent_runs "
@@ -1541,11 +1551,13 @@ class SqliteAgentStore:
             loaded = json.loads(str(row["values_json"]))
         except json.JSONDecodeError as error:
             raise DomainError(
-                "invalid_setting", f"Settings section {section} contains invalid JSON"
+                ErrorCode.INVALID_SETTING,
+                f"Settings section {section} contains invalid JSON",
             ) from error
         if not isinstance(loaded, dict):
             raise DomainError(
-                "invalid_setting", f"Settings section {section} must be a JSON object"
+                ErrorCode.INVALID_SETTING,
+                f"Settings section {section} must be a JSON object",
             )
         return loaded
 
@@ -1563,13 +1575,15 @@ class SqliteAgentStore:
                 )
             except ValidationError:
                 raise DomainError(
-                    "invalid_model_config", "Invalid Agent model configuration"
+                    ErrorCode.INVALID_MODEL_CONFIG, "Invalid Agent model configuration"
                 ) from None
             catalog.validate_selection(selection, "New Agent")
             if self._db.execute(
                 "SELECT 1 FROM members WHERE name_key = ?", (name_key(name),)
             ):
-                raise DomainError("duplicate_name", "Member names must be unique")
+                raise DomainError(
+                    ErrorCode.DUPLICATE_NAME, "Member names must be unique"
+                )
             member = create_member(self._db, "agent", name)
             catalog.agent_configs[str(member.id)] = selection
             self.set_settings("model", catalog.model_dump())
@@ -1640,13 +1654,15 @@ class SqliteAgentStore:
                     validate_parameters(updated)
                 elif section == "voice":
                     if values.keys() - {"address", "model", "api_key"}:
-                        raise DomainError("voice_config", "Unknown voice setting")
+                        raise DomainError(
+                            ErrorCode.VOICE_CONFIG, "Unknown voice setting"
+                        )
                     model = values.get("model")
                     if "model" in values and (
                         not isinstance(model, str) or not model.strip()
                     ):
                         raise DomainError(
-                            "voice_config", "A transcription model is required"
+                            ErrorCode.VOICE_CONFIG, "A transcription model is required"
                         )
                     updated = asdict(VoiceConfig.restore(updated))
             self.set_settings(section, updated)

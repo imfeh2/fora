@@ -10,6 +10,7 @@ from fora.core.attachment import (
     identifier,
     validate_upload,
 )
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.uploads import UploadFiles, UploadStore
 
@@ -68,7 +69,7 @@ class Uploads:
         with self._lock:
             if upload_id in self._active or len(self._active) >= 2:
                 raise DomainError(
-                    "upload_busy",
+                    ErrorCode.UPLOAD_BUSY,
                     "Two files are already uploading; retry when they finish",
                 )
             record = self.store.start_upload(upload_id, owner_id)
@@ -85,7 +86,9 @@ class Uploads:
         with self._lock:
             current = self.store.get_upload(record.id, record.owner_id)
             if current.state != "receiving":
-                raise DomainError("upload_cancelled", "The upload was cancelled")
+                raise DomainError(
+                    ErrorCode.UPLOAD_CANCELLED, "The upload was cancelled"
+                )
             result = self.files.complete(record)
             self.store.finish_upload(record, result)
             return result

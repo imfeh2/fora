@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 
@@ -25,12 +26,15 @@ def validate_parameters(values: Mapping[str, object]) -> dict[str, int]:
     validated: dict[str, int] = {}
     for key, value in values.items():
         if key not in names:
-            raise DomainError("invalid_setting", f"Unknown Agent parameter: {key}")
+            raise DomainError(
+                ErrorCode.INVALID_SETTING, f"Unknown Agent parameter: {key}"
+            )
         minimum = 0 if key in ("token_limit", "request_limit") else 1
         if type(value) is not int or value < minimum:
             kind = "non-negative" if minimum == 0 else "positive"
             raise DomainError(
-                "invalid_parameter", f"Agent parameter {key} must be a {kind} integer"
+                ErrorCode.INVALID_PARAMETER,
+                f"Agent parameter {key} must be a {kind} integer",
             )
         validated[key] = value
     return validated

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.agent import AgentRun, HistorySlice, HistoryStore
 
@@ -23,10 +24,11 @@ class History:
             isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
         ):
             raise DomainError(
-                "invalid_offset", "History offset must be a non-negative integer"
+                ErrorCode.INVALID_OFFSET,
+                "History offset must be a non-negative integer",
             )
         if offset is not None and offset > MAX_SQLITE_INTEGER:
             raise DomainError(
-                "invalid_offset", "History offset exceeds the supported range"
+                ErrorCode.INVALID_OFFSET, "History offset exceeds the supported range"
             )
         return self._store.read_run_slice(self._agent_id, sequence, offset, READ_LIMIT)

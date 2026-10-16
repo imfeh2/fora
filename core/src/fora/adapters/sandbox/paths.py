@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 
@@ -17,27 +18,29 @@ class NormalizedDirectories:
 def _normalize_one(value: object, *, require_existing: bool) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise DomainError(
-            "invalid_directory", "Writable directories must be non-empty strings"
+            ErrorCode.INVALID_DIRECTORY,
+            "Writable directories must be non-empty strings",
         )
     candidate = Path(value).expanduser()
     if not candidate.is_absolute():
         if PurePosixPath(value).is_absolute():
             raise DomainError(
-                "foreign_directory",
+                ErrorCode.FOREIGN_DIRECTORY,
                 f"{value} is a POSIX path and cannot be used on this platform",
             )
         raise DomainError(
-            "invalid_directory", "Writable directories must be absolute paths"
+            ErrorCode.INVALID_DIRECTORY, "Writable directories must be absolute paths"
         )
     try:
         resolved = candidate.resolve(strict=require_existing)
     except (OSError, RuntimeError, ValueError) as error:
         raise DomainError(
-            "invalid_directory", f"Cannot resolve writable directory: {error}"
+            ErrorCode.INVALID_DIRECTORY, f"Cannot resolve writable directory: {error}"
         ) from error
     if require_existing and not resolved.is_dir():
         raise DomainError(
-            "invalid_directory", "Writable directories must be existing directories"
+            ErrorCode.INVALID_DIRECTORY,
+            "Writable directories must be existing directories",
         )
     return resolved
 

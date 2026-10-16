@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from fora.core.attachment import Attachment
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 MAX_TOPIC_LENGTH = 200
@@ -41,24 +42,26 @@ class Discussion:
 
 def validate_topic(value: object) -> str:
     if not isinstance(value, str):
-        raise DomainError("invalid_topic", "Topic must be a string")
+        raise DomainError(ErrorCode.INVALID_TOPIC, "Topic must be a string")
     topic = " ".join(value.split())
     if not topic:
-        raise DomainError("invalid_topic", "Topic must not be empty")
+        raise DomainError(ErrorCode.INVALID_TOPIC, "Topic must not be empty")
     if len(topic) > MAX_TOPIC_LENGTH:
         raise DomainError(
-            "invalid_topic", f"Topic must be at most {MAX_TOPIC_LENGTH} characters"
+            ErrorCode.INVALID_TOPIC,
+            f"Topic must be at most {MAX_TOPIC_LENGTH} characters",
         )
     return topic
 
 
 def validate_body(value: object, *, has_attachments: bool = False) -> str:
     if not isinstance(value, str):
-        raise DomainError("invalid_body", "Message body must be a string")
+        raise DomainError(ErrorCode.INVALID_BODY, "Message body must be a string")
     if not value.strip() and not has_attachments:
-        raise DomainError("invalid_body", "Message body must not be empty")
+        raise DomainError(ErrorCode.INVALID_BODY, "Message body must not be empty")
     if len(value) > MAX_BODY_LENGTH:
         raise DomainError(
-            "invalid_body", f"Message body must be at most {MAX_BODY_LENGTH} characters"
+            ErrorCode.INVALID_BODY,
+            f"Message body must be at most {MAX_BODY_LENGTH} characters",
         )
     return value

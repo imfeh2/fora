@@ -23,6 +23,7 @@ from fora.adapters.model.config import (
     validate_thinking_budget,
 )
 from fora.adapters.model.runner import build_model
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 LIST_TIMEOUT = 15.0
@@ -37,7 +38,8 @@ Builder = Callable[[ModelConfig], Model]
 def api_type_of(value: Any) -> ApiType:
     if value not in API_TYPES:
         raise DomainError(
-            "invalid_api_type", f"api_type must be one of {', '.join(API_TYPES)}"
+            ErrorCode.INVALID_API_TYPE,
+            f"api_type must be one of {', '.join(API_TYPES)}",
         )
     return cast(ApiType, value)
 
@@ -64,7 +66,8 @@ def resolve(
             provider = catalog.provider(registered.provider_id)
             if not registered.enabled or not provider.enabled:
                 raise DomainError(
-                    "model_unavailable", "The selected model or provider is disabled"
+                    ErrorCode.MODEL_UNAVAILABLE,
+                    "The selected model or provider is disabled",
                 )
             model_name = registered.model
             budget_tokens = registered.thinking_budget_tokens
@@ -73,7 +76,7 @@ def resolve(
             provider = catalog.provider(values["provider_id"])
             if not provider.enabled:
                 raise DomainError(
-                    "model_unavailable", "The selected provider is disabled"
+                    ErrorCode.MODEL_UNAVAILABLE, "The selected provider is disabled"
                 )
             model_name = str(values.get("model") or "")
             budget_tokens = values.get("thinking_budget_tokens")
@@ -99,7 +102,8 @@ def resolve(
         api_key = str((stored or {}).get("api_key") or "").strip()
     if not api_key:
         raise DomainError(
-            "model_key_missing", "Enter an API key or save one in Settings first"
+            ErrorCode.MODEL_KEY_MISSING,
+            "Enter an API key or save one in Settings first",
         )
     model = str(values.get("model") or "").strip()
     if model_required and not model:
@@ -155,7 +159,7 @@ def list_models(
         if isinstance(failure, DomainError):
             raise
         raise DomainError(
-            "model_list_failed",
+            ErrorCode.MODEL_LIST_FAILED,
             sanitize(describe(failure, LIST_TIMEOUT), config.api_key),
         ) from None
     return {"models": sorted({name.removeprefix("models/") for name in names if name})}
@@ -188,7 +192,7 @@ def try_model(
         if isinstance(failure, DomainError):
             raise
         raise DomainError(
-            "model_test_failed",
+            ErrorCode.MODEL_TEST_FAILED,
             sanitize(describe(failure, TEST_TIMEOUT), config.api_key),
         ) from None
     latency_ms = int((time.perf_counter() - started) * 1000)

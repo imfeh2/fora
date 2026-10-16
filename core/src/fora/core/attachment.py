@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 MIB = 1024 * 1024
@@ -63,13 +64,13 @@ class Upload:
 
 def identifier(value: object) -> str:
     if not isinstance(value, str):
-        raise DomainError("invalid_id", "Expected a UUID")
+        raise DomainError(ErrorCode.INVALID_ID, "Expected a UUID")
     try:
         parsed = UUID(value)
     except ValueError as error:
-        raise DomainError("invalid_id", "Expected a UUID") from error
+        raise DomainError(ErrorCode.INVALID_ID, "Expected a UUID") from error
     if str(parsed) != value:
-        raise DomainError("invalid_id", "Expected a canonical UUID")
+        raise DomainError(ErrorCode.INVALID_ID, "Expected a canonical UUID")
     return value
 
 
@@ -83,19 +84,23 @@ def validate_upload(name: object, size: object, media_type: object) -> None:
         or "\\" in name
         or name in {".", ".."}
     ):
-        raise DomainError("invalid_filename", "Choose a filename of 1–255 characters")
+        raise DomainError(
+            ErrorCode.INVALID_FILENAME, "Choose a filename of 1–255 characters"
+        )
     if type(size) is not int or not 0 <= size <= MAX_FILE_BYTES:
-        raise DomainError("file_too_large", "Files must be at most 20 MiB")
+        raise DomainError(ErrorCode.FILE_TOO_LARGE, "Files must be at most 20 MiB")
     if not isinstance(media_type, str) or len(media_type) > 127:
-        raise DomainError("invalid_media_type", "Invalid file media type")
+        raise DomainError(ErrorCode.INVALID_MEDIA_TYPE, "Invalid file media type")
     if media_type in IMAGE_TYPES and size > MAX_IMAGE_BYTES:
-        raise DomainError("image_too_large", "Images must be at most 5 MiB")
+        raise DomainError(ErrorCode.IMAGE_TOO_LARGE, "Images must be at most 5 MiB")
 
 
 def validate_attachments(attachments: tuple[Attachment, ...]) -> None:
     if len(attachments) > MAX_FILES:
-        raise DomainError("too_many_files", "A message can contain at most 10 files")
+        raise DomainError(
+            ErrorCode.TOO_MANY_FILES, "A message can contain at most 10 files"
+        )
     if sum(item.size for item in attachments) > MAX_MESSAGE_BYTES:
         raise DomainError(
-            "attachments_too_large", "Message files must total at most 50 MiB"
+            ErrorCode.ATTACHMENTS_TOO_LARGE, "Message files must total at most 50 MiB"
         )

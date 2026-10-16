@@ -6,6 +6,7 @@ import uuid
 
 from fora.adapters.sqlite.store import LockedConnection, first, now, reading
 from fora.core.discussion import Message
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.agent import (
     DiscussionPreview,
@@ -80,7 +81,7 @@ def key_values(key: GenerationKey) -> tuple[int, int, int, int]:
         or min(values[:3]) < 1
         or values[3] < 0
     ):
-        raise DomainError("invalid_generation", "Invalid generation identity")
+        raise DomainError(ErrorCode.INVALID_GENERATION, "Invalid generation identity")
     return values
 
 
@@ -100,7 +101,7 @@ def part_value(row: sqlite3.Row) -> GenerationPart:
         row[field] is not None and not isinstance(row[field], str)
         for field in ("tool_name", "tool_call_id")
     ):
-        raise DomainError("invalid_generation", "Tool identity must be text")
+        raise DomainError(ErrorCode.INVALID_GENERATION, "Tool identity must be text")
     return GenerationPart(
         row_key(row),
         row["part_kind"],
@@ -130,14 +131,16 @@ def preview_value(row: sqlite3.Row) -> DiscussionPreview:
 
 def text_bounds(revision: int, offset: int, limit: int) -> None:
     if type(revision) is not int or revision < 1:
-        raise DomainError("invalid_pagination", "Invalid generation revision")
+        raise DomainError(ErrorCode.INVALID_PAGINATION, "Invalid generation revision")
     if (
         type(offset) is not int
         or offset < 0
         or type(limit) is not int
         or not 1 <= limit <= 65536
     ):
-        raise DomainError("invalid_pagination", "Invalid generation text bounds")
+        raise DomainError(
+            ErrorCode.INVALID_PAGINATION, "Invalid generation text bounds"
+        )
 
 
 def text_page(
@@ -145,7 +148,9 @@ def text_page(
 ) -> GenerationTextPage:
     text_bounds(revision, offset, limit)
     if offset > total_bytes:
-        raise DomainError("invalid_pagination", "Text offset exceeds content length")
+        raise DomainError(
+            ErrorCode.INVALID_PAGINATION, "Text offset exceeds content length"
+        )
     end = offset + len(value)
     decoder = codecs.getincrementaldecoder("utf-8")("strict")
     try:
@@ -153,11 +158,11 @@ def text_page(
         end -= len(decoder.getstate()[0])
     except UnicodeDecodeError as error:
         raise DomainError(
-            "invalid_pagination", "Text offset must be a UTF-8 boundary"
+            ErrorCode.INVALID_PAGINATION, "Text offset must be a UTF-8 boundary"
         ) from error
     if end == offset and offset < total_bytes:
         raise DomainError(
-            "invalid_pagination", "Text limit must include a complete character"
+            ErrorCode.INVALID_PAGINATION, "Text limit must include a complete character"
         )
     return GenerationTextPage(
         revision, offset, end, total_bytes, content, end < total_bytes
@@ -183,7 +188,9 @@ class SqliteGenerationStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Model request identity does not exist")
+            raise DomainError(
+                ErrorCode.NOT_FOUND, "Model request identity does not exist"
+            )
         return row
 
     def _part(self, key: GenerationKey) -> sqlite3.Row | None:
@@ -215,7 +222,7 @@ class SqliteGenerationStore:
             update.status not in ("generating", "completed", "failed", "interrupted")
             or not update.part_kind
         ):
-            raise DomainError("invalid_generation", "Invalid generation state")
+            raise DomainError(ErrorCode.INVALID_GENERATION, "Invalid generation state")
         with self._db:
             request = self._require_request(key)
             previous = self._part(key)
@@ -229,7 +236,7 @@ class SqliteGenerationStore:
                 and request["status"] != "pending"
             ):
                 raise DomainError(
-                    "generation_closed", "Model request is already closed"
+                    ErrorCode.GENERATION_CLOSED, "Model request is already closed"
                 )
             if previous is not None and (
                 previous["status"] in ("failed", "interrupted")
@@ -269,7 +276,9 @@ class SqliteGenerationStore:
                 or candidate.discussion_id <= 0
                 or not isinstance(candidate.body, str)
             ):
-                raise DomainError("invalid_generation", "Invalid preview candidate")
+                raise DomainError(
+                    ErrorCode.INVALID_GENERATION, "Invalid preview candidate"
+                )
             allowed = candidate is not None and self._sender_allowed(
                 candidate.discussion_id, key.agent_id
             )
@@ -332,7 +341,7 @@ class SqliteGenerationStore:
         self._require_request(key)
         row = self._part(key)
         if row is None:
-            raise DomainError("not_found", "Generation part does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "Generation part does not exist")
         return part_value(row)
 
     @reading
@@ -351,12 +360,14 @@ class SqliteGenerationStore:
             or type(after) is not int
             or after < -1
         ):
-            raise DomainError("invalid_pagination", "Invalid generation part bounds")
+            raise DomainError(
+                ErrorCode.INVALID_PAGINATION, "Invalid generation part bounds"
+            )
         if not self._db.execute(
             "SELECT 1 FROM agent_model_requests WHERE agent_id = ? AND sequence = ? AND ordinal = ?",
             (agent_id, sequence, ordinal),
         ):
-            raise DomainError("not_found", "Model request does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
         return tuple(
             part_value(row)
             for row in self._db.execute(
@@ -376,7 +387,9 @@ class SqliteGenerationStore:
             "SELECT 1 FROM discussion_members dm JOIN members m ON m.id = dm.member_id WHERE dm.discussion_id = ? AND dm.member_id = ? AND m.deleted = 0",
             (discussion_id, member_id),
         ):
-            raise DomainError("not_a_member", "You do not belong to this Discussion")
+            raise DomainError(
+                ErrorCode.NOT_A_MEMBER, "You do not belong to this Discussion"
+            )
 
     @reading
     def previews(
@@ -390,7 +403,7 @@ class SqliteGenerationStore:
     ) -> tuple[DiscussionPreview, ...]:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise DomainError(
-                "invalid_pagination", "Preview limit must be from 1 to 100"
+                ErrorCode.INVALID_PAGINATION, "Preview limit must be from 1 to 100"
             )
         self._reader_allowed(discussion_id, member_id)
         parameters: list[object] = [discussion_id]
@@ -423,7 +436,9 @@ class SqliteGenerationStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Preview is not visible in this Discussion")
+            raise DomainError(
+                ErrorCode.NOT_FOUND, "Preview is not visible in this Discussion"
+            )
         return preview_value(row)
 
     @reading
@@ -438,12 +453,12 @@ class SqliteGenerationStore:
     ) -> GenerationTextPage:
         text_bounds(revision, offset, limit)
         if not isinstance(field, str) or field not in TEXT_FIELDS:
-            raise DomainError("invalid_params", "Generation field is invalid")
+            raise DomainError(ErrorCode.INVALID_PARAMS, "Generation field is invalid")
         expression = TEXT_FIELDS[field]
         part = self.part(key)
         if part.revision != revision:
             raise DomainError(
-                "generation_changed", "Generation content revision changed"
+                ErrorCode.GENERATION_CHANGED, "Generation content revision changed"
             )
         row = first(
             self._db.execute(
@@ -453,7 +468,7 @@ class SqliteGenerationStore:
         )
         assert row is not None
         if row["content"] is None:
-            raise DomainError("not_found", "Generation field does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "Generation field does not exist")
         return text_page(
             row["content"], row["total_bytes"], part.revision, offset, limit
         )
@@ -477,9 +492,13 @@ class SqliteGenerationStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Preview is not visible in this Discussion")
+            raise DomainError(
+                ErrorCode.NOT_FOUND, "Preview is not visible in this Discussion"
+            )
         if row["revision"] != revision:
-            raise DomainError("generation_changed", "Preview content revision changed")
+            raise DomainError(
+                ErrorCode.GENERATION_CHANGED, "Preview content revision changed"
+            )
         return text_page(row["content"], row["total_bytes"], revision, offset, limit)
 
     def link(self, key: GenerationKey, message: Message) -> DiscussionPreview:
@@ -487,10 +506,11 @@ class SqliteGenerationStore:
             self.part(key)
             row = self._preview(key)
             if row is None:
-                raise DomainError("not_found", "Preview does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "Preview does not exist")
             if message.sender_id != key.agent_id:
                 raise DomainError(
-                    "invalid_generation", "Message sender differs from preview sender"
+                    ErrorCode.INVALID_GENERATION,
+                    "Message sender differs from preview sender",
                 )
             if row["status"] == "sent":
                 if (row["discussion_id"], row["message_id"]) != (
@@ -498,7 +518,8 @@ class SqliteGenerationStore:
                     message.id,
                 ):
                     raise DomainError(
-                        "message_conflict", "Preview already belongs to another message"
+                        ErrorCode.MESSAGE_CONFLICT,
+                        "Preview already belongs to another message",
                     )
                 return preview_value(row)
             self._db.execute(

@@ -35,6 +35,7 @@ from fora.adapters.websocket.address import (
 from fora.adapters.websocket.local_names import REFRESH_INTERVAL, collect_names
 from fora.adapters.websocket.origin_error import origin_error_page
 from fora.core.attachment import Upload
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.usage import usage_session
 from fora.services.uploads import Uploads
@@ -1049,7 +1050,7 @@ class WebServer:
                         and request.content_length != record.size
                     ):
                         raise DomainError(
-                            "upload_size_mismatch",
+                            ErrorCode.UPLOAD_SIZE_MISMATCH,
                             "The request size does not match the file",
                         )
                     received = 0
@@ -1061,7 +1062,7 @@ class WebServer:
                         received += len(chunk)
                         if received > record.size:
                             raise DomainError(
-                                "file_too_large",
+                                ErrorCode.FILE_TOO_LARGE,
                                 "The request exceeds the declared file size",
                             )
                         await worker(target.write, chunk)
@@ -1120,7 +1121,7 @@ class WebServer:
         size = target.stat().st_size
         if size > LIBRARY_MAX_BYTES:
             raise DomainError(
-                "file_too_large",
+                ErrorCode.FILE_TOO_LARGE,
                 f"This file is {size / (1024 * 1024):.1f} MB; previews are limited to "
                 f"{LIBRARY_MAX_BYTES // (1024 * 1024)} MB",
             )

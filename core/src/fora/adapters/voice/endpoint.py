@@ -9,6 +9,7 @@ from aiohttp import WSMsgType, web
 
 from fora.adapters.voice.config import VoiceConfig
 from fora.adapters.voice.remote import RemoteRecording
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 
@@ -53,7 +54,8 @@ class VoiceEndpoint:
                     if message.type == WSMsgType.BINARY:
                         if recording is None:
                             raise DomainError(
-                                "voice_state", "Start recording before sending audio"
+                                ErrorCode.VOICE_STATE,
+                                "Start recording before sending audio",
                             )
                         recording.feed(message.data)
                         continue
@@ -64,13 +66,14 @@ class VoiceEndpoint:
                     command = json.loads(message.data)
                     if not isinstance(command, dict):
                         raise DomainError(
-                            "voice_command", "Expected a voice command object"
+                            ErrorCode.VOICE_COMMAND, "Expected a voice command object"
                         )
                     action = command.get("type")
                     if action == "start":
                         if recording is not None:
                             raise DomainError(
-                                "voice_state", "This connection already has a recording"
+                                ErrorCode.VOICE_STATE,
+                                "This connection already has a recording",
                             )
                         config = VoiceConfig.restore(
                             await asyncio.to_thread(self._read_config)
@@ -82,14 +85,14 @@ class VoiceEndpoint:
                             or command.get("channels") != 1
                         ):
                             raise DomainError(
-                                "voice_format",
+                                ErrorCode.VOICE_FORMAT,
                                 "Declare mono f32le PCM and its sample rate",
                             )
                         if supervisor is not None:
                             await supervisor
                         if not config.api_key.strip():
                             raise DomainError(
-                                "voice_config",
+                                ErrorCode.VOICE_CONFIG,
                                 "Save an API key before testing transcription",
                             )
                         terminal = None
@@ -97,7 +100,9 @@ class VoiceEndpoint:
                         supervisor = asyncio.create_task(supervise(recording.start()))
                     elif action == "stop":
                         if recording is None:
-                            raise DomainError("voice_state", "No active recording")
+                            raise DomainError(
+                                ErrorCode.VOICE_STATE, "No active recording"
+                            )
                         recording.stop()
                         await emit({"type": "finishing"})
                     elif action == "cancel":
@@ -110,12 +115,14 @@ class VoiceEndpoint:
                             supervisor = None
                         await emit({"type": "cancelled"})
                     else:
-                        raise DomainError("voice_command", "Unknown voice command")
+                        raise DomainError(
+                            ErrorCode.VOICE_COMMAND, "Unknown voice command"
+                        )
                 except json.JSONDecodeError:
                     await emit(
                         {
                             "type": "error",
-                            "code": "voice_command",
+                            "code": ErrorCode.VOICE_COMMAND,
                             "message": "Invalid voice command JSON",
                         }
                     )

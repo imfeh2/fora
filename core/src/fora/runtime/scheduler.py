@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from weakref import WeakValueDictionary
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import AgentParameters, agent_parameters
 from fora.locking import LockLevel, OrderedRLock
@@ -306,7 +307,7 @@ class Scheduler:
     def _require_agent(self, agent_id: int) -> None:
         member = self.store.get_member(agent_id)
         if member is None or not member.is_agent or member.deleted:
-            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
 
     def _obstacles(self, agent_id: int) -> list[dict[str, str]]:
         found = []
@@ -422,7 +423,7 @@ class Scheduler:
         self._changed("organization.changed", {"id": agent_id})
         if failure is not None:
             raise DomainError(
-                "pause_save_failed",
+                ErrorCode.PAUSE_SAVE_FAILED,
                 "The current Turn will finish; saving the pause intent failed",
             ) from failure
         return self.agent_status(agent_id)
@@ -436,7 +437,7 @@ class Scheduler:
                 or agent_id in self._blocked
             ):
                 raise DomainError(
-                    "not_permitted", "Only a Human can recover this Agent"
+                    ErrorCode.NOT_PERMITTED, "Only a Human can recover this Agent"
                 )
             active = agent_id in self._active
             with self.history.transaction():
@@ -453,7 +454,8 @@ class Scheduler:
                         runs = self.history.runs(agent_id, limit=1)
                         if not runs or runs[0].sequence != failure.sequence:
                             raise DomainError(
-                                "history_changed", "The failed Turn identity changed"
+                                ErrorCode.HISTORY_CHANGED,
+                                "The failed Turn identity changed",
                             )
                         stored = runs[0].messages_json
                         messages = (
@@ -598,7 +600,7 @@ class Scheduler:
     def tools_for(self, agent_id: int) -> AgentTools:
         member = self.store.get_member(agent_id)
         if member is None:
-            raise DomainError("not_found", f"Member {agent_id} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Member {agent_id} does not exist")
         return self.tools_for_actor(Actor(agent_id, member.is_agent))
 
     def tools_for_actor(

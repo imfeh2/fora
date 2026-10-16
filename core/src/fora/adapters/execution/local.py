@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from fora.adapters.execution.editing import edit_file
 from fora.adapters.execution.platforms import create_backend, entrypoint
 from fora.adapters.sandbox.paths import normalize_directories, normalize_tolerantly
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.execution import EditResult, RunResult
 
@@ -31,15 +32,23 @@ def _read_file_protocol_error(
     exit_code: int, stdout: bytes, stderr: bytes
 ) -> DomainError:
     if stdout:
-        return DomainError("execution_protocol", "read_file returned unexpected stdout")
+        return DomainError(
+            ErrorCode.EXECUTION_PROTOCOL, "read_file returned unexpected stdout"
+        )
     if exit_code != 3 or not stderr or len(stderr) > 8192:
-        return DomainError("execution_protocol", "read_file returned an invalid error")
+        return DomainError(
+            ErrorCode.EXECUTION_PROTOCOL, "read_file returned an invalid error"
+        )
     try:
         payload = json.loads(stderr.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return DomainError("execution_protocol", "read_file returned invalid JSON")
+        return DomainError(
+            ErrorCode.EXECUTION_PROTOCOL, "read_file returned invalid JSON"
+        )
     if not isinstance(payload, dict) or set(payload) != {"code", "message"}:
-        return DomainError("execution_protocol", "read_file returned invalid fields")
+        return DomainError(
+            ErrorCode.EXECUTION_PROTOCOL, "read_file returned invalid fields"
+        )
     code = payload["code"]
     message = payload["message"]
     if (
@@ -49,7 +58,7 @@ def _read_file_protocol_error(
         or len(message) > 512
     ):
         return DomainError(
-            "execution_protocol", "read_file returned invalid diagnostics"
+            ErrorCode.EXECUTION_PROTOCOL, "read_file returned invalid diagnostics"
         )
     return DomainError(code, message)
 
@@ -93,10 +102,13 @@ class LocalExecution:
     ) -> bytes:
         if not isinstance(path, str) or "\0" in path or not Path(path).is_absolute():
             raise DomainError(
-                "invalid_path", "path must be an absolute path without NUL characters"
+                ErrorCode.INVALID_PATH,
+                "path must be an absolute path without NUL characters",
             )
         if type(max_bytes) is not int or max_bytes <= 0:
-            raise DomainError("invalid_limit", "max_bytes must be a positive integer")
+            raise DomainError(
+                ErrorCode.INVALID_LIMIT, "max_bytes must be a positive integer"
+            )
         code, stdout, stderr = self._execute(
             [*entrypoint(), "--read-file", path, str(max_bytes)],
             cwd=str(Path(sys.executable).resolve().parent),
@@ -105,7 +117,7 @@ class LocalExecution:
         if code == 0:
             if stderr or len(stdout) > max_bytes + 1:
                 raise DomainError(
-                    "execution_protocol", "read_file returned invalid output"
+                    ErrorCode.EXECUTION_PROTOCOL, "read_file returned invalid output"
                 )
             return stdout
         raise _read_file_protocol_error(code, stdout, stderr)
@@ -138,10 +150,10 @@ class LocalExecution:
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
         if cwd is None or not Path(cwd).is_absolute():
-            raise DomainError("invalid_cwd", "cwd must be an absolute path")
+            raise DomainError(ErrorCode.INVALID_CWD, "cwd must be an absolute path")
         resolved = Path(cwd).resolve()
         if not resolved.is_dir():
-            raise DomainError("invalid_cwd", f"{cwd} is not a directory")
+            raise DomainError(ErrorCode.INVALID_CWD, f"{cwd} is not a directory")
         return resolved
 
     def _execute(
@@ -156,17 +168,19 @@ class LocalExecution:
             isinstance(item, str) and "\0" not in item for item in argv
         ):
             raise DomainError(
-                "invalid_argv",
+                ErrorCode.INVALID_ARGV,
                 "argv must be a non-empty list of strings without NUL characters",
             )
         if timeout is not None and (type(timeout) is not int or timeout <= 0):
-            raise DomainError("invalid_timeout", "timeout must be a positive integer")
+            raise DomainError(
+                ErrorCode.INVALID_TIMEOUT, "timeout must be a positive integer"
+            )
         directory = self._resolve_cwd(cwd)
         try:
             with self._lock:
                 if self._closed:
                     raise DomainError(
-                        "execution_closed", "Execution environment is closed"
+                        ErrorCode.EXECUTION_CLOSED, "Execution environment is closed"
                     )
                 roots = (
                     self._roots
@@ -182,7 +196,7 @@ class LocalExecution:
                 )
                 self._processes.add(process)
         except FileNotFoundError as error:
-            raise DomainError("command_not_found", str(error)) from error
+            raise DomainError(ErrorCode.COMMAND_NOT_FOUND, str(error)) from error
         failure: BaseException | None = None
         try:
             stdout, stderr = self._backend.communicate(
@@ -205,7 +219,8 @@ class LocalExecution:
                 raise failure from None
             if isinstance(error, subprocess.TimeoutExpired):
                 raise DomainError(
-                    "timeout", f"Command exceeded {timeout or DEFAULT_TIMEOUT} seconds"
+                    ErrorCode.TIMEOUT,
+                    f"Command exceeded {timeout or DEFAULT_TIMEOUT} seconds",
                 ) from error
             raise
         finally:

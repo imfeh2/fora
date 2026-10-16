@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 Decision = Literal["allow", "deny"]
@@ -30,5 +31,6 @@ class Authorizer:
     def check(self, actor: Actor, capability: str, target: object = None) -> None:
         if self._policy(actor, capability, target) != "allow":
             raise DomainError(
-                "not_permitted", f"{capability} is not permitted for this Member"
+                ErrorCode.NOT_PERMITTED,
+                f"{capability} is not permitted for this Member",
             )

@@ -10,6 +10,7 @@ from fora.adapters.file_writes import (
     replace_file,
 )
 from fora.adapters.sandbox.paths import is_within
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.execution import EditResult
 
@@ -20,50 +21,58 @@ def _edit_error(code: str, index: int, message: str) -> DomainError:
 
 def _parse_edits(edits: object, *, create: bool) -> list[tuple[str, str, bool]]:
     if not isinstance(edits, Sequence) or isinstance(edits, (str, bytes, bytearray)):
-        raise DomainError("invalid_edit", "edits must be a non-empty array")
+        raise DomainError(ErrorCode.INVALID_EDIT, "edits must be a non-empty array")
     if not edits:
-        raise DomainError("invalid_edit", "edits must be a non-empty array")
+        raise DomainError(ErrorCode.INVALID_EDIT, "edits must be a non-empty array")
     parsed: list[tuple[str, str, bool]] = []
     for index, item in enumerate(edits, 1):
         if not isinstance(item, Mapping):
-            raise _edit_error("invalid_edit", index, "edit must be an object")
+            raise _edit_error(ErrorCode.INVALID_EDIT, index, "edit must be an object")
         unknown = set(item) - {"old_text", "new_text", "replace_all"}
         if unknown:
             raise _edit_error(
-                "invalid_edit", index, f"unknown fields: {sorted(unknown)}"
+                ErrorCode.INVALID_EDIT, index, f"unknown fields: {sorted(unknown)}"
             )
         missing = [name for name in ("old_text", "new_text") if name not in item]
         if missing:
             raise _edit_error(
-                "invalid_edit", index, f"missing fields: {', '.join(missing)}"
+                ErrorCode.INVALID_EDIT, index, f"missing fields: {', '.join(missing)}"
             )
         old_text = item["old_text"]
         new_text = item["new_text"]
         replace_all = item.get("replace_all", False)
         if not isinstance(old_text, str):
-            raise _edit_error("invalid_edit", index, "old_text must be a string")
+            raise _edit_error(
+                ErrorCode.INVALID_EDIT, index, "old_text must be a string"
+            )
         if not isinstance(new_text, str):
-            raise _edit_error("invalid_edit", index, "new_text must be a string")
+            raise _edit_error(
+                ErrorCode.INVALID_EDIT, index, "new_text must be a string"
+            )
         if type(replace_all) is not bool:
-            raise _edit_error("invalid_edit", index, "replace_all must be a boolean")
+            raise _edit_error(
+                ErrorCode.INVALID_EDIT, index, "replace_all must be a boolean"
+            )
         if create:
             if old_text != "":
                 raise _edit_error(
-                    "invalid_edit", index, "old_text must be empty when creating"
+                    ErrorCode.INVALID_EDIT,
+                    index,
+                    "old_text must be empty when creating",
                 )
             if replace_all:
                 raise _edit_error(
-                    "invalid_edit",
+                    ErrorCode.INVALID_EDIT,
                     index,
                     "replace_all cannot be used when creating",
                 )
         elif not old_text:
             raise _edit_error(
-                "invalid_edit", index, "old_text must be a non-empty string"
+                ErrorCode.INVALID_EDIT, index, "old_text must be a non-empty string"
             )
         parsed.append((old_text, new_text, replace_all))
     if create and len(parsed) != 1:
-        raise DomainError("invalid_edit", "create requires exactly one edit")
+        raise DomainError(ErrorCode.INVALID_EDIT, "create requires exactly one edit")
     return parsed
 
 
@@ -75,13 +84,13 @@ def edit_file(
     create: bool = False,
 ) -> EditResult:
     if type(create) is not bool:
-        raise DomainError("invalid_edit", "create must be a boolean")
+        raise DomainError(ErrorCode.INVALID_EDIT, "create must be a boolean")
     parsed = _parse_edits(edits, create=create)
     candidate = Path(path)
     if not candidate.is_absolute():
-        raise DomainError("invalid_path", "path must be an absolute path")
+        raise DomainError(ErrorCode.INVALID_PATH, "path must be an absolute path")
     if create and not candidate.name:
-        raise DomainError("invalid_path", "path must name a file")
+        raise DomainError(ErrorCode.INVALID_PATH, "path must name a file")
     if create:
         parent = candidate.parent.resolve()
         target = parent / candidate.name
@@ -89,10 +98,11 @@ def edit_file(
         target = candidate.resolve()
     if not is_within(target, [Path(item).resolve() for item in directories]):
         raise DomainError(
-            "not_writable", "Path is outside the configured writable directories"
+            ErrorCode.NOT_WRITABLE,
+            "Path is outside the configured writable directories",
         )
     if not target.parent.is_dir():
-        raise DomainError("not_found", f"{path} does not exist")
+        raise DomainError(ErrorCode.NOT_FOUND, f"{path} does not exist")
     with directory_lock(target):
         if create:
             content = parsed[0][1]
@@ -111,11 +121,13 @@ def edit_file(
                     0,
                 )
         if not target.is_file():
-            raise DomainError("not_found", f"{path} does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, f"{path} does not exist")
         try:
             original = target.read_bytes().decode("utf-8")
         except UnicodeDecodeError as error:
-            raise DomainError("not_text", f"{path} is not valid UTF-8") from error
+            raise DomainError(
+                ErrorCode.NOT_TEXT, f"{path} is not valid UTF-8"
+            ) from error
         matches: list[tuple[int, int, str, int]] = []
         for index, (old_text, new_text, replace_all) in enumerate(parsed, 1):
             occurrences: list[tuple[int, int]] = []
@@ -128,11 +140,11 @@ def edit_file(
                 start = found + 1
             if not occurrences:
                 raise _edit_error(
-                    "no_match", index, "old_text does not appear in the file"
+                    ErrorCode.NO_MATCH, index, "old_text does not appear in the file"
                 )
             if len(occurrences) > 1 and not replace_all:
                 raise _edit_error(
-                    "ambiguous_match",
+                    ErrorCode.AMBIGUOUS_MATCH,
                     index,
                     "old_text appears multiple times; pass replace_all to change all",
                 )
@@ -142,7 +154,7 @@ def edit_file(
         for start, end, _, index in ordered[1:]:
             if start < active_end:
                 raise DomainError(
-                    "overlapping_edits",
+                    ErrorCode.OVERLAPPING_EDITS,
                     f"edit {index} overlaps edit {active_index} "
                     f"at characters {start}-{min(end, active_end)}",
                 )

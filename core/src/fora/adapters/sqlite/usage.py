@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from fora.adapters.sqlite.store import LockedConnection, first
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.usage import UsageCache, UsageObservation
 
@@ -84,7 +85,7 @@ def number(usage: dict[str, Any] | None, key: str) -> int | None:
     if value is None:
         return None
     if type(value) is not int or value < 0:
-        raise DomainError("usage_invalid", f"Invalid saved usage field: {key}")
+        raise DomainError(ErrorCode.USAGE_INVALID, f"Invalid saved usage field: {key}")
     return value
 
 
@@ -92,10 +93,14 @@ def utc(value: Any) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise DomainError("invalid_params", "Usage time must be an ISO 8601 string")
+        raise DomainError(
+            ErrorCode.INVALID_PARAMS, "Usage time must be an ISO 8601 string"
+        )
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        raise DomainError("invalid_params", "Usage time must include a timezone")
+        raise DomainError(
+            ErrorCode.INVALID_PARAMS, "Usage time must include a timezone"
+        )
     return parsed.astimezone(UTC).isoformat(timespec="microseconds")
 
 
@@ -342,7 +347,7 @@ class UsageIndex:
             )
             if any(not row["valid"] or row["kind"] != "array" for row in rows):
                 raise DomainError(
-                    "usage_invalid",
+                    ErrorCode.USAGE_INVALID,
                     f"Invalid response for {agent_id}/{sequence}/{ordinal}",
                 )
             if not sum(row["count"] for row in rows):
@@ -358,7 +363,7 @@ class UsageIndex:
             if str(error) != "malformed JSON":
                 raise
             raise DomainError(
-                "usage_invalid",
+                ErrorCode.USAGE_INVALID,
                 f"Invalid response for {agent_id}/{sequence}/{ordinal}: malformed JSON",
             ) from error
         if (
@@ -366,7 +371,8 @@ class UsageIndex:
             or sum(row["count"] for row in rows) > 1
         ):
             raise DomainError(
-                "usage_invalid", f"Invalid response for {agent_id}/{sequence}/{ordinal}"
+                ErrorCode.USAGE_INVALID,
+                f"Invalid response for {agent_id}/{sequence}/{ordinal}",
             )
         populated = [row for row in rows if row["count"]]
         if not populated:
@@ -378,13 +384,14 @@ class UsageIndex:
             or row["usage_metadata_kind"] not in (None, "null", "object")
         ):
             raise DomainError(
-                "usage_invalid",
+                ErrorCode.USAGE_INVALID,
                 f"Invalid response metadata for {agent_id}/{sequence}/{ordinal}",
             )
         kind, usage, metadata = json.loads(row["fields"], parse_float=Decimal)
         if kind != "response" or (usage is not None and not isinstance(usage, dict)):
             raise DomainError(
-                "usage_invalid", f"Invalid usage for {agent_id}/{sequence}/{ordinal}"
+                ErrorCode.USAGE_INVALID,
+                f"Invalid usage for {agent_id}/{sequence}/{ordinal}",
             )
         return True, usage, metadata or {}
 
@@ -514,26 +521,26 @@ class UsageIndex:
     ) -> dict[str, Any]:
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise DomainError(
-                "invalid_params", "Index batch limit must be between 1 and 1000"
+                ErrorCode.INVALID_PARAMS, "Index batch limit must be between 1 and 1000"
             )
         if (
             initialization_version is not None
             and type(initialization_version) is not int
         ):
             raise DomainError(
-                "invalid_params", "Initialization version must be an integer"
+                ErrorCode.INVALID_PARAMS, "Initialization version must be an integer"
             )
         try:
             return self._advance(limit, initialization_version)
         except (ValueError, TypeError, KeyError, DomainError) as error:
-            if isinstance(error, DomainError) and error.code == "usage_changed":
+            if isinstance(error, DomainError) and error.code == ErrorCode.USAGE_CHANGED:
                 raise
             message = f"Usage index failed: {error}"
             with self.db:
                 self.db.execute(
                     "UPDATE usage_index_state SET error = ? WHERE id = 1", (message,)
                 )
-            raise DomainError("usage_index_failed", message) from error
+            raise DomainError(ErrorCode.USAGE_INDEX_FAILED, message) from error
 
     def _advance(
         self, limit: int, initialization_version: int | None
@@ -545,7 +552,8 @@ class UsageIndex:
                 and initialization_version != state["version"]
             ):
                 raise DomainError(
-                    "usage_changed", "Usage initialization changed; refresh this range"
+                    ErrorCode.USAGE_CHANGED,
+                    "Usage initialization changed; refresh this range",
                 )
             if state["ready"]:
                 return state
@@ -559,7 +567,7 @@ class UsageIndex:
                     self.sync_request(row["agent_id"], row["sequence"], row["ordinal"])
                 except (ValueError, TypeError, KeyError, DomainError) as error:
                     raise DomainError(
-                        "usage_invalid",
+                        ErrorCode.USAGE_INVALID,
                         f"Request {row['agent_id']}/{row['sequence']}/{row['ordinal']}: {error}",
                     ) from error
                 self.db.execute(
@@ -576,7 +584,7 @@ class UsageIndex:
                     self.sync_turn(row["agent_id"], row["sequence"])
                 except (ValueError, TypeError, KeyError, DomainError) as error:
                     raise DomainError(
-                        "usage_invalid",
+                        ErrorCode.USAGE_INVALID,
                         f"Turn {row['agent_id']}/{row['sequence']}: {error}",
                     ) from error
                 self.db.execute(
@@ -667,7 +675,7 @@ class UsageIndex:
                 row = rows.get((request.ordinal, request.request_id))
                 if row is None:
                     raise DomainError(
-                        "usage_invalid", "Live request has no saved identity"
+                        ErrorCode.USAGE_INVALID, "Live request has no saved identity"
                     )
                 raw_model = json.loads(request.model_json)
                 model = {
@@ -871,7 +879,9 @@ class UsageIndex:
         self, record_id: str, *, observation: UsageObservation | None = None
     ) -> dict[str, Any]:
         if not isinstance(record_id, str) or not record_id:
-            raise DomainError("invalid_params", "Usage record_id must be a string")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "Usage record_id must be a string"
+            )
         with self.db.read():
             prefix, source_values = self._sources(observation)
 
@@ -885,7 +895,7 @@ class UsageIndex:
                 )
             )
             if row is None:
-                raise DomainError("not_found", "Usage record does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "Usage record does not exist")
             return {
                 "dataset_revision": self.state()["revision"],
                 "runtime_epoch": observation.runtime_epoch
@@ -991,13 +1001,17 @@ class UsageIndex:
     ) -> dict[str, Any]:
         limit = params.get("limit", 20)
         if type(limit) is not int or not 1 <= limit <= 100:
-            raise DomainError("invalid_params", "Usage limit must be between 1 and 100")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "Usage limit must be between 1 and 100"
+            )
         filters = {
             key: params.get(key) for key in ("agent_id", "model_key", "coverage")
         }
         contributions_only = params.get("contributions_only", False)
         if type(contributions_only) is not bool:
-            raise DomainError("invalid_params", "contributions_only must be a boolean")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "contributions_only must be a boolean"
+            )
         filters.update(
             start_at=utc(params.get("start_at")),
             end_at=utc(params.get("end_at")),
@@ -1006,10 +1020,12 @@ class UsageIndex:
         if filters["agent_id"] is not None and (
             type(filters["agent_id"]) is not int or filters["agent_id"] <= 0
         ):
-            raise DomainError("invalid_params", "agent_id must be a positive integer")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "agent_id must be a positive integer"
+            )
         for key in ("model_key", "coverage"):
             if filters[key] is not None and not isinstance(filters[key], str):
-                raise DomainError("invalid_params", f"{key} must be a string")
+                raise DomainError(ErrorCode.INVALID_PARAMS, f"{key} must be a string")
         if filters["coverage"] not in (
             None,
             "recorded",
@@ -1021,20 +1037,22 @@ class UsageIndex:
             "missing_history",
             "partial_history",
         ):
-            raise DomainError("invalid_params", "Unknown usage coverage filter")
+            raise DomainError(ErrorCode.INVALID_PARAMS, "Unknown usage coverage filter")
         if params.get("anchor") is not None and not isinstance(params["anchor"], str):
-            raise DomainError("invalid_params", "Usage anchor must be a string")
+            raise DomainError(ErrorCode.INVALID_PARAMS, "Usage anchor must be a string")
         if (
             params.get("dataset_revision") is not None
             and type(params["dataset_revision"]) is not int
         ):
-            raise DomainError("invalid_params", "Usage revision must be an integer")
+            raise DomainError(
+                ErrorCode.INVALID_PARAMS, "Usage revision must be an integer"
+            )
         if (
             filters["start_at"]
             and filters["end_at"]
             and filters["start_at"] >= filters["end_at"]
         ):
-            raise DomainError("invalid_params", "Usage start must precede end")
+            raise DomainError(ErrorCode.INVALID_PARAMS, "Usage start must precede end")
         clauses, values = [], []
         for key, operation in (
             ("agent_id", "="),
@@ -1061,21 +1079,24 @@ class UsageIndex:
         if "initialization_version" in params:
             if type(initialization_version) is not int:
                 raise DomainError(
-                    "invalid_params", "Initialization version must be an integer"
+                    ErrorCode.INVALID_PARAMS,
+                    "Initialization version must be an integer",
                 )
             if params.get("dataset_revision") is not None or cursor is not None:
                 raise DomainError(
-                    "invalid_params",
+                    ErrorCode.INVALID_PARAMS,
                     "Initialization version cannot accompany a revision or cursor",
                 )
         position = None
         if cursor is not None:
             if not isinstance(cursor, str):
-                raise DomainError("invalid_params", "Usage cursor must be a string")
+                raise DomainError(
+                    ErrorCode.INVALID_PARAMS, "Usage cursor must be a string"
+                )
             position = UsageCursor.model_validate_json(cursor).model_dump()
             if position["filters"] != signature:
                 raise DomainError(
-                    "invalid_params", "Usage cursor belongs to another range"
+                    ErrorCode.INVALID_PARAMS, "Usage cursor belongs to another range"
                 )
         with self.db.read():
             state = self.state()
@@ -1084,16 +1105,17 @@ class UsageIndex:
                 and initialization_version != state["version"]
             ):
                 raise DomainError(
-                    "usage_changed", "Usage initialization changed; refresh this range"
+                    ErrorCode.USAGE_CHANGED,
+                    "Usage initialization changed; refresh this range",
                 )
             expected = params.get("dataset_revision")
             if expected is not None and expected != state["revision"]:
                 raise DomainError(
-                    "usage_changed", "Usage data changed; refresh this range"
+                    ErrorCode.USAGE_CHANGED, "Usage data changed; refresh this range"
                 )
             if position is not None and position["revision"] != state["revision"]:
                 raise DomainError(
-                    "usage_changed", "Usage data changed; refresh this range"
+                    ErrorCode.USAGE_CHANGED, "Usage data changed; refresh this range"
                 )
         if advance:
             self.advance(initialization_version=initialization_version)
@@ -1117,12 +1139,13 @@ class UsageIndex:
                     and params[key] != json.loads(encode(actual))
                 ):
                     raise DomainError(
-                        "usage_changed", "Usage observation changed; refresh this range"
+                        ErrorCode.USAGE_CHANGED,
+                        "Usage observation changed; refresh this range",
                     )
             expected = params.get("dataset_revision")
             if expected is not None and expected != revision:
                 raise DomainError(
-                    "usage_changed", "Usage data changed; refresh this range"
+                    ErrorCode.USAGE_CHANGED, "Usage data changed; refresh this range"
                 )
             page_clause, page_values = "", []
             direction = "older"
@@ -1133,12 +1156,13 @@ class UsageIndex:
                     or position["live_versions"] != versions
                 ):
                     raise DomainError(
-                        "usage_changed", "Usage data changed; refresh this range"
+                        ErrorCode.USAGE_CHANGED,
+                        "Usage data changed; refresh this range",
                     )
                 direction = position.get("direction", "older")
                 if direction not in ("older", "newer"):
                     raise DomainError(
-                        "invalid_params", "Invalid usage cursor direction"
+                        ErrorCode.INVALID_PARAMS, "Invalid usage cursor direction"
                     )
                 comparison = ">" if direction == "newer" else "<"
                 page_clause = f" AND (u.started_at, u.record_id) {comparison} (?, ?)"

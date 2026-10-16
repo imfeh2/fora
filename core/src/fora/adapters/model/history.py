@@ -9,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic_ai import BinaryContent, ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelMessage
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 PathPart = str | int
@@ -20,7 +21,7 @@ def decode_history(raw: str) -> list[ModelMessage]:
         return ModelMessagesTypeAdapter.validate_json(raw)
     except ValueError as error:
         raise DomainError(
-            "history_invalid", "Stored model history is invalid"
+            ErrorCode.HISTORY_INVALID, "Stored model history is invalid"
         ) from error
 
 
@@ -36,7 +37,9 @@ def render_history(
     messages = decode_history(raw)
     total = len(messages)
     if offset > total:
-        raise DomainError("invalid_offset", "History message offset exceeds its length")
+        raise DomainError(
+            ErrorCode.INVALID_OFFSET, "History message offset exceeds its length"
+        )
     selected = messages[offset : offset + limit]
     return {
         "messages": [
@@ -60,31 +63,41 @@ def binary_from_history(
 ) -> BinaryContent:
     messages = decode_history(raw)
     if message_index < 0 or message_index >= len(messages):
-        raise DomainError("not_found", "History message does not exist")
+        raise DomainError(ErrorCode.NOT_FOUND, "History message does not exist")
     value: Any = messages[message_index]
     for part in path:
         if isinstance(value, BaseModel):
             if not isinstance(part, str) or part not in value.model_fields:
-                raise DomainError("not_found", "History binary content does not exist")
+                raise DomainError(
+                    ErrorCode.NOT_FOUND, "History binary content does not exist"
+                )
             value = getattr(value, part)
         elif is_dataclass(value) and not isinstance(value, type):
             if not isinstance(part, str) or part not in {
                 field.name for field in fields(value)
             }:
-                raise DomainError("not_found", "History binary content does not exist")
+                raise DomainError(
+                    ErrorCode.NOT_FOUND, "History binary content does not exist"
+                )
             value = getattr(value, part)
         elif isinstance(value, dict):
             if part not in value:
-                raise DomainError("not_found", "History binary content does not exist")
+                raise DomainError(
+                    ErrorCode.NOT_FOUND, "History binary content does not exist"
+                )
             value = value[part]
         elif isinstance(value, list):
             if not isinstance(part, int) or part < 0 or part >= len(value):
-                raise DomainError("not_found", "History binary content does not exist")
+                raise DomainError(
+                    ErrorCode.NOT_FOUND, "History binary content does not exist"
+                )
             value = value[part]
         else:
-            raise DomainError("not_found", "History binary content does not exist")
+            raise DomainError(
+                ErrorCode.NOT_FOUND, "History binary content does not exist"
+            )
     if not isinstance(value, BinaryContent):
-        raise DomainError("not_found", "History binary content does not exist")
+        raise DomainError(ErrorCode.NOT_FOUND, "History binary content does not exist")
     return value
 
 
@@ -120,31 +133,31 @@ def text_from_history(
 ) -> dict[str, Any]:
     messages = decode_history(raw)
     if message_index < 0 or message_index >= len(messages):
-        raise DomainError("not_found", "History message does not exist")
+        raise DomainError(ErrorCode.NOT_FOUND, "History message does not exist")
     value: Any = messages[message_index]
     for part in path:
         if isinstance(value, BaseModel):
             if not isinstance(part, str) or part not in value.model_fields:
-                raise DomainError("not_found", "History text does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "History text does not exist")
             value = getattr(value, part)
         elif is_dataclass(value) and not isinstance(value, type):
             if not isinstance(part, str) or part not in {
                 field.name for field in fields(value)
             }:
-                raise DomainError("not_found", "History text does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "History text does not exist")
             value = getattr(value, part)
         elif isinstance(value, dict):
             if part not in value:
-                raise DomainError("not_found", "History text does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "History text does not exist")
             value = value[part]
         elif isinstance(value, list):
             if not isinstance(part, int) or part < 0 or part >= len(value):
-                raise DomainError("not_found", "History text does not exist")
+                raise DomainError(ErrorCode.NOT_FOUND, "History text does not exist")
             value = value[part]
         else:
-            raise DomainError("not_found", "History text does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "History text does not exist")
     if not isinstance(value, str):
-        raise DomainError("not_found", "History text does not exist")
+        raise DomainError(ErrorCode.NOT_FOUND, "History text does not exist")
     page = _text_page(value, offset, limit)
     if isinstance(page, str):
         return {

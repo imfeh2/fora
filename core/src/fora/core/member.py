@@ -5,6 +5,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 MemberType = Literal["human", "agent"]
@@ -43,16 +44,18 @@ def name_key(value: str) -> str:
 
 def validate_name(value: object) -> str:
     if not isinstance(value, str):
-        raise DomainError("invalid_name", "Member name must be a string")
+        raise DomainError(ErrorCode.INVALID_NAME, "Member name must be a string")
     normalized = normalize_name(value)
     if not normalized:
-        raise DomainError("invalid_name", "Member name must not be empty")
+        raise DomainError(ErrorCode.INVALID_NAME, "Member name must not be empty")
     if len(normalized) > MAX_NAME_LENGTH:
         raise DomainError(
-            "invalid_name", f"Member name must be at most {MAX_NAME_LENGTH} characters"
+            ErrorCode.INVALID_NAME,
+            f"Member name must be at most {MAX_NAME_LENGTH} characters",
         )
     if _FORBIDDEN.search(normalized):
         raise DomainError(
-            "invalid_name", "Member name must not contain @ or control characters"
+            ErrorCode.INVALID_NAME,
+            "Member name must not contain @ or control characters",
         )
     return normalized

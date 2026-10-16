@@ -22,6 +22,7 @@ from fora.core.attachment import (
     validate_attachments,
 )
 from fora.core.discussion import Discussion, Message, MessageMention, validate_body
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import AgentState, Member, MemberType, name_key
 from fora.core.mention import Mention, build_mentions
@@ -671,7 +672,8 @@ class SqliteStore:
                     media_type,
                 ):
                     raise DomainError(
-                        "upload_conflict", "This upload ID has different file details"
+                        ErrorCode.UPLOAD_CONFLICT,
+                        "This upload ID has different file details",
                     )
                 return result
             usage = first(
@@ -689,7 +691,7 @@ class SqliteStore:
                 or usage["owned"] + size > 100 * MIB
             ):
                 raise DomainError(
-                    "upload_capacity",
+                    ErrorCode.UPLOAD_CAPACITY,
                     "Cancel unused uploads before uploading more files",
                 )
             upload_id = str(uuid.uuid4())
@@ -719,7 +721,7 @@ class SqliteStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Upload not found")
+            raise DomainError(ErrorCode.NOT_FOUND, "Upload not found")
         return self._upload(row)
 
     @reading
@@ -731,7 +733,9 @@ class SqliteStore:
             )
         )
         if row is None:
-            raise DomainError("attachment_not_ready", "Upload this file before sending")
+            raise DomainError(
+                ErrorCode.ATTACHMENT_NOT_READY, "Upload this file before sending"
+            )
         return self._attachment(row)
 
     def start_upload(self, upload_id: str, owner_id: int) -> Upload:
@@ -740,7 +744,7 @@ class SqliteStore:
             self._member_discussion(record.discussion_id, owner_id)
             if record.state != "reserved" or record.expires_at <= time.time():
                 raise DomainError(
-                    "upload_not_reserved", "Create a new upload for this file"
+                    ErrorCode.UPLOAD_NOT_RESERVED, "Create a new upload for this file"
                 )
             db.execute(
                 "UPDATE uploads SET state = 'receiving', expires_at = ? WHERE id = ?",
@@ -754,7 +758,7 @@ class SqliteStore:
             current = self.get_upload(upload.id, upload.owner_id)
             if current.state != "receiving" or current.expires_at <= time.time():
                 raise DomainError(
-                    "upload_cancelled", "The upload was cancelled or expired"
+                    ErrorCode.UPLOAD_CANCELLED, "The upload was cancelled or expired"
                 )
             db.execute(
                 "UPDATE uploads SET state = 'ready', expires_at = ?, media_type = ?, sha256 = ?, width = ?, height = ? WHERE id = ?",
@@ -773,7 +777,7 @@ class SqliteStore:
             record = self.get_upload(upload_id, owner_id)
             if record.state == "attached":
                 raise DomainError(
-                    "already_attached", "This file belongs to a sent message"
+                    ErrorCode.ALREADY_ATTACHED, "This file belongs to a sent message"
                 )
             if record.state != "expired":
                 db.execute(
@@ -818,7 +822,9 @@ class SqliteStore:
                 )
             )
             if row is None:
-                raise DomainError("not_found", "Attachment not found in this message")
+                raise DomainError(
+                    ErrorCode.NOT_FOUND, "Attachment not found in this message"
+                )
             return self._attachment(row)
 
     @reading
@@ -983,7 +989,7 @@ class SqliteStore:
     def _active_member_ids(self, member_ids: Sequence[int]) -> None:
         unknown = sorted(set(member_ids) - {item.id for item in self.list_members()})
         if unknown:
-            raise DomainError("not_found", f"Unknown Members: {unknown}")
+            raise DomainError(ErrorCode.NOT_FOUND, f"Unknown Members: {unknown}")
 
     def set_discussion_members(
         self, discussion_id: int, member_ids: Sequence[int]
@@ -992,7 +998,7 @@ class SqliteStore:
             discussion = self.get_discussion(discussion_id)
             if discussion is None:
                 raise DomainError(
-                    "not_found", f"Discussion {discussion_id} does not exist"
+                    ErrorCode.NOT_FOUND, f"Discussion {discussion_id} does not exist"
                 )
             self._active_member_ids(member_ids)
             current = set(discussion.member_ids)
@@ -1015,7 +1021,7 @@ class SqliteStore:
         with self._write() as db:
             if self.get_discussion(discussion_id) is None:
                 raise DomainError(
-                    "not_found", f"Discussion {discussion_id} does not exist"
+                    ErrorCode.NOT_FOUND, f"Discussion {discussion_id} does not exist"
                 )
             if not remove:
                 self._active_member_ids(member_ids)
@@ -1097,7 +1103,9 @@ class SqliteStore:
         if client_message_id is not None:
             identifier(client_message_id)
         if len(attachment_ids) > 10 or len(set(attachment_ids)) != len(attachment_ids):
-            raise DomainError("invalid_attachments", "Choose up to 10 distinct files")
+            raise DomainError(
+                ErrorCode.INVALID_ATTACHMENTS, "Choose up to 10 distinct files"
+            )
         for upload_id in attachment_ids:
             identifier(upload_id)
         with self._write() as db:
@@ -1107,15 +1115,19 @@ class SqliteStore:
                 from fora.adapters.sqlite.generation import SqliteGenerationStore
 
                 if generation_key.agent_id != sender_id:
-                    raise DomainError("invalid_generation", "Generation sender differs")
+                    raise DomainError(
+                        ErrorCode.INVALID_GENERATION, "Generation sender differs"
+                    )
                 generation_store = SqliteGenerationStore(db)
                 preview = generation_store.preview(generation_key)
                 if preview is None:
-                    raise DomainError("not_found", "Generation preview does not exist")
+                    raise DomainError(
+                        ErrorCode.NOT_FOUND, "Generation preview does not exist"
+                    )
                 if preview.status == "sent":
                     if preview.discussion_id != discussion_id:
                         raise DomainError(
-                            "message_conflict",
+                            ErrorCode.MESSAGE_CONFLICT,
                             "Generation was sent in another Discussion",
                         )
                     assert preview.message_id is not None
@@ -1126,7 +1138,7 @@ class SqliteStore:
                         item.id for item in mapped_message.attachments
                     ) != tuple(attachment_ids):
                         raise DomainError(
-                            "message_conflict",
+                            ErrorCode.MESSAGE_CONFLICT,
                             "Generation has different message content",
                         )
                     return mapped_message, (), False
@@ -1136,14 +1148,14 @@ class SqliteStore:
                 )
                 if state == "cancelled":
                     raise DomainError(
-                        "send_cancelled", "This send attempt was cancelled"
+                        ErrorCode.SEND_CANCELLED, "This send attempt was cancelled"
                     )
                 if previous is not None:
                     if previous.body != body or tuple(
                         item.id for item in previous.attachments
                     ) != tuple(attachment_ids):
                         raise DomainError(
-                            "message_conflict",
+                            ErrorCode.MESSAGE_CONFLICT,
                             "This send ID has different message content",
                         )
                     if generation_store is not None:
@@ -1159,7 +1171,7 @@ class SqliteStore:
                     or record.expires_at <= time.time()
                 ):
                     raise DomainError(
-                        "attachment_not_ready",
+                        ErrorCode.ATTACHMENT_NOT_READY,
                         "Upload each file in this Discussion before sending",
                     )
                 row = first(
@@ -1188,7 +1200,7 @@ class SqliteStore:
             )
             if sender.is_agent and not mentions:
                 raise DomainError(
-                    "mention_required",
+                    ErrorCode.MENTION_REQUIRED,
                     "Mention at least one other member of this discussion.",
                 )
             message = Message(
@@ -1260,9 +1272,11 @@ class SqliteStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Discussion does not exist")
+            raise DomainError(ErrorCode.NOT_FOUND, "Discussion does not exist")
         if not row["allowed"]:
-            raise DomainError("not_a_member", "You do not belong to this Discussion")
+            raise DomainError(
+                ErrorCode.NOT_A_MEMBER, "You do not belong to this Discussion"
+            )
         return row
 
     @reading
@@ -1349,7 +1363,7 @@ class SqliteStore:
             )
         )
         if row is None:
-            raise DomainError("not_found", "Message is not in this Discussion")
+            raise DomainError(ErrorCode.NOT_FOUND, "Message is not in this Discussion")
         return Message(
             discussion_id,
             int(row["id"]),
@@ -1399,7 +1413,7 @@ class SqliteStore:
             params.append(message_id)
             fields, order = "u.*", "a.ordinal"
         else:
-            raise DomainError("invalid_pagination", "Unknown metadata section")
+            raise DomainError(ErrorCode.INVALID_PAGINATION, "Unknown metadata section")
         total = int(
             self._db.execute(f"SELECT COUNT(*) AS n FROM {source}", params)[0]["n"]
         )
@@ -1480,9 +1494,13 @@ class SqliteStore:
     def _member_discussion(self, discussion_id: int, member_id: int) -> Discussion:
         discussion = self.get_discussion(discussion_id)
         if discussion is None:
-            raise DomainError("not_found", f"Discussion {discussion_id} does not exist")
+            raise DomainError(
+                ErrorCode.NOT_FOUND, f"Discussion {discussion_id} does not exist"
+            )
         if member_id not in discussion.member_ids:
-            raise DomainError("not_a_member", "You do not belong to this Discussion")
+            raise DomainError(
+                ErrorCode.NOT_A_MEMBER, "You do not belong to this Discussion"
+            )
         return discussion
 
     def _pending_summary(
@@ -1610,7 +1628,7 @@ class SqliteStore:
             "SELECT 1 FROM messages WHERE discussion_id = ? AND id = ?",
             (discussion_id, message_id),
         ):
-            raise DomainError("not_found", "Message is not in this Discussion")
+            raise DomainError(ErrorCode.NOT_FOUND, "Message is not in this Discussion")
 
     def mark_read(self, discussion_id: int, member_id: int, message_id: int) -> int:
         with self._db:

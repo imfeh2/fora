@@ -17,6 +17,7 @@ from pydantic import (
     model_validator,
 )
 
+from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 
 ApiType = Literal["openai-chat", "openai-responses", "anthropic", "google"]
@@ -50,7 +51,7 @@ def thinking_options(
 def validate_thinking(value: Any, model: str) -> Thinking:
     if type(value) is not str or value not in (*THINKING_OPTIONS, "budget"):
         raise DomainError(
-            "unsupported_thinking", f"Invalid thinking option for model {model}"
+            ErrorCode.UNSUPPORTED_THINKING, f"Invalid thinking option for model {model}"
         )
     return cast(Thinking, value)
 
@@ -58,7 +59,7 @@ def validate_thinking(value: Any, model: str) -> Thinking:
 def validate_thinking_budget(value: Any) -> int:
     if type(value) is not int or value <= 0:
         raise DomainError(
-            "invalid_thinking_budget",
+            ErrorCode.INVALID_THINKING_BUDGET,
             "Thinking token budget must be a positive integer",
         )
     return value
@@ -76,7 +77,8 @@ def thinking_settings(
     if thinking == "budget":
         if api_type not in BUDGET_API_TYPES:
             raise DomainError(
-                "unsupported_thinking", f"Model {model} does not support token budgets"
+                ErrorCode.UNSUPPORTED_THINKING,
+                f"Model {model} does not support token budgets",
             )
         tokens = validate_thinking_budget(thinking_budget_tokens)
         if api_type == "anthropic":
@@ -176,7 +178,7 @@ REQUEST_BODY_PROTOCOL_FIELDS = frozenset(
 
 def _request_body_error(path: str, reason: str) -> None:
     raise DomainError(
-        "invalid_request_body", f"Custom request body {path[:160]}: {reason}"
+        ErrorCode.INVALID_REQUEST_BODY, f"Custom request body {path[:160]}: {reason}"
     )
 
 
@@ -234,7 +236,7 @@ def validate_request_body(value: Any, api_type: ApiType) -> dict[str, JsonValue]
         _request_body_error("$", "Use at most 16 KiB of UTF-8 JSON.")
     if api_type == "google" and value:
         raise DomainError(
-            "unsupported_request_body",
+            ErrorCode.UNSUPPORTED_REQUEST_BODY,
             "This API does not support a custom request body. Clear it before saving.",
         )
     incompatible = {
@@ -399,7 +401,7 @@ class ModelCatalog(ConfigurationRecord):
                     catalog = cls.model_validate(values)
             except ValidationError:
                 raise DomainError(
-                    "invalid_model_config", "Invalid model configuration"
+                    ErrorCode.INVALID_MODEL_CONFIG, "Invalid model configuration"
                 ) from None
             catalog.validate_references()
             return catalog
@@ -422,13 +424,13 @@ class ModelCatalog(ConfigurationRecord):
         for provider in self.providers:
             if provider.id == provider_id:
                 return provider
-        raise DomainError("provider_not_found", "Provider no longer exists")
+        raise DomainError(ErrorCode.PROVIDER_NOT_FOUND, "Provider no longer exists")
 
     def registered_model(self, model_id: str) -> RegisteredModel:
         for model in self.models:
             if model.id == model_id:
                 return model
-        raise DomainError("model_not_found", "Model no longer exists")
+        raise DomainError(ErrorCode.MODEL_NOT_FOUND, "Model no longer exists")
 
     def selection(self, agent_id: int | None = None) -> tuple[str | None, Thinking]:
         selection = self.agent_configs.get(str(agent_id), AgentModelConfig())
@@ -455,7 +457,7 @@ class ModelCatalog(ConfigurationRecord):
         if model_id is None:
             if thinking == "budget":
                 raise DomainError(
-                    "unsupported_thinking",
+                    ErrorCode.UNSUPPORTED_THINKING,
                     f"{owner}: select a model with a token budget",
                 )
             return
@@ -463,14 +465,15 @@ class ModelCatalog(ConfigurationRecord):
         provider = self.provider(model.provider_id)
         if not model.enabled or not provider.enabled:
             raise DomainError(
-                "model_in_use", f"{owner} references a disabled model or provider"
+                ErrorCode.MODEL_IN_USE,
+                f"{owner} references a disabled model or provider",
             )
         options = thinking_options(
             provider.api_type, model.model, model.thinking_budget_tokens
         )
         if thinking not in options:
             raise DomainError(
-                "unsupported_thinking",
+                ErrorCode.UNSUPPORTED_THINKING,
                 f"{owner}: model {model.name} needs a configured token budget for budget selection",
             )
 
@@ -478,9 +481,13 @@ class ModelCatalog(ConfigurationRecord):
         for provider in self.providers:
             validate_request_body(provider.extra_body, provider.api_type)
         if len({item.id for item in self.providers}) != len(self.providers):
-            raise DomainError("invalid_model_config", "Provider IDs must be unique")
+            raise DomainError(
+                ErrorCode.INVALID_MODEL_CONFIG, "Provider IDs must be unique"
+            )
         if len({item.id for item in self.models}) != len(self.models):
-            raise DomainError("invalid_model_config", "Model IDs must be unique")
+            raise DomainError(
+                ErrorCode.INVALID_MODEL_CONFIG, "Model IDs must be unique"
+            )
         for model in self.models:
             provider = self.provider(model.provider_id)
             if (
@@ -488,13 +495,13 @@ class ModelCatalog(ConfigurationRecord):
                 and provider.api_type not in BUDGET_API_TYPES
             ):
                 raise DomainError(
-                    "invalid_model_config",
+                    ErrorCode.INVALID_MODEL_CONFIG,
                     f"Model {model.name} budgets require Anthropic or Google",
                 )
         self.validate_selection(AgentModelConfig(), "Global default")
         for agent_id, selection in self.agent_configs.items():
             if not agent_id.isdecimal() or int(agent_id) <= 0:
-                raise DomainError("invalid_model_config", "Invalid Agent ID")
+                raise DomainError(ErrorCode.INVALID_MODEL_CONFIG, "Invalid Agent ID")
             self.validate_selection(selection, f"Agent {agent_id}")
 
     def apply(self, change: dict[str, Any], agent_ids: set[int]) -> ModelCatalog:
@@ -520,11 +527,13 @@ class ModelCatalog(ConfigurationRecord):
                     updated.providers.append(ProviderConfig.model_validate(values))
             elif action == "delete_provider":
                 if not isinstance(record_id, str):
-                    raise DomainError("invalid_model_config", "Provider ID is required")
+                    raise DomainError(
+                        ErrorCode.INVALID_MODEL_CONFIG, "Provider ID is required"
+                    )
                 provider = updated.provider(record_id)
                 if any(model.provider_id == record_id for model in updated.models):
                     raise DomainError(
-                        "provider_in_use",
+                        ErrorCode.PROVIDER_IN_USE,
                         "Remove this provider's models before deleting the provider",
                     )
                 updated.providers.remove(provider)
@@ -539,7 +548,9 @@ class ModelCatalog(ConfigurationRecord):
                     updated.models.append(RegisteredModel.model_validate(values))
             elif action == "delete_model":
                 if not isinstance(record_id, str):
-                    raise DomainError("invalid_model_config", "Model ID is required")
+                    raise DomainError(
+                        ErrorCode.INVALID_MODEL_CONFIG, "Model ID is required"
+                    )
                 model = updated.registered_model(record_id)
                 owners = []
                 if updated.default_model_id == record_id:
@@ -551,31 +562,31 @@ class ModelCatalog(ConfigurationRecord):
                 )
                 if owners:
                     raise DomainError(
-                        "model_in_use", "Model is used by " + ", ".join(owners)
+                        ErrorCode.MODEL_IN_USE, "Model is used by " + ", ".join(owners)
                     )
                 updated.models.remove(model)
             elif action == "set_defaults":
                 defaults = AgentModelConfig.model_validate(values)
                 if defaults.thinking is None:
                     raise DomainError(
-                        "invalid_model_config",
+                        ErrorCode.INVALID_MODEL_CONFIG,
                         "Global thinking must have an explicit value",
                     )
                 updated.default_model_id = defaults.model_id
                 updated.default_thinking = defaults.thinking
             elif action == "set_agent":
                 if type(record_id) is not int or record_id not in agent_ids:
-                    raise DomainError("not_found", "Agent does not exist")
+                    raise DomainError(ErrorCode.NOT_FOUND, "Agent does not exist")
                 updated.agent_configs[str(record_id)] = AgentModelConfig.model_validate(
                     values
                 )
             else:
                 raise DomainError(
-                    "invalid_model_action", "Unknown model configuration action"
+                    ErrorCode.INVALID_MODEL_ACTION, "Unknown model configuration action"
                 )
         except ValidationError:
             raise DomainError(
-                "invalid_model_config", "Invalid model configuration fields"
+                ErrorCode.INVALID_MODEL_CONFIG, "Invalid model configuration fields"
             ) from None
         updated.agent_configs = {
             key: value
@@ -607,22 +618,25 @@ class ModelCatalog(ConfigurationRecord):
         model_id, thinking = self.selection(agent_id)
         if model_id is None:
             raise DomainError(
-                "model_unavailable",
+                ErrorCode.MODEL_UNAVAILABLE,
                 "Configure a model in Settings before running Agents",
             )
         model = self.registered_model(model_id)
         provider = self.provider(model.provider_id)
         if not model.enabled or not provider.enabled:
             raise DomainError(
-                "model_unavailable", "The selected model or provider is disabled"
+                ErrorCode.MODEL_UNAVAILABLE,
+                "The selected model or provider is disabled",
             )
         if not provider.base_url.strip():
             raise DomainError(
-                "model_unavailable", f"Provider {provider.name} needs a base URL"
+                ErrorCode.MODEL_UNAVAILABLE,
+                f"Provider {provider.name} needs a base URL",
             )
         if not provider.api_key:
             raise DomainError(
-                "model_unavailable", f"Provider {provider.name} needs an API key"
+                ErrorCode.MODEL_UNAVAILABLE,
+                f"Provider {provider.name} needs an API key",
             )
         return ModelConfig(
             api_type=provider.api_type,
