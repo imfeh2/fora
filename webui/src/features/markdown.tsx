@@ -20,6 +20,7 @@ import {
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
+import { useNavigate } from "@/app/router";
 import { Button } from "@/components/ui/index";
 import { toast } from "@/components/ui/toast";
 import { remarkLiteralHtml, remarkMentions } from "@/features/markdown-plugins";
@@ -91,6 +92,44 @@ export function CopyTextButton({
   );
 }
 
+export function libraryPathFromHref(href: string): string | null {
+  if (!href.startsWith("/") && !href.startsWith("./")) return null;
+  if (/%(?![0-9A-Fa-f]{2})/.test(href)) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(href);
+  } catch {
+    return null;
+  }
+  const rest = decoded.startsWith("/") ? decoded.slice(1) : decoded.slice(2);
+  const segments = rest.split("/");
+  if (segments.some((segment) => segment === "..")) return null;
+  const path = segments.filter((segment) => segment.length > 0).join("/");
+  return path.length > 0 ? path : null;
+}
+
+function LibraryLink({
+  path,
+  children,
+}: {
+  path: string;
+  children: React.ReactNode;
+}) {
+  const navigate = useNavigate();
+  return (
+    <a
+      href={`/library/content?path=${encodeURIComponent(path)}`}
+      className="markdown-link"
+      onClick={(event) => {
+        event.preventDefault();
+        navigate({ name: "document", path });
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
 const components: Components = {
   code: ({ children, className, node: _node, ...props }) => {
     if (!("data-block" in props))
@@ -110,8 +149,10 @@ const components: Components = {
       </CodeBlock>
     );
   },
-  a: ({ children, href, node: _node }) =>
-    href ? (
+  a: ({ children, href, node: _node }) => {
+    const path = href ? libraryPathFromHref(href) : null;
+    if (path !== null) return <LibraryLink path={path}>{children}</LibraryLink>;
+    return href ? (
       <a
         href={href}
         target="_blank"
@@ -122,7 +163,8 @@ const components: Components = {
       </a>
     ) : (
       <span>{children}</span>
-    ),
+    );
+  },
   img: ({ src, alt, node }) => {
     const href =
       typeof src === "string" && node
