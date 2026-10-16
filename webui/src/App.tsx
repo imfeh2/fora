@@ -27,7 +27,8 @@ import {
   useNarrowViewport,
 } from "@/components/layout/shell";
 import { AccessError, LoadError } from "@/components/ui/access-error";
-import { ErrorBoundary, ErrorCard } from "@/components/ui/error-boundary";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
+import { ErrorFace } from "@/components/ui/error-face";
 import {
   Badge,
   Button,
@@ -382,11 +383,10 @@ function Chrome({
         <ErrorBoundary
           key={pageKeyOf(route)}
           fallback={(reset) => (
-            <ErrorCard
+            <ErrorFace
               title="Something went wrong"
               description="This page could not be displayed. Open another page from the navigation, or retry."
-              action="Retry"
-              onAction={reset}
+              action={{ label: "Retry", run: reset }}
             />
           )}
         >

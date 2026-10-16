@@ -1,7 +1,5 @@
-import { CircleAlertIcon } from "lucide-react";
-import { useId } from "react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button, Spinner } from "@/components/ui/index";
+import { ErrorFace } from "@/components/ui/error-face";
+import { Button } from "@/components/ui/index";
 import type { BackendError } from "@/lib/backend";
 
 export function LoadError({
@@ -35,8 +33,6 @@ export function AccessError({
   waiting?: boolean;
   loadingData?: boolean;
 }) {
-  const titleId = useId();
-  const descriptionId = useId();
   const startup = !loadingData && error.code === "startup_failed";
   const preparation = [
     "storage_read_failed",
@@ -55,41 +51,21 @@ export function AccessError({
           : "Could not connect to Fora";
 
   return (
-    <section className="flex min-h-0 flex-1 w-full overflow-auto bg-app p-6">
-      <div className="m-auto w-full max-w-[520px] min-w-0">
-        <Alert
-          aria-labelledby={titleId}
-          aria-describedby={descriptionId}
-          className="[overflow-wrap:anywhere]"
-        >
-          <CircleAlertIcon
-            className="row-span-2 h-5 w-4 text-danger"
-            aria-hidden="true"
-          />
-          <AlertTitle id={titleId}>{title}</AlertTitle>
-          <AlertDescription id={descriptionId}>
-            <p className="whitespace-pre-wrap">{error.message}</p>
-            {startup ? (
-              <p>Close this window and start Fora again.</p>
-            ) : reconnect ? (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <Button onClick={reconnect} disabled={waiting}>
-                  {waiting ? (
-                    <Spinner label={loadingData ? "Loading" : "Reconnecting"} />
-                  ) : null}
-                  {loadingData
-                    ? waiting
-                      ? "Loading…"
-                      : "Retry"
-                    : waiting
-                      ? "Reconnecting…"
-                      : "Reconnect"}
-                </Button>
-              </div>
-            ) : null}
-          </AlertDescription>
-        </Alert>
-      </div>
-    </section>
+    <ErrorFace
+      title={title}
+      description={error.message}
+      note={startup ? "Close this window and start Fora again." : undefined}
+      action={
+        startup || !reconnect
+          ? undefined
+          : {
+              label: loadingData ? "Retry" : "Reconnect",
+              run: reconnect,
+              pending: waiting,
+              pendingLabel: loadingData ? "Loading…" : "Reconnecting…",
+              spinnerLabel: loadingData ? "Loading" : "Reconnecting",
+            }
+      }
+    />
   );
 }

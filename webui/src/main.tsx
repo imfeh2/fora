@@ -1,7 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "@/App";
-import { ErrorBoundary, ErrorCard } from "@/components/ui/error-boundary";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
+import { ErrorFace } from "@/components/ui/error-face";
 
 function installDesktopInteractionGuards() {
   document.addEventListener("dragstart", (event) => event.preventDefault());
@@ -23,11 +24,10 @@ function render() {
       <ErrorBoundary
         fallback={() => (
           <div className="flex h-full min-h-0 flex-col bg-app">
-            <ErrorCard
+            <ErrorFace
               title="Something went wrong"
               description="Fora could not display this window. Reload to start again."
-              action="Reload"
-              onAction={() => window.location.reload()}
+              action={{ label: "Reload", run: () => window.location.reload() }}
             />
           </div>
         )}
