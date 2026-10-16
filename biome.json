@@ -35,6 +35,16 @@
           }
         }
       }
+    },
+    {
+      "includes": ["webui/src/features/library/document.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useMediaCaption": "off"
+          }
+        }
+      }
     }
   ],
   "css": {

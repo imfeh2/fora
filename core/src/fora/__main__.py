@@ -364,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
                 webui_directory(options.webui_dir),
                 port=options.port,
                 uploads=uploads,
+                library=deps.library_tree.root,
                 host=options.host,
                 public_hosts=options.public_hosts,
             )

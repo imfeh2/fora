@@ -1,5 +1,11 @@
 import { Save, SquarePen, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { type Route, useNavigate } from "@/app/router";
 import {
   type Crumb,
@@ -22,6 +28,7 @@ import {
   toast,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
+import { type MediaKind, mediaKind } from "@/features/library/media";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend } from "@/lib/backend";
 import { formatBytes } from "@/lib/format";
@@ -53,6 +60,85 @@ export function documentCrumbs(
   ];
 }
 
+function DocumentFrame({
+  path,
+  actions,
+  menuDisabled = false,
+  toolbar,
+  children,
+}: {
+  path: string;
+  actions?: ReactNode;
+  menuDisabled?: boolean;
+  toolbar?: ReactNode;
+  children: ReactNode;
+}) {
+  const navigate = useNavigate();
+  const crumb = documentCrumbs(path, navigate);
+  const [renaming, setRenaming] = useState(false);
+  const [doomed, setDoomed] = useState(false);
+  return (
+    <Page>
+      <PageHeader
+        title={path}
+        crumb={crumb}
+        actions={
+          <>
+            {actions}
+            <OverflowMenu
+              label={`Actions for ${path}`}
+              actions={[
+                {
+                  id: "rename",
+                  label: "Rename",
+                  disabled: menuDisabled,
+                  icon: <SquarePen size={15} />,
+                  onSelect: () => setRenaming(true),
+                },
+                {
+                  id: "delete",
+                  label: "Delete",
+                  disabled: menuDisabled,
+                  icon: <Trash2 size={15} />,
+                  tone: "danger",
+                  onSelect: () => setDoomed(true),
+                },
+              ]}
+            />
+          </>
+        }
+      />
+      {toolbar ? <Toolbar>{toolbar}</Toolbar> : null}
+      <PageBody variant="flush">{children}</PageBody>
+      <PromptDialog
+        open={renaming}
+        onOpenChange={setRenaming}
+        title="Rename document"
+        label="New path"
+        initial={path}
+        submitLabel="Rename"
+        onSubmit={async (destination) => {
+          const moved = await backend.moveLibrary(path, destination);
+          setRenaming(false);
+          navigate({ name: "document", path: moved.path });
+        }}
+      />
+      <ConfirmDialog
+        open={doomed}
+        onOpenChange={setDoomed}
+        title={`Delete ${path}?`}
+        description="The document is removed for every Member."
+        confirmLabel="Delete document"
+        onConfirm={async () => {
+          await backend.deleteLibrary(path);
+          setDoomed(false);
+          navigate({ name: "library" });
+        }}
+      />
+    </Page>
+  );
+}
+
 export function DocumentUnavailable({
   code,
 }: {
@@ -70,6 +156,15 @@ export function DocumentUnavailable({
 }
 
 export function DocumentPage({ path }: { path: string }) {
+  const kind = mediaKind(path);
+  return kind === null ? (
+    <TextDocument path={path} />
+  ) : (
+    <MediaDocument path={path} kind={kind} />
+  );
+}
+
+function TextDocument({ path }: { path: string }) {
   const navigate = useNavigate();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [draft, setDraft] = useState("");
@@ -80,8 +175,6 @@ export function DocumentPage({ path }: { path: string }) {
   const [loadError, setLoadError] = useState<BackendError | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [doomed, setDoomed] = useState(false);
 
   const editing = useRef({ loaded, draft });
   editing.current = { loaded, draft };
@@ -268,114 +361,137 @@ export function DocumentPage({ path }: { path: string }) {
   }
 
   return (
-    <Page>
-      <PageHeader
-        title={path}
-        crumb={crumb}
-        actions={
-          <>
-            <Button
-              variant="primary"
-              disabled={!dirty || busy || failed}
-              onClick={save}
-            >
-              {busy ? <Spinner label="Saving document" /> : <Save size={16} />}
-              Save
-            </Button>
-            <OverflowMenu
-              label={`Actions for ${path}`}
-              actions={[
-                {
-                  id: "rename",
-                  label: "Rename",
-                  disabled: loaded === null || failed,
-                  icon: <SquarePen size={15} />,
-                  onSelect: () => setRenaming(true),
-                },
-                {
-                  id: "delete",
-                  label: "Delete",
-                  disabled: loaded === null || failed,
-                  icon: <Trash2 size={15} />,
-                  tone: "danger",
-                  onSelect: () => setDoomed(true),
-                },
-              ]}
-            />
-          </>
-        }
-      />
-      <Toolbar>
-        {loaded === null ? (
-          failed ? null : (
-            <Skeleton className="w-16" />
-          )
-        ) : (
-          <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
-        )}
-        {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
-      </Toolbar>
-      <PageBody variant="flush">
-        <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
-          {saveError ? (
-            <p role="alert" className="text-sm text-danger">
-              {saveError}
-            </p>
-          ) : null}
-          {unavailable ? <DocumentUnavailable code={unavailable} /> : null}
-          {loadError && !(loadError.transport && backend.disconnected) ? (
-            <LoadError error={loadError} retry={() => void load(true)} />
-          ) : null}
+    <DocumentFrame
+      path={path}
+      menuDisabled={loaded === null || failed}
+      actions={
+        <Button
+          variant="primary"
+          disabled={!dirty || busy || failed}
+          onClick={save}
+        >
+          {busy ? <Spinner label="Saving document" /> : <Save size={16} />}
+          Save
+        </Button>
+      }
+      toolbar={
+        <>
           {loaded === null ? (
             failed ? null : (
-              <LoadingSkeleton label="Loading document">
-                {["90%", "75%", "85%", "50%"].map((width) => (
-                  <Skeleton key={width} style={{ width }} />
-                ))}
-              </LoadingSkeleton>
+              <Skeleton className="w-16" />
             )
           ) : (
-            <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
-              <Textarea
-                aria-label="Document"
-                readOnly={failed}
-                value={draft}
-                spellCheck={false}
-                onChange={(event) => {
-                  editing.current.draft = event.target.value;
-                  setDraft(event.target.value);
-                }}
-              />
-            </div>
+            <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
           )}
-        </div>
-      </PageBody>
+          {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
+        </>
+      }
+    >
+      <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
+        {saveError ? (
+          <p role="alert" className="text-sm text-danger">
+            {saveError}
+          </p>
+        ) : null}
+        {unavailable ? <DocumentUnavailable code={unavailable} /> : null}
+        {loadError && !(loadError.transport && backend.disconnected) ? (
+          <LoadError error={loadError} retry={() => void load(true)} />
+        ) : null}
+        {loaded === null ? (
+          failed ? null : (
+            <LoadingSkeleton label="Loading document">
+              {["90%", "75%", "85%", "50%"].map((width) => (
+                <Skeleton key={width} style={{ width }} />
+              ))}
+            </LoadingSkeleton>
+          )
+        ) : (
+          <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
+            <Textarea
+              aria-label="Document"
+              readOnly={failed}
+              value={draft}
+              spellCheck={false}
+              onChange={(event) => {
+                editing.current.draft = event.target.value;
+                setDraft(event.target.value);
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </DocumentFrame>
+  );
+}
 
-      <PromptDialog
-        open={renaming}
-        onOpenChange={setRenaming}
-        title="Rename document"
-        label="New path"
-        initial={path}
-        submitLabel="Rename"
-        onSubmit={async (destination) => {
-          const moved = await backend.moveLibrary(path, destination);
-          setRenaming(false);
-          navigate({ name: "document", path: moved.path });
-        }}
-      />
-      <ConfirmDialog
-        open={doomed}
-        onOpenChange={setDoomed}
-        title={`Delete ${path}?`}
-        description="The document is removed for every Member."
-        confirmLabel="Delete document"
-        onConfirm={async () => {
-          await backend.deleteLibrary(path);
-          setDoomed(false);
-          navigate({ name: "library" });
-        }}
-      />
-    </Page>
+type MediaState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; url: string; size: number };
+
+function MediaDocument({ path, kind }: { path: string; kind: MediaKind }) {
+  const [state, setState] = useState<MediaState>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    let objectUrl: string | null = null;
+    setState({ status: "loading" });
+    void backend.libraryFile(path, abort.signal).then(
+      (blob) => {
+        if (abort.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setState({ status: "ready", url: objectUrl, size: blob.size });
+      },
+      (failure: unknown) => {
+        if (abort.signal.aborted) return;
+        setState({
+          status: "error",
+          message: failure instanceof Error ? failure.message : String(failure),
+        });
+      },
+    );
+    return () => {
+      abort.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [path, attempt]);
+
+  return (
+    <DocumentFrame
+      path={path}
+      menuDisabled={state.status === "loading"}
+      toolbar={
+        state.status === "ready" ? <Chip>{formatBytes(state.size)}</Chip> : null
+      }
+    >
+      <div className="flex flex-1 min-h-0 items-center justify-center p-8">
+        {state.status === "loading" ? (
+          <Spinner label="Loading file" />
+        ) : state.status === "error" ? (
+          <div
+            role="alert"
+            className="flex max-w-[520px] flex-col items-center gap-3 text-sm"
+          >
+            <p className="text-center break-words text-danger">
+              {state.message}
+            </p>
+            <Button size="sm" onClick={() => setAttempt((value) => value + 1)}>
+              Retry
+            </Button>
+          </div>
+        ) : kind === "image" ? (
+          <img
+            src={state.url}
+            alt={path}
+            className="max-h-full max-w-full object-contain"
+          />
+        ) : kind === "video" ? (
+          <video src={state.url} controls className="max-h-full max-w-full" />
+        ) : (
+          <audio src={state.url} controls className="w-full max-w-[520px]" />
+        )}
+      </div>
+    </DocumentFrame>
   );
 }

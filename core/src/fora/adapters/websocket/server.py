@@ -296,21 +296,33 @@ async def resource[T](
 
 CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
+    ".flac": "audio/flac",
+    ".gif": "image/gif",
     ".html": "text/html; charset=utf-8",
     ".ico": "image/x-icon",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".m4a": "audio/mp4",
     ".map": "application/json; charset=utf-8",
     ".mjs": "text/javascript; charset=utf-8",
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+    ".ogg": "audio/ogg",
     ".png": "image/png",
     ".svg": "image/svg+xml; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
     ".ttf": "font/ttf",
     ".wasm": "application/wasm",
+    ".wav": "audio/wav",
+    ".webm": "video/webm",
     ".webp": "image/webp",
     ".woff": "font/woff",
     ".woff2": "font/woff2",
 }
+
+LIBRARY_MAX_BYTES = 20 * 1024 * 1024
 
 log = logging.getLogger(__name__)
 
@@ -369,6 +381,15 @@ def static_response(
     )
 
 
+def contained_file(root: Path, path: str) -> Path | None:
+    if "\0" in path:
+        return None
+    target = (root / path).resolve()
+    if not target.is_relative_to(root.resolve()):
+        return None
+    return target if target.is_file() else None
+
+
 class WebServer:
     def __init__(
         self,
@@ -378,6 +399,7 @@ class WebServer:
         port: int = 0,
         *,
         uploads: Uploads | None = None,
+        library: Path | None = None,
         host: str = HOST,
         public_hosts: frozenset[str] = frozenset(),
     ) -> None:
@@ -385,6 +407,7 @@ class WebServer:
         self._token = token
         self._directory = directory
         self._uploads = uploads
+        self._library = library
         self._host = validate_host(host)
         self._public_hosts = public_hosts
         if not 0 <= port <= 65535:
@@ -454,6 +477,7 @@ class WebServer:
                 "/discussions/{discussion_id}/messages/{message_id}/attachments/{attachment_id}/content",
                 self._download,
             )
+            self._app.router.add_get("/library/content", self._library_content)
             resources.pop_all()
 
     @property
@@ -1084,3 +1108,32 @@ class WebServer:
                 return response
         finally:
             self._http.discard(task)
+
+    async def _library_content(self, request: web.Request) -> web.StreamResponse:
+        self._authenticate(request)
+        root = self._library
+        if root is None:
+            raise web.HTTPNotFound()
+        target = contained_file(root, request.query.get("path", ""))
+        if target is None:
+            raise web.HTTPNotFound()
+        size = target.stat().st_size
+        if size > LIBRARY_MAX_BYTES:
+            raise DomainError(
+                "file_too_large",
+                f"This file is {size / (1024 * 1024):.1f} MB; previews are limited to "
+                f"{LIBRARY_MAX_BYTES // (1024 * 1024)} MB",
+            )
+        return web.FileResponse(
+            target,
+            headers={
+                "Content-Type": CONTENT_TYPES.get(
+                    target.suffix.lower(), "application/octet-stream"
+                ),
+                "Content-Disposition": (
+                    f"attachment; filename*=UTF-8''{quote(target.name, safe='')}"
+                ),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )

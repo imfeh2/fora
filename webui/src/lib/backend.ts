@@ -1579,6 +1579,29 @@ export class Backend {
     return blob;
   }
 
+  async libraryFile(path: string, signal: AbortSignal) {
+    const connection = await this.#fileConnection("/library/content");
+    const url = new URL(connection.url);
+    url.searchParams.set("path", path);
+    const response = await fetch(url, {
+      headers: { Authorization: connection.authorization },
+      signal,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const error = response.headers
+        .get("content-type")
+        ?.includes("application/json")
+        ? await response.json()
+        : null;
+      throw new BackendError(
+        error?.error?.code ?? "download_failed",
+        error?.error?.message ?? `Could not read file (${response.status})`,
+      );
+    }
+    return await response.blob();
+  }
+
   send(discussion_id: number, body: string) {
     return this.call<{ id: number }>("discussion.send", {
       discussion_id,
