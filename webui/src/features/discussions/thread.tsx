@@ -50,7 +50,7 @@ import {
 } from "@/features/discussions/thread-previews";
 import { GenerationIndicator } from "@/features/generation-state";
 import { CopyTextButton, MarkdownContent } from "@/features/markdown";
-import { TurnHistoryModal } from "@/features/members/detail";
+import { TurnHistoryModal } from "@/features/members/turn-history";
 import {
   BackendError,
   backend,

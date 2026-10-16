@@ -52,13 +52,13 @@ import {
   savedTextKey,
   type TextReads,
 } from "@/features/members/activity-data";
-import { TurnHistoryModal } from "@/features/members/detail";
 import {
   type AgentGenerationState,
   AgentGenerationWatcher,
   GenerationContent,
 } from "@/features/members/generation";
 import { useLiveTool } from "@/features/members/live-tool";
+import { TurnHistoryModal } from "@/features/members/turn-history";
 import { useWindowState } from "@/features/members/window-cache";
 import {
   type AgentHistoryRun,

@@ -31,7 +31,7 @@ import {
   Skeleton,
   toast,
 } from "@/components/ui/index";
-import { TurnHistoryModal } from "@/features/members/detail";
+import { TurnHistoryModal } from "@/features/members/turn-history";
 import {
   BackendError,
   backend,
