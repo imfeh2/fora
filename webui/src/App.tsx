@@ -27,6 +27,7 @@ import {
   useNarrowViewport,
 } from "@/components/layout/shell";
 import { AccessError, LoadError } from "@/components/ui/access-error";
+import { ErrorBoundary, ErrorCard } from "@/components/ui/error-boundary";
 import {
   Badge,
   Button,
@@ -378,21 +379,33 @@ function Chrome({
         </div>
       ) : null}
       <PageTransition id={pageKeyOf(route)}>
-        <div
-          hidden={Boolean(regionError)}
-          className={
-            regionError ? "hidden" : "flex min-h-0 min-w-0 flex-1 flex-col"
-          }
+        <ErrorBoundary
+          key={pageKeyOf(route)}
+          fallback={(reset) => (
+            <ErrorCard
+              title="Something went wrong"
+              description="This page could not be displayed. Open another page from the navigation, or retry."
+              action="Retry"
+              onAction={reset}
+            />
+          )}
         >
-          <View
-            route={route}
-            tokenLimit={organization.data?.token_limit ?? null}
-            usageEntrySignal={usageEntrySignal}
-            focusDiscussionId={focusDiscussionId}
-            onComposerFocused={onComposerFocused}
-            onDiscussionCreated={onDiscussionCreated}
-          />
-        </div>
+          <div
+            hidden={Boolean(regionError)}
+            className={
+              regionError ? "hidden" : "flex min-h-0 min-w-0 flex-1 flex-col"
+            }
+          >
+            <View
+              route={route}
+              tokenLimit={organization.data?.token_limit ?? null}
+              usageEntrySignal={usageEntrySignal}
+              focusDiscussionId={focusDiscussionId}
+              onComposerFocused={onComposerFocused}
+              onDiscussionCreated={onDiscussionCreated}
+            />
+          </div>
+        </ErrorBoundary>
         {regionError && !failure ? (
           <AccessError
             error={regionError}
