@@ -222,6 +222,17 @@ function Chrome({
       });
   };
 
+  if (failure && !application.connected)
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-app">
+        <AccessError
+          error={failure}
+          reconnect={() => void retry()}
+          waiting={reconnecting || loading}
+        />
+      </div>
+    );
+
   return (
     <Shell
       navigation={{
@@ -368,11 +379,9 @@ function Chrome({
       ) : null}
       <PageTransition id={pageKeyOf(route)}>
         <div
-          hidden={Boolean((failure && !application.connected) || regionError)}
+          hidden={Boolean(regionError)}
           className={
-            (failure && !application.connected) || regionError
-              ? "hidden"
-              : "flex min-h-0 min-w-0 flex-1 flex-col"
+            regionError ? "hidden" : "flex min-h-0 min-w-0 flex-1 flex-col"
           }
         >
           <View
@@ -384,13 +393,7 @@ function Chrome({
             onDiscussionCreated={onDiscussionCreated}
           />
         </div>
-        {failure && !application.connected ? (
-          <AccessError
-            error={failure}
-            reconnect={() => void retry()}
-            waiting={reconnecting || loading}
-          />
-        ) : regionError && !failure ? (
+        {regionError && !failure ? (
           <AccessError
             error={regionError}
             loadingData
