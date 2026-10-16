@@ -735,7 +735,7 @@ function RequestHistoryContent({
   );
 }
 
-export function LiveTools({
+function LiveTools({
   agentId,
   sequence,
   ordinal,
@@ -1313,7 +1313,7 @@ function textValue(value: HistoryValue): HistoryText | null {
   return value as unknown as HistoryText;
 }
 
-export function HistoryValueView({
+function HistoryValueView({
   value,
   label,
   agentId,

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
 
-PRODUCTIVE_TOOLS = frozenset({"send", "edit", "run"})
 OVERFLOW_CONTEXT_BYTES = 4096
 OVERFLOW_NOTICE_BYTES = 6144
 
@@ -72,18 +70,3 @@ def model_error_signature(error: str) -> str:
         flags=re.IGNORECASE,
     )
     return " ".join(value.split())
-
-
-def is_productive(tools: Iterable[str]) -> bool:
-    return any(tool in PRODUCTIVE_TOOLS for tool in tools)
-
-
-def idle_streak(runs: Sequence[tuple[str, Sequence[str]]]) -> int:
-    streak = 0
-    for status, tools in runs:
-        if status != "completed":
-            break
-        if is_productive(tools):
-            break
-        streak += 1
-    return streak

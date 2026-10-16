@@ -43,7 +43,6 @@ import { DiscussionsPage } from "@/features/discussions/list";
 import { ThreadPage } from "@/features/discussions/thread";
 import { DocumentPage } from "@/features/library/document";
 import { LibraryPage } from "@/features/library/list";
-import { MemberPage } from "@/features/members/detail";
 import { MembersPage } from "@/features/members/list";
 import { SettingsPage } from "@/features/settings/page";
 import {
@@ -86,8 +85,6 @@ function View({
       return <MembersPage tokenLimit={tokenLimit} />;
     case "usage":
       return <UsagePage entrySignal={usageEntrySignal} />;
-    case "member":
-      return <MemberPage id={route.id} />;
     case "library":
       return <LibraryPage path={route.path} />;
     case "document":
@@ -213,8 +210,7 @@ function Chrome({
   );
   const unread = list?.reduce((total, item) => total + item.unread, 0) ?? null;
   const regionError =
-    (route.name === "member" || route.name === "discussion") &&
-    organization.data === null
+    route.name === "discussion" && organization.data === null
       ? organization.error
       : null;
 

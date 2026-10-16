@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useOrganization } from "@/app/organization";
-import { useNavigate } from "@/app/router";
 import {
   Page,
   PageBody,
@@ -89,7 +88,6 @@ export function memberActions(
 export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
   const { members, refresh, organizationError, connectionError, retry } =
     useOrganization();
-  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [creating, setCreating] = useState(false);
@@ -206,7 +204,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
                 key={member.id}
                 member={member}
                 tokenLimit={tokenLimit}
-                onOpen={() => navigate({ name: "member", id: member.id })}
                 onToggle={async () => {
                   await (canResume(member)
                     ? backend.resumeAgent(member.id)
@@ -228,7 +225,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
                 key={member.id}
                 member={member}
                 tokenLimit={tokenLimit}
-                onOpen={() => navigate({ name: "member", id: member.id })}
                 onToggle={async () => {
                   await (canResume(member)
                     ? backend.resumeAgent(member.id)
@@ -281,14 +277,12 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
 export function MemberCard({
   member,
   tokenLimit,
-  onOpen,
   onToggle,
   onRename,
   onDelete,
 }: {
   member: Member;
   tokenLimit: number | null;
-  onOpen: () => void;
   onToggle: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -307,13 +301,9 @@ export function MemberCard({
           <Avatar memberId={member.id} />
           <div className="flex min-w-0 flex-col gap-0.5">
             {agent ? (
-              <button
-                type="button"
-                className="min-w-0 max-w-full self-start text-left font-semibold wrap-anywhere cursor-pointer"
-                onClick={onOpen}
-              >
+              <span className="min-w-0 max-w-full self-start text-left font-semibold wrap-anywhere">
                 {member.name}
-              </button>
+              </span>
             ) : (
               <span className="min-w-0 truncate font-semibold">
                 {member.name}
@@ -396,14 +386,12 @@ export function MemberCard({
 export function MemberRow({
   member,
   tokenLimit,
-  onOpen,
   onToggle,
   onRename,
   onDelete,
 }: {
   member: Member;
   tokenLimit: number | null;
-  onOpen: () => void;
   onToggle: () => void | Promise<void>;
   onRename: () => void;
   onDelete: () => void;
@@ -436,13 +424,9 @@ export function MemberRow({
       <Avatar memberId={member.id} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {agent ? (
-          <button
-            type="button"
-            className="min-w-0 max-w-full self-start text-left font-semibold wrap-anywhere cursor-pointer"
-            onClick={onOpen}
-          >
+          <span className="min-w-0 max-w-full self-start text-left font-semibold wrap-anywhere">
             {member.name}
-          </button>
+          </span>
         ) : (
           <span className="min-w-0 font-semibold wrap-anywhere">
             {member.name}

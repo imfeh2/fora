@@ -445,24 +445,6 @@ export type TurnEffect = { ordinal: number; tool: string; summary: string };
 
 export type HistoryReminder = { discussion_id: number; message_id: number };
 
-export type AgentRun = {
-  reminded?: HistoryReminder[];
-  sequence: number;
-  run_id?: string | null;
-  status: string;
-  started_at: string;
-  completed_at: string | null;
-  last_saved_at?: string | null;
-  window_number?: number | null;
-  window_reset_at?: string | null;
-  window_reason?: string | null;
-  request_count?: number;
-  usage: string | null;
-  usage_metrics?: UsageMetrics | null;
-  error: string | null;
-  effects: TurnEffect[];
-};
-
 export type HistoryValue =
   | null
   | boolean
@@ -681,31 +663,6 @@ export type Usage = {
   total_tokens: number;
 };
 
-export type AgentDetail = Partial<AgentStatus> & {
-  id: number;
-  workspace: LibraryEntry[];
-  runs: AgentRun[];
-  usage: Usage;
-  usage_metrics?: UsageMetrics;
-  usage_version?: UsageVersion & {
-    dataset_revision: number;
-    index: UsageIndexState;
-  };
-  token_limit: number | null;
-  over_token_limit: boolean | null;
-  idle: boolean | null;
-  statistics_unavailable?: string | null;
-  idle_streak: number;
-  no_tool_streak: number;
-  pause_reason: string | null;
-  window: {
-    number: number;
-    since_sequence: number;
-    reset_at: string | null;
-    reason: string | null;
-  };
-};
-
 export type FoundMessage = {
   discussion_id: number;
   id: number;
@@ -780,7 +737,6 @@ const READ_METHODS = new Set([
   "discussion.preview",
   "discussion.preview.text",
   "discussion.search",
-  "agent.detail",
   "usage.query",
   "usage.read",
   "agent.live",
@@ -1691,10 +1647,6 @@ export class Backend {
       content_source,
       content_version,
     });
-  }
-
-  agentDetail(agent_id: number) {
-    return this.call<AgentDetail>("agent.detail", { agent_id });
   }
 
   agentHistoryWindows(agent_id: number, before?: number, limit = 30) {

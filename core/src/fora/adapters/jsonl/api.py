@@ -20,7 +20,6 @@ from fora.adapters.voice.config import VoiceConfig
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
-from fora.core.turn import idle_streak
 from fora.ports.agent import GenerationKey, HistoryWindowFilter
 from fora.ports.usage import UsageCache
 from fora.runtime.scheduler import Scheduler
@@ -94,19 +93,6 @@ def _required_integer(params: dict[str, Any], name: str) -> int:
     if value is None:
         raise DomainError(ErrorCode.INVALID_PARAMS, f"{name} is required")
     return value
-
-
-def _display_usage(metrics: dict[str, Any]) -> dict[str, int | None]:
-    return {
-        key: int(metrics[key]) if metrics[key] is not None else None
-        for key in (
-            "input_tokens",
-            "output_tokens",
-            "cache_read_tokens",
-            "requests",
-            "total_tokens",
-        )
-    }
 
 
 def _usage_version(result: dict[str, Any]) -> dict[str, Any]:
@@ -567,18 +553,6 @@ class Api:
             return RequestScope(
                 reads=(Resource("member", identity),),
                 writes=(Resource("workspace", identity),),
-            )
-
-        def detail_scope(params: dict[str, Any]) -> RequestScope:
-            scope = workspace_scope(params)
-            return RequestScope(
-                scope.reads
-                + (
-                    Resource("history", int(params["agent_id"])),
-                    model_settings,
-                    Resource("settings", "agent"),
-                ),
-                scope.writes,
             )
 
         def setting_query(params: dict[str, Any]) -> RequestScope:
@@ -1427,85 +1401,6 @@ class Api:
                 "data": base64.b64encode(image.data).decode("ascii"),
             }
 
-        def agent_detail(params: dict[str, Any]) -> Any:
-            agent_id = int(params["agent_id"])
-            observation = self._scheduler.live.usage_capture(agent_id)
-            status = self._scheduler.agent_status(agent_id)
-            with self._reading():
-                self._human().authorize_agent_history(agent_id)
-                runs = self._scheduler.history.history_runs(agent_id, limit=30)
-                effects = (
-                    self._scheduler.history.effects(
-                        agent_id, sequences=[run.sequence for run in runs]
-                    )
-                    if runs
-                    else ()
-                )
-                window = self._scheduler.history.window(agent_id)
-                usage_data = self._scheduler.history.usage_display(
-                    observation,
-                    agent_id=agent_id,
-                    sequences=[run.sequence for run in runs],
-                    cache=UsageCache.current("detail"),
-                )
-                usage = _display_usage(usage_data["summary"])
-                pause_reason = self._scheduler.history.pause_reason(agent_id)
-                no_tool_streak = self._scheduler.history.no_tool_streak(agent_id)
-            produced: dict[int, list[dict[str, Any]]] = {}
-            for effect in effects:
-                produced.setdefault(effect.sequence, []).append(
-                    {
-                        "ordinal": effect.ordinal,
-                        "tool": effect.tool,
-                        "summary": effect.summary,
-                    }
-                )
-            streak = idle_streak(
-                [
-                    (
-                        run.status,
-                        [item["tool"] for item in produced.get(run.sequence, [])],
-                    )
-                    for run in runs
-                ]
-            )
-            statistics = self._scheduler.statistics(agent_id, idle_streak=streak)
-            return {
-                **status,
-                "window": _window_event_payload(window),
-                "workspace": self._human().list_workspace(agent_id=agent_id),
-                "usage": usage,
-                "usage_metrics": usage_data["summary"],
-                "usage_version": _usage_version(usage_data),
-                **statistics,
-                "pause_reason": pause_reason,
-                "no_tool_streak": no_tool_streak,
-                "idle_streak": streak,
-                "runs": [
-                    {
-                        "sequence": run.sequence,
-                        "run_id": run.run_id,
-                        "status": run.status,
-                        "started_at": run.started_at,
-                        "completed_at": run.completed_at,
-                        "last_saved_at": run.last_saved_at,
-                        "window_number": run.window_number,
-                        "window_reset_at": run.window_reset_at,
-                        "window_reason": run.window_reason,
-                        "request_count": run.request_count,
-                        "usage": run.usage_json,
-                        "usage_metrics": usage_data["turns"].get(run.sequence),
-                        "error": run.error,
-                        "effects": produced.get(run.sequence, []),
-                        "reminded": [
-                            {"discussion_id": discussion_id, "message_id": message_id}
-                            for discussion_id, message_id in run.reminded
-                        ],
-                    }
-                    for run in runs
-                ],
-            }
-
         def usage_query(params: dict[str, Any]) -> Any:
             observation = self._scheduler.live.usage_capture()
             with self._reading():
@@ -1731,7 +1626,6 @@ class Api:
         )
         register("agent.live", agent_live, scope=agent_query)
         register("agent.live.read", agent_live_read, scope=agent_query)
-        register("agent.detail", agent_detail, scope=detail_scope)
         register("agent.history", agent_history, scope=agent_query)
         register("agent.history.windows", agent_history_windows, scope=agent_query)
         register("agent.history.read", agent_history_read, scope=agent_query)

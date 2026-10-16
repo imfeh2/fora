@@ -20,7 +20,6 @@ export type Route =
   | { name: "discussion"; id: number }
   | { name: "members" }
   | { name: "usage" }
-  | { name: "member"; id: number }
   | { name: "library"; path?: string }
   | { name: "document"; path: string }
   | { name: "settings"; section: SettingsSection };
@@ -37,7 +36,6 @@ const NAV_OF: Record<Route["name"], NavId> = {
   discussion: "discussions",
   members: "members",
   usage: "usage",
-  member: "members",
   library: "library",
   document: "library",
   settings: "settings",

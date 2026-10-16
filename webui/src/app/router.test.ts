@@ -4,7 +4,6 @@ import { navIdOf, pageKeyOf } from "@/app/router";
 describe("navIdOf", () => {
   it("maps detail routes to their section", () => {
     expect(navIdOf({ name: "discussion", id: 4 })).toBe("discussions");
-    expect(navIdOf({ name: "member", id: 2 })).toBe("members");
     expect(navIdOf({ name: "document", path: "a.md" })).toBe("library");
     expect(navIdOf({ name: "library", path: "runbooks/on-call" })).toBe(
       "library",
