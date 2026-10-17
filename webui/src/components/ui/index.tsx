@@ -386,8 +386,10 @@ export function UnreadDot({ label = "有未读消息" }: { label?: string }) {
     <span
       role="img"
       aria-label={label}
-      className="inline-block size-2 rounded-full bg-line-hover"
-    />
+      className="inline-flex size-5 items-center justify-center"
+    >
+      <span className="size-2 rounded-full bg-line-hover" />
+    </span>
   );
 }
 
