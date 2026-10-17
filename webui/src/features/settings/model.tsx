@@ -819,7 +819,7 @@ export function ModelPanel({
               <FieldSkeleton />
               <FieldSkeleton />
             </div>
-            <div className="flex min-h-[580px] min-w-0 overflow-hidden rounded-md border border-line bg-surface">
+            <div className="flex min-h-[580px] min-w-0">
               <div className="flex min-w-0 flex-col gap-3 p-3 md:w-[280px] md:shrink-0 md:border-r md:border-line">
                 <FieldSkeleton />
                 <FieldSkeleton />
@@ -862,7 +862,7 @@ export function ModelPanel({
                   Add a provider to configure its connection and models.
                 </p>
               ) : null}
-              <div className="flex min-h-[580px] min-w-0 overflow-hidden rounded-md border border-line bg-surface">
+              <div className="flex min-h-[580px] min-w-0">
                 <div
                   data-provider-list
                   className={`min-w-0 flex-col gap-3 border-line p-3 md:w-[280px] md:shrink-0 md:border-r ${open ? "hidden md:flex" : "flex w-full"}`}
