@@ -1,4 +1,5 @@
 import { createCodePlugin } from "@streamdown/code";
+import { clsx } from "clsx";
 import { Check, Copy } from "lucide-react";
 import {
   memo,
@@ -35,9 +36,11 @@ const noMentions: MessageMention[] = [];
 export function CopyTextButton({
   source,
   label = "Copy code",
+  touchTarget = false,
 }: {
   source: string;
   label?: string;
+  touchTarget?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -75,7 +78,10 @@ export function CopyTextButton({
   return (
     <button
       type="button"
-      className="markdown-copy inline-flex size-7 items-center justify-center rounded-sm text-fg-muted hover:bg-surface-hover hover:text-fg cursor-pointer"
+      className={clsx(
+        "markdown-copy inline-flex size-7 items-center justify-center rounded-sm text-fg-muted hover:bg-surface-hover hover:text-fg cursor-pointer",
+        touchTarget && "touch:size-11 touch:min-w-11 touch:min-h-11",
+      )}
       aria-label={copied ? "Copied" : label}
       disabled={busy}
       onClick={(event) => {

@@ -1066,6 +1066,7 @@ export const MessageRow = memo(function MessageRow({
     <div
       data-message-id={message?.id}
       data-preview-id={!message ? saved?.metadata.preview_id : undefined}
+      data-copy-open={copyOpen ? "true" : undefined}
       className={clsx(
         "message-row flex scroll-m-6 items-start gap-3",
         fresh && "animate-rise-in [animation-duration:var(--duration-slow)]",
@@ -1075,14 +1076,17 @@ export const MessageRow = memo(function MessageRow({
         {compact ? null : <Avatar memberId={senderId} />}
       </div>
       <div
-        data-copy-open={copyOpen ? "true" : undefined}
         className="relative -ml-3 min-w-0 flex-1 border-l-2 border-l-transparent pl-3"
         onPointerDown={(event) => {
           if (event.pointerType !== "mouse") setCopyOpen(true);
         }}
       >
         <span className="message-copy message-copy-float absolute top-0 right-0 z-10 rounded-xs bg-app/95">
-          <CopyTextButton source={source} label="Copy message text" />
+          <CopyTextButton
+            source={source}
+            label="Copy message text"
+            touchTarget
+          />
         </span>
         <div className="mb-0.5 flex items-center gap-2">
           {compact ? null : (
