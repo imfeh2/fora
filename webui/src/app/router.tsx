@@ -21,7 +21,7 @@ export type Route =
   | { name: "discussion"; id: number }
   | { name: "members" }
   | { name: "usage" }
-  | { name: "library"; path?: string }
+  | { name: "library"; folder?: string }
   | { name: "document"; path: string }
   | { name: "settings"; section: SettingsSection };
 
@@ -95,7 +95,9 @@ export function routePath(route: Route): string {
     case "usage":
       return "/usage";
     case "library":
-      return "/library";
+      return route.folder
+        ? `/library?folder=${encodeURIComponent(route.folder)}`
+        : "/library";
     case "document":
       return documentPath(route.path);
     case "settings":
@@ -114,7 +116,7 @@ function readSegments(pathname: string): string[] | null {
   }
 }
 
-export function routeFromPath(pathname: string): Route | null {
+export function routeFromPath(pathname: string, search = ""): Route | null {
   const segments = readSegments(pathname);
   if (segments === null) return null;
   if (segments.some((segment) => segment === "." || segment === ".."))
@@ -130,7 +132,19 @@ export function routeFromPath(pathname: string): Route | null {
   if (head === "members" && segments.length === 1) return { name: "members" };
   if (head === "usage" && segments.length === 1) return { name: "usage" };
   if (head === "library") {
-    if (segments.length === 1) return { name: "library" };
+    if (segments.length === 1) {
+      const folder = new URLSearchParams(search).get("folder");
+      const decoded = folder === null ? null : readSegments(folder);
+      if (
+        decoded !== null &&
+        decoded.some((segment) => segment === "." || segment === "..")
+      )
+        return null;
+      return {
+        name: "library",
+        folder: decoded === null ? undefined : decoded.join("/") || undefined,
+      };
+    }
     return { name: "document", path: segments.slice(1).join("/") };
   }
   if (head === "settings" && segments.length === 2) {
@@ -142,13 +156,13 @@ export function routeFromPath(pathname: string): Route | null {
 
 export function RouterProvider({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => {
-    const initial = routeFromPath(location.pathname);
+    const initial = routeFromPath(location.pathname, location.search);
     if (initial === null) {
       history.replaceState(history.state, "", LIST_PATH);
       return { name: "discussions" };
     }
     const path = routePath(initial);
-    if (location.pathname !== path)
+    if (`${location.pathname}${location.search}` !== path)
       history.replaceState(history.state, "", path);
     return initial;
   });
@@ -172,14 +186,15 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     currentRoute.current = next;
     setRoute(next);
     const path = routePath(next);
-    if (location.pathname !== path) history.pushState(history.state, "", path);
+    if (`${location.pathname}${location.search}` !== path)
+      history.pushState(history.state, "", path);
   }, []);
 
   const settle = useCallback((next: Route) => {
     currentRoute.current = next;
     setRoute(next);
     const path = routePath(next);
-    if (location.pathname !== path)
+    if (`${location.pathname}${location.search}` !== path)
       history.replaceState(history.state, "", path);
   }, []);
 
@@ -200,7 +215,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         reverting.current = false;
         return;
       }
-      const next = routeFromPath(location.pathname);
+      const next = routeFromPath(location.pathname, location.search);
       if (next === null) {
         history.replaceState(history.state, "", LIST_PATH);
         settle({ name: "discussions" });
@@ -236,6 +251,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 function paramOf(route: Route): string | number | null {
   if ("id" in route) return route.id;
   if ("path" in route) return route.path ?? null;
+  if ("folder" in route) return `${route.folder ?? ""}`;
   if ("section" in route) return route.section;
   return null;
 }

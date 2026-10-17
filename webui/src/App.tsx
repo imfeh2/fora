@@ -88,7 +88,7 @@ function View({
     case "usage":
       return <UsagePage entrySignal={usageEntrySignal} />;
     case "library":
-      return <LibraryPage path={route.path} />;
+      return <LibraryPage folder={route.folder} />;
     case "document":
       return <DocumentPage path={route.path} />;
     case "settings":

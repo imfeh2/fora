@@ -54,7 +54,10 @@ export function documentCrumbs(
       onSelect: () =>
         navigate({
           name: "library",
-          path: parts.slice(0, index + 1).join("/"),
+          folder:
+            (index === parts.length - 1
+              ? parts.slice(0, index).join("/")
+              : parts.slice(0, index + 1).join("/")) || undefined,
         }),
     })),
   ];
@@ -80,7 +83,7 @@ function DocumentFrame({
   return (
     <Page>
       <PageHeader
-        title={path}
+        title={<span className="text-2xl font-semibold">{path}</span>}
         crumb={crumb}
         actions={
           <>
@@ -431,7 +434,7 @@ function TextDocument({ path }: { path: string }) {
             </LoadingSkeleton>
           )
         ) : (
-          <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
+          <div className="mx-auto grid w-full max-w-[72ch] flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0] leading-[1.6] [&_textarea]:leading-[1.6]">
             <Textarea
               aria-label="Document"
               readOnly={failed}

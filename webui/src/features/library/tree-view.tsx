@@ -1,10 +1,9 @@
-import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { FileText } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { type Column, RowLink, Table } from "@/components/layout/shell";
-import { Chip, CountPill } from "@/components/ui/index";
+import { Chip } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
-import { buildTree, type TreeNode } from "@/features/library/tree";
 import type { LibraryEntry } from "@/lib/backend";
 import {
   documentFolder,
@@ -14,32 +13,24 @@ import {
   relativeTime,
 } from "@/lib/format";
 
-export type TreeViewProps = {
-  entries: LibraryEntry[];
-  expanded: ReadonlySet<string>;
-  onToggle: (path: string) => void;
-  onOpen: (path: string) => void;
-  rowActions?: (entry: LibraryEntry) => MenuAction[];
-  readOnly?: boolean;
-  query?: string;
-  revealPath?: string;
-};
-
-export function TreeView({
+export function FileList({
   entries,
-  expanded,
-  onToggle,
+  query = "",
   onOpen,
   rowActions,
-  readOnly = false,
-  query = "",
   revealPath,
-}: TreeViewProps) {
-  const roots = useMemo(() => buildTree(entries), [entries]);
+  label = "Library documents",
+}: {
+  entries: LibraryEntry[];
+  query?: string;
+  onOpen: (path: string) => void;
+  rowActions?: (entry: LibraryEntry) => MenuAction[];
+  revealPath?: string;
+  label?: string;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const revealed = useRef<string | undefined>(undefined);
   const needle = query.trim().toLowerCase();
-  const actions = readOnly ? undefined : rowActions;
   const columns: Column[] = [
     { key: "file", label: "File" },
     ...(needle
@@ -47,23 +38,8 @@ export function TreeView({
       : []),
     { key: "size", label: "Size", align: "end", width: "100px" },
     { key: "modified", label: "Modified", hideBelow: "sm", width: "160px" },
-    ...(actions ? [{ key: "actions", label: "", width: "56px" }] : []),
+    ...(rowActions ? [{ key: "actions", label: "", width: "56px" }] : []),
   ];
-  const rows: { node: TreeNode; depth: number }[] = [];
-  const visit = (nodes: TreeNode[], depth: number) => {
-    for (const node of nodes) {
-      if (needle) {
-        if (node.kind === "file" && node.path.toLowerCase().includes(needle)) {
-          rows.push({ node, depth: 0 });
-        }
-        visit(node.children, 0);
-      } else {
-        rows.push({ node, depth });
-        if (expanded.has(node.path)) visit(node.children, depth + 1);
-      }
-    }
-  };
-  visit(roots, 0);
 
   useEffect(() => {
     if (!revealPath || revealed.current === revealPath || needle) return;
@@ -74,91 +50,67 @@ export function TreeView({
       row.scrollIntoView({ block: "nearest" });
       revealed.current = revealPath;
     }
-  }, [revealPath, needle, entries, expanded]);
+  }, [revealPath, needle, entries]);
 
   return (
-    <div ref={container} className="min-w-0">
-      <Table
-        columns={columns}
-        label={readOnly ? "Workspace files" : "Library documents"}
-      >
-        {rows.map(({ node, depth }) => {
-          const folder = node.kind === "directory";
-          const open = expanded.has(node.path);
-          return (
-            <tr key={node.path} data-path={node.path}>
-              <td>
-                <div
-                  className="flex min-w-0 items-center gap-2"
-                  style={{ paddingLeft: depth * 16 }}
+    <div
+      ref={container}
+      className="min-w-0 [&_th]:text-[11px] [&_th]:font-medium [&_th]:text-fg-muted [&_th]:py-1.5 [&_td]:py-0 [&_td]:h-11"
+    >
+      <Table columns={columns} label={label}>
+        {entries.map((entry) => (
+          <tr key={entry.path} data-path={entry.path} className="group">
+            <td>
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span
+                  className="flex flex-none text-fg-muted"
+                  aria-hidden="true"
                 >
-                  <span
-                    className="flex w-8 flex-none items-center justify-end gap-1 text-fg-muted"
-                    aria-hidden="true"
-                  >
-                    {folder ? (
-                      <>
-                        {open ? (
-                          <ChevronDown size={14} />
-                        ) : (
-                          <ChevronRight size={14} />
-                        )}
-                        <Folder size={15} />
-                      </>
-                    ) : (
-                      <FileText size={15} />
-                    )}
-                  </span>
-                  <RowLink
-                    primary={
-                      <span className="min-w-0 whitespace-normal wrap-anywhere">
-                        {documentName(node.path)}
-                      </span>
-                    }
-                    expanded={folder ? open : undefined}
-                    onSelect={() =>
-                      folder ? onToggle(node.path) : onOpen(node.path)
-                    }
-                  />
-                  {folder ? (
-                    <CountPill>
-                      {node.fileCount.toLocaleString("en-US")}
-                    </CountPill>
-                  ) : null}
-                </div>
+                  <FileText size={16} />
+                </span>
+                <RowLink
+                  primary={
+                    <span className="min-w-0 text-sm font-normal text-fg whitespace-normal wrap-anywhere">
+                      {documentName(entry.path)}
+                    </span>
+                  }
+                  onSelect={() => onOpen(entry.path)}
+                />
+              </div>
+            </td>
+            {needle ? (
+              <td data-hide-below="md">
+                <Chip>{documentFolder(entry.path) ?? "Root"}</Chip>
               </td>
-              {needle ? (
-                <td data-hide-below="md">
-                  <Chip>{documentFolder(node.path) ?? "Root"}</Chip>
-                </td>
-              ) : null}
-              <td
-                data-align="end"
-                className="tabular-nums whitespace-nowrap text-fg-muted"
-              >
-                {folder ? null : formatBytes(node.size)}
-              </td>
-              <td data-hide-below="sm" className="text-fg-muted">
-                <Tooltip label={formatTime(node.modified_at)} focusable>
-                  <time
-                    className="relative whitespace-nowrap"
-                    dateTime={node.modified_at}
-                  >
-                    {relativeTime(node.modified_at)}
-                  </time>
-                </Tooltip>
-              </td>
-              {actions ? (
-                <td className="relative z-1 w-12 text-right">
+            ) : null}
+            <td
+              data-align="end"
+              className="text-xs text-fg-muted tabular-nums whitespace-nowrap"
+            >
+              {formatBytes(entry.size)}
+            </td>
+            <td data-hide-below="sm" className="text-xs text-fg-muted">
+              <Tooltip label={formatTime(entry.modified_at)} focusable>
+                <time
+                  className="relative whitespace-nowrap"
+                  dateTime={entry.modified_at}
+                >
+                  {relativeTime(entry.modified_at)}
+                </time>
+              </Tooltip>
+            </td>
+            {rowActions ? (
+              <td className="relative z-1 w-12 text-right">
+                <span className="inline-flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100">
                   <OverflowMenu
-                    label={`Actions for ${node.path}`}
-                    actions={actions(node)}
+                    label={`Actions for ${entry.path}`}
+                    actions={rowActions(entry)}
                   />
-                </td>
-              ) : null}
-            </tr>
-          );
-        })}
+                </span>
+              </td>
+            ) : null}
+          </tr>
+        ))}
       </Table>
     </div>
   );
