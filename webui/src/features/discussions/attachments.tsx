@@ -2,7 +2,7 @@ import { Download, FileIcon, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "@/components/ui/dialog";
 import { Button, Spinner } from "@/components/ui/index";
-import type { DraftFile } from "@/features/discussions/draft";
+import type { ComposerFile } from "@/features/discussions/composer-state";
 import { type Attachment, backend } from "@/lib/backend";
 
 export function fileSize(size: number) {
@@ -32,16 +32,16 @@ function FilePreview({ file }: { file: File }) {
   );
 }
 
-export function DraftAttachments({
+export function ComposerAttachments({
   files,
   onRemove,
 }: {
-  files: DraftFile[];
+  files: ComposerFile[];
   onRemove: (id: string) => void;
 }) {
   return (
     <ul
-      aria-label="Draft attachments"
+      aria-label="Message attachments"
       className="m-0 flex max-h-40 list-none flex-wrap gap-2 overflow-y-auto p-3 pb-0"
     >
       {files.map((item) => (
