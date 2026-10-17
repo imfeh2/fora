@@ -17,6 +17,7 @@ import {
   Select,
   Spinner,
 } from "@/components/ui/index";
+import { toast } from "@/components/ui/toast";
 import {
   reportLoadFailure,
   useReportSettingsSave,
@@ -24,7 +25,7 @@ import {
 } from "@/features/settings/saver";
 import {
   type AgentModelConfig,
-  type BackendError,
+  BackendError,
   backend,
   type Member,
   type ModelCatalog,
@@ -171,7 +172,6 @@ function AgentModelsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<BackendError | null>(null);
   const [saving, setSaving] = useState<number | null>(null);
-  const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -222,23 +222,20 @@ function AgentModelsPanel() {
 
   const save = async (agentId: number, values: AgentModelConfig) => {
     setSaving(agentId);
-    setRowErrors((current) => {
-      if (!(agentId in current)) return current;
-      const next = { ...current };
-      delete next[agentId];
-      return next;
-    });
     try {
       await backend.configureModel("set_agent", agentId, values);
       await load();
     } catch (failure) {
-      setRowErrors((current) => ({
-        ...current,
-        [agentId]:
-          failure instanceof Error
-            ? failure.message
-            : "Could not save the selection",
-      }));
+      if (failure instanceof BackendError && failure.transport) {
+        backend.reportFailure(failure);
+      } else {
+        toast({
+          tone: "danger",
+          title: "Could not save the model",
+          description:
+            failure instanceof Error ? failure.message : String(failure),
+        });
+      }
     } finally {
       setSaving(null);
     }
@@ -309,11 +306,6 @@ function AgentModelsPanel() {
                   </option>
                 ))}
               </Select>
-              {rowErrors[agent.id] ? (
-                <p className="w-full text-xs text-danger">
-                  {rowErrors[agent.id]}
-                </p>
-              ) : null}
             </div>
           );
         })}
