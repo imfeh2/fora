@@ -20,7 +20,7 @@ import {
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
-import { useNavigate } from "@/app/router";
+import { documentPath, useNavigate } from "@/app/router";
 import { Button } from "@/components/ui/index";
 import { toast } from "@/components/ui/toast";
 import { remarkLiteralHtml, remarkMentions } from "@/features/markdown-plugins";
@@ -118,7 +118,7 @@ function LibraryLink({
   const navigate = useNavigate();
   return (
     <a
-      href={`/library/content?path=${encodeURIComponent(path)}`}
+      href={documentPath(path)}
       className="markdown-link"
       onClick={(event) => {
         event.preventDefault();

@@ -323,6 +323,8 @@ CONTENT_TYPES = {
 
 LIBRARY_MAX_BYTES = 20 * 1024 * 1024
 
+SPA_PREFIXES = ("/discussions", "/members", "/usage", "/library", "/settings")
+
 log = logging.getLogger(__name__)
 
 
@@ -333,6 +335,13 @@ def webui_directory(override: str | None = None) -> Path | None:
     if bundle:
         return Path(bundle) / "webui"
     return None
+
+
+def client_route(path: str) -> bool:
+    decoded = unquote(path)
+    return any(
+        decoded == prefix or decoded.startswith(f"{prefix}/") for prefix in SPA_PREFIXES
+    )
 
 
 def static_response(
@@ -352,7 +361,7 @@ def static_response(
         return failure(503, "Frontend not built")
     relative = unquote(path).lstrip("/")
     target = directory / "index.html"
-    if "." in relative:
+    if "." in relative and not client_route(path):
         target = (directory / relative).resolve()
         if not target.is_relative_to(directory.resolve()) or not target.is_file():
             return failure(404, "Not found")

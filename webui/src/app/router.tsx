@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -61,12 +62,101 @@ type Router = {
 
 const RouterContext = createContext<Router | null>(null);
 
-export function RouterProvider({ children }: { children: ReactNode }) {
-  const [stack, setStack] = useState<Route[]>([{ name: "discussions" }]);
+const LIST_PATH = "/discussions";
 
-  const currentRoute = useRef(stack[stack.length - 1]);
-  currentRoute.current = stack[stack.length - 1];
+export const SETTINGS_SECTIONS: SettingsSection[] = [
+  "model",
+  "execution",
+  "agent",
+  "langfuse",
+  "voice",
+];
+
+function pathSegments(path: string): string[] {
+  return path
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map(encodeURIComponent);
+}
+
+export function documentPath(path: string): string {
+  const segments = pathSegments(path);
+  return segments.length > 0 ? `/library/${segments.join("/")}` : "/library";
+}
+
+export function routePath(route: Route): string {
+  switch (route.name) {
+    case "discussions":
+      return LIST_PATH;
+    case "discussion":
+      return `/discussions/${route.id}`;
+    case "members":
+      return "/members";
+    case "usage":
+      return "/usage";
+    case "library":
+      return "/library";
+    case "document":
+      return documentPath(route.path);
+    case "settings":
+      return `/settings/${route.section}`;
+  }
+}
+
+function readSegments(pathname: string): string[] | null {
+  try {
+    return pathname
+      .split("/")
+      .filter((segment) => segment.length > 0)
+      .map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+}
+
+export function routeFromPath(pathname: string): Route | null {
+  const segments = readSegments(pathname);
+  if (segments === null) return null;
+  if (segments.some((segment) => segment === "." || segment === ".."))
+    return null;
+  const head = segments[0];
+  if (head === undefined) return { name: "discussions" };
+  if (head === "discussions") {
+    if (segments.length === 1) return { name: "discussions" };
+    if (segments.length === 2 && /^\d+$/.test(segments[1]))
+      return { name: "discussion", id: Number(segments[1]) };
+    return null;
+  }
+  if (head === "members" && segments.length === 1) return { name: "members" };
+  if (head === "usage" && segments.length === 1) return { name: "usage" };
+  if (head === "library") {
+    if (segments.length === 1) return { name: "library" };
+    return { name: "document", path: segments.slice(1).join("/") };
+  }
+  if (head === "settings" && segments.length === 2) {
+    const section = SETTINGS_SECTIONS.find((item) => item === segments[1]);
+    return section ? { name: "settings", section } : null;
+  }
+  return null;
+}
+
+export function RouterProvider({ children }: { children: ReactNode }) {
+  const [route, setRoute] = useState<Route>(() => {
+    const initial = routeFromPath(location.pathname);
+    if (initial === null) {
+      history.replaceState(history.state, "", LIST_PATH);
+      return { name: "discussions" };
+    }
+    const path = routePath(initial);
+    if (location.pathname !== path)
+      history.replaceState(history.state, "", path);
+    return initial;
+  });
+
+  const currentRoute = useRef(route);
+  currentRoute.current = route;
   const navigationBlocker = useRef<NavigationBlocker | null>(null);
+  const reverting = useRef(false);
   const registerNavigationBlocker = useCallback(
     (blocker: NavigationBlocker) => {
       navigationBlocker.current = blocker;
@@ -78,24 +168,64 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const navigate = useCallback((next: Route) => {
-    const top = currentRoute.current;
-    if (top.name === next.name && sameParams(top, next)) return;
-    const proceed = () => {
-      currentRoute.current = next;
-      setStack((current) => [...current, next].slice(-24));
-    };
-    if (navigationBlocker.current?.(next, proceed)) return;
-    proceed();
+  const apply = useCallback((next: Route) => {
+    currentRoute.current = next;
+    setRoute(next);
+    const path = routePath(next);
+    if (location.pathname !== path) history.pushState(history.state, "", path);
   }, []);
 
+  const settle = useCallback((next: Route) => {
+    currentRoute.current = next;
+    setRoute(next);
+    const path = routePath(next);
+    if (location.pathname !== path)
+      history.replaceState(history.state, "", path);
+  }, []);
+
+  const navigate = useCallback(
+    (next: Route) => {
+      const top = currentRoute.current;
+      if (top.name === next.name && sameParams(top, next)) return;
+      const proceed = () => apply(next);
+      if (navigationBlocker.current?.(next, proceed)) return;
+      proceed();
+    },
+    [apply],
+  );
+
+  useEffect(() => {
+    const onPopState = () => {
+      if (reverting.current) {
+        reverting.current = false;
+        return;
+      }
+      const next = routeFromPath(location.pathname);
+      if (next === null) {
+        history.replaceState(history.state, "", LIST_PATH);
+        settle({ name: "discussions" });
+        return;
+      }
+      const top = currentRoute.current;
+      if (top.name === next.name && sameParams(top, next)) {
+        settle(next);
+        return;
+      }
+      const proceed = () => apply(next);
+      if (navigationBlocker.current?.(next, proceed)) {
+        reverting.current = true;
+        history.go(1);
+        return;
+      }
+      proceed();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [apply, settle]);
+
   const value = useMemo<Router>(
-    () => ({
-      route: stack[stack.length - 1],
-      navigate,
-      registerNavigationBlocker,
-    }),
-    [stack, navigate, registerNavigationBlocker],
+    () => ({ route, navigate, registerNavigationBlocker }),
+    [route, navigate, registerNavigationBlocker],
   );
 
   return (
