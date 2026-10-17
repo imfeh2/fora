@@ -240,7 +240,7 @@ export function NavItem({
         <button
           type="button"
           className={clsx(
-            "flex-1 min-w-0 flex items-center gap-2 h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-4 border-0 rounded-sm bg-transparent text-sm font-medium text-left cursor-pointer transition-[color] duration-(--duration-fast) ease-linear group-hover:text-fg",
+            "flex-1 min-w-0 flex items-center gap-2 h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-4 border-0 rounded-sm bg-transparent text-sm font-medium text-left cursor-pointer transition-[color] duration-(--duration-fast) ease-linear group-hover:text-fg focus-visible:bg-surface-hover focus-visible:text-fg",
             active ? "text-fg" : "text-fg-muted",
           )}
           data-nav="item"

@@ -187,12 +187,13 @@
   input:focus-visible,
   textarea:focus-visible,
   [tabindex]:focus-visible {
-    outline: 2px solid var(--color-ring);
+    outline: 1px solid var(--color-line-hover);
     outline-offset: 2px;
   }
 
   a:focus-visible {
-    text-decoration: none;
+    text-decoration: underline;
+    text-decoration-color: var(--color-line-hover);
   }
 
   ::-webkit-scrollbar {

@@ -90,7 +90,7 @@ const iconButtonSizes = {
 };
 
 const inputClasses =
-  "w-full border border-line-interactive rounded-sm bg-app text-fg text-sm shadow-button transition-[border-color,box-shadow] duration-(--duration-fast) ease-linear hover:enabled:not-focus:border-line-hover placeholder:text-fg-muted focus:border-line-focus focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ring)_40%,transparent)] [&::-webkit-search-cancel-button]:appearance-none [&[type=number]]:[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0";
+  "w-full border border-line-interactive rounded-sm bg-app text-fg text-sm shadow-button transition-[border-color] duration-(--duration-fast) ease-linear hover:enabled:not-focus:border-line-hover placeholder:text-fg-muted focus:border-line-hover focus:outline-none [&::-webkit-search-cancel-button]:appearance-none [&[type=number]]:[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0";
 
 const badgeTones = {
   default: "bg-surface-raised text-fg-muted",

@@ -58,7 +58,6 @@
   --color-line-interactive: var(--color-gray-600);
   --color-line-hover: var(--color-gray-500);
   --color-line-focus: var(--color-blue-500);
-  --color-ring: var(--color-blue-700);
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.15);
   --shadow-base: 0 1px 3px 0 rgb(0 0 0 / 0.3), 0 1px 2px -1px rgb(0 0 0 / 0.3);

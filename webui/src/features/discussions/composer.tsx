@@ -817,7 +817,7 @@ export function Composer({
         }}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-line bg-surface text-fg shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-line-focus focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ring)_40%,transparent)] hover:border-line-interactive transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh] touch:max-h-[35dvh]",
+          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-line bg-surface text-fg shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-line-hover hover:border-line-interactive transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh] touch:max-h-[35dvh]",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
@@ -1235,7 +1235,7 @@ export function Composer({
         ) : null}
         <button
           type="button"
-          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 touch:right-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full bg-blue-500 text-gray-0 transition-all duration-300 hover:enabled:bg-blue-300 active:enabled:bg-blue-700 outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-default motion-reduce:transition-none"
+          className="absolute right-2 bottom-2 narrow:right-1 narrow:bottom-1 touch:right-1 touch:bottom-1 z-10 flex size-8 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full bg-blue-500 text-gray-0 transition-all duration-300 hover:enabled:bg-blue-300 active:enabled:bg-blue-700 outline-none focus-visible:bg-blue-300 cursor-default motion-reduce:transition-none"
           aria-label={
             recordingActive
               ? "Stop recording"
