@@ -28,7 +28,12 @@ from fora.core.member import AgentState, Member, MemberType, name_key
 from fora.core.mention import Mention, build_mentions
 from fora.locking import LockLevel, OrderedRLock
 from fora.ports.agent import GenerationKey, GenerationStore
-from fora.ports.store import DiscussionPage, PendingAcknowledgement, ReadSummary
+from fora.ports.store import (
+    DiscussionPage,
+    PendingAcknowledgement,
+    ReadSummary,
+    UnreadCounts,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -1809,11 +1814,17 @@ class SqliteStore:
             )
 
     @reading
-    def unread_counts(self, member_id: int) -> Mapping[int, int]:
+    def unread_counts(self, member_id: int) -> Mapping[int, UnreadCounts]:
         rows = self._db.execute(
             """
             SELECT dm.discussion_id AS discussion_id,
-                   COUNT(m.id) AS unread
+                   COUNT(m.id) AS unread,
+                   COALESCE(SUM(CASE WHEN EXISTS (
+                     SELECT 1 FROM mentions mt
+                     WHERE mt.discussion_id = m.discussion_id
+                       AND mt.message_id = m.id
+                       AND mt.member_id = dm.member_id
+                   ) THEN 1 ELSE 0 END), 0) AS mentions
             FROM discussion_members dm
             LEFT JOIN watermarks w
               ON w.discussion_id = dm.discussion_id AND w.member_id = dm.member_id
@@ -1826,4 +1837,9 @@ class SqliteStore:
             """,
             (member_id,),
         )
-        return {int(row["discussion_id"]): int(row["unread"]) for row in rows}
+        return {
+            int(row["discussion_id"]): UnreadCounts(
+                int(row["unread"]), int(row["mentions"])
+            )
+            for row in rows
+        }

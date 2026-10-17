@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Modal } from "@/components/ui/dialog";
-import { Badge, IconButton } from "@/components/ui/index";
+import { IconButton, UnreadMark } from "@/components/ui/index";
 import brandIcon from "../../../../assets/icon.svg";
 
 const crumbClasses =
@@ -79,6 +79,7 @@ export function Shell({
     onOpenChange: (open: boolean) => void;
     onClosed: () => void;
     unread: number | null;
+    mentions: number | null;
     trigger: RefObject<HTMLButtonElement | null>;
     restoreFocus: () => HTMLElement | null;
     desktop: RefObject<HTMLDivElement | null>;
@@ -115,9 +116,10 @@ export function Shell({
               >
                 <Menu size={16} />
               </IconButton>
-              {navigation.unread !== null && navigation.unread > 0 ? (
-                <Badge tone="unread">{navigation.unread}</Badge>
-              ) : null}
+              <UnreadMark
+                mentions={navigation.mentions}
+                unread={navigation.unread}
+              />
             </>
           ) : null}
         </div>

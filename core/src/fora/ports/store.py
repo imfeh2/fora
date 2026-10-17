@@ -34,6 +34,12 @@ class PendingAcknowledgement:
 
 
 @dataclass(frozen=True)
+class UnreadCounts:
+    unread: int
+    mentions: int
+
+
+@dataclass(frozen=True)
 class ReadSummary:
     id: int
     topic: str
@@ -209,4 +215,4 @@ class OrganizationStore(Protocol):
         self, discussion_id: int, member_id: int, message_id: int
     ) -> None: ...
 
-    def unread_counts(self, member_id: int) -> Mapping[int, int]: ...
+    def unread_counts(self, member_id: int) -> Mapping[int, UnreadCounts]: ...

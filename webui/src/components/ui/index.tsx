@@ -361,21 +361,51 @@ export function Field({
 
 export function Badge({
   tone = "default",
+  label,
   children,
 }: {
   tone?: "default" | "unread" | "pending";
+  label?: string;
   children: ReactNode;
 }) {
+  const className = clsx(
+    "inline-flex items-center justify-center gap-1 py-0 px-[6px] min-w-5 h-5 rounded-full text-xs font-medium tabular-nums tracking-[0] whitespace-nowrap",
+    badgeTones[tone],
+  );
+  if (label !== undefined)
+    return (
+      <span role="img" aria-label={label} className={className}>
+        {children}
+      </span>
+    );
+  return <span className={className}>{children}</span>;
+}
+
+export function UnreadDot({ label = "有未读消息" }: { label?: string }) {
   return (
     <span
-      className={clsx(
-        "inline-flex items-center justify-center gap-1 py-0 px-[6px] min-w-5 h-5 rounded-full text-xs font-medium tabular-nums tracking-[0] whitespace-nowrap",
-        badgeTones[tone],
-      )}
-    >
-      {children}
-    </span>
+      role="img"
+      aria-label={label}
+      className="inline-block size-2 rounded-full bg-line-hover"
+    />
   );
+}
+
+export function UnreadMark({
+  mentions,
+  unread,
+}: {
+  mentions: number | null;
+  unread: number | null;
+}) {
+  if (mentions !== null && mentions > 0)
+    return (
+      <Badge tone="unread" label={`${mentions} 条提到你`}>
+        {mentions}
+      </Badge>
+    );
+  if (unread !== null && unread > 0) return <UnreadDot />;
+  return null;
 }
 
 export function Chip({

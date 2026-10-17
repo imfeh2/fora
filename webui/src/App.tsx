@@ -30,7 +30,6 @@ import { AccessError, LoadError } from "@/components/ui/access-error";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { ErrorFace } from "@/components/ui/error-face";
 import {
-  Badge,
   Button,
   dismissToast,
   IconButton,
@@ -38,6 +37,7 @@ import {
   StateDot,
   Toaster,
   toast,
+  UnreadMark,
 } from "@/components/ui/index";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CreateDiscussionDialog } from "@/features/discussions/create";
@@ -211,6 +211,8 @@ function Chrome({
       .map((member) => member.id),
   );
   const unread = list?.reduce((total, item) => total + item.unread, 0) ?? null;
+  const mentions =
+    list?.reduce((total, item) => total + item.mentions, 0) ?? null;
   const regionError =
     route.name === "discussion" && organization.data === null
       ? organization.error
@@ -242,6 +244,7 @@ function Chrome({
         onOpenChange: setDrawerOpen,
         onClosed: drawerClosed,
         unread: unread ?? 0,
+        mentions: mentions,
         trigger: menuTrigger,
         desktop: desktopNavigation,
         restoreFocus: restoreNavigationFocus,
@@ -275,11 +278,13 @@ function Chrome({
               badge={
                 unread === null && !discussions.error && !failure ? (
                   <Skeleton className="h-3 w-4" />
-                ) : unread !== null && unread > 0 ? (
-                  <Badge key={unread} tone="unread">
-                    {unread}
-                  </Badge>
-                ) : undefined
+                ) : (
+                  <UnreadMark
+                    key={`${mentions}-${unread}`}
+                    mentions={mentions}
+                    unread={unread}
+                  />
+                )
               }
               trailing={
                 <IconButton
@@ -329,11 +334,11 @@ function Chrome({
                   label={item.topic}
                   active={route.name === "discussion" && route.id === item.id}
                   badge={
-                    item.unread > 0 ? (
-                      <Badge key={item.unread} tone="unread">
-                        {item.unread}
-                      </Badge>
-                    ) : undefined
+                    <UnreadMark
+                      key={`${item.mentions}-${item.unread}`}
+                      mentions={item.mentions}
+                      unread={item.unread}
+                    />
                   }
                   indicator={
                     item.member_ids.some((id) => running.has(id)) ? (

@@ -20,7 +20,7 @@ from fora.core.member import validate_name
 from fora.ports.agent import GenerationKey, HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
 from fora.ports.files import FileTree
-from fora.ports.store import OrganizationStore
+from fora.ports.store import OrganizationStore, UnreadCounts
 from fora.ports.usage import UsageCache, UsageObservation
 from fora.services.history import History
 from fora.services.library import Library
@@ -306,7 +306,7 @@ class AgentTools:
                 ErrorCode.INVALID_PAGINATION, "limit must be an integer >= 1"
             )
         with self._deps.reading():
-            unread = self._deps.store.unread_counts(self._actor.member_id)
+            counts = self._deps.store.unread_counts(self._actor.member_id)
             discussions = self._deps.store.list_discussions(
                 member_id=self._actor.member_id,
                 include_archived=include_archived,
@@ -318,7 +318,8 @@ class AgentTools:
                 "topic": item.topic,
                 "member_ids": sorted(item.member_ids),
                 "archived": item.archived,
-                "unread": unread.get(item.id, 0),
+                "unread": counts.get(item.id, UnreadCounts(0, 0)).unread,
+                "mentions": counts.get(item.id, UnreadCounts(0, 0)).mentions,
             }
             for item in discussions
         ]

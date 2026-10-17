@@ -200,6 +200,7 @@ export type DiscussionSummary = {
   member_ids: number[];
   archived: boolean;
   unread: number;
+  mentions: number;
 };
 
 export type MessageMention = {
