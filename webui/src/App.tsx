@@ -45,6 +45,7 @@ import { DiscussionsPage } from "@/features/discussions/list";
 import { ThreadPage } from "@/features/discussions/thread";
 import { LibraryPage } from "@/features/library/list";
 import { MembersPage } from "@/features/members/list";
+import { SettingsNav } from "@/features/settings/nav";
 import { SettingsPage } from "@/features/settings/page";
 import {
   SettingsSaveProvider,
@@ -242,116 +243,121 @@ function Chrome({
         restoreFocus: restoreNavigationFocus,
       }}
       sidebar={
-        <Sidebar
-          inert={settingsSaving}
-          footer={
-            <Nav label="Settings">
-              <NavItem
-                icon={<Settings size={16} />}
-                label="Settings"
-                active={active === "settings"}
-                onSelect={() =>
-                  selectRoute({
-                    name: "settings",
-                    section:
-                      route.name === "settings" ? route.section : "model",
-                  })
-                }
-              />
-            </Nav>
-          }
-        >
-          <SidebarBrand />
-          <Nav label="Sections">
-            <NavItem
-              icon={<MessagesSquare size={16} />}
-              label="Discussions"
-              active={route.name === "discussions" || unlisted}
-              trailing={
-                <IconButton
-                  size="sm"
-                  label="New Discussion"
-                  touchTarget
-                  disabled={!organization.data || backend.disconnected}
-                  onClick={() => {
-                    if (!settingsSaving) closeThen(() => setCreating(true));
-                  }}
-                >
-                  <Plus size={15} />
-                </IconButton>
-              }
-              onSelect={() => selectRoute({ name: "discussions" })}
-            >
-              {list === null && !discussions.error && !failure ? (
-                <li
-                  aria-busy="true"
-                  aria-label="Loading Discussions"
-                  className="pl-10 pr-2"
-                >
-                  {["75%", "55%", "85%"].map((width) => (
-                    <div key={width} className="flex h-[26px] items-center">
-                      <Skeleton style={{ width }} />
-                    </div>
-                  ))}
-                </li>
-              ) : null}
-              {discussions.error && !failure && route.name !== "discussions" ? (
-                <li className="px-4 py-2 text-xs">
-                  <p>{discussions.error.message}</p>
-                  <Button
-                    size="sm"
-                    disabled={discussions.refreshing}
-                    onClick={() =>
-                      void application.retryResource("discussions")
-                    }
-                  >
-                    Retry Discussions
-                  </Button>
-                </li>
-              ) : null}
-              {list?.map((item) => (
-                <NavSubItem
-                  key={item.id}
-                  label={item.topic}
-                  active={route.name === "discussion" && route.id === item.id}
-                  badge={
-                    <UnreadMark
-                      key={`${item.mentions}-${item.unread}`}
-                      mentions={item.mentions}
-                      unread={item.unread}
-                    />
-                  }
-                  indicator={
-                    item.member_ids.some((id) => running.has(id)) ? (
-                      <StateDot state="running" />
-                    ) : undefined
-                  }
+        route.name === "settings" ? (
+          <SettingsNav section={route.section} />
+        ) : (
+          <Sidebar
+            inert={settingsSaving}
+            footer={
+              <Nav label="Settings">
+                <NavItem
+                  icon={<Settings size={16} />}
+                  label="Settings"
+                  active={active === "settings"}
                   onSelect={() =>
-                    selectRoute({ name: "discussion", id: item.id })
+                    selectRoute({
+                      name: "settings",
+                      section: "model",
+                    })
                   }
                 />
-              ))}
-            </NavItem>
-            <NavItem
-              icon={<Users size={16} />}
-              label="Members"
-              active={active === "members"}
-              onSelect={() => selectRoute({ name: "members" })}
-            />
-            <NavItem
-              icon={<ChartNoAxesCombined size={16} />}
-              label="Usage"
-              active={active === "usage"}
-              onSelect={() => selectRoute({ name: "usage" })}
-            />
-            <NavItem
-              icon={<BookText size={16} />}
-              label="Library"
-              active={active === "library"}
-              onSelect={() => selectRoute({ name: "library" })}
-            />
-          </Nav>
-        </Sidebar>
+              </Nav>
+            }
+          >
+            <SidebarBrand />
+            <Nav label="Sections">
+              <NavItem
+                icon={<MessagesSquare size={16} />}
+                label="Discussions"
+                active={route.name === "discussions" || unlisted}
+                trailing={
+                  <IconButton
+                    size="sm"
+                    label="New Discussion"
+                    touchTarget
+                    disabled={!organization.data || backend.disconnected}
+                    onClick={() => {
+                      if (!settingsSaving) closeThen(() => setCreating(true));
+                    }}
+                  >
+                    <Plus size={15} />
+                  </IconButton>
+                }
+                onSelect={() => selectRoute({ name: "discussions" })}
+              >
+                {list === null && !discussions.error && !failure ? (
+                  <li
+                    aria-busy="true"
+                    aria-label="Loading Discussions"
+                    className="pl-10 pr-2"
+                  >
+                    {["75%", "55%", "85%"].map((width) => (
+                      <div key={width} className="flex h-[26px] items-center">
+                        <Skeleton style={{ width }} />
+                      </div>
+                    ))}
+                  </li>
+                ) : null}
+                {discussions.error &&
+                !failure &&
+                route.name !== "discussions" ? (
+                  <li className="px-4 py-2 text-xs">
+                    <p>{discussions.error.message}</p>
+                    <Button
+                      size="sm"
+                      disabled={discussions.refreshing}
+                      onClick={() =>
+                        void application.retryResource("discussions")
+                      }
+                    >
+                      Retry Discussions
+                    </Button>
+                  </li>
+                ) : null}
+                {list?.map((item) => (
+                  <NavSubItem
+                    key={item.id}
+                    label={item.topic}
+                    active={route.name === "discussion" && route.id === item.id}
+                    badge={
+                      <UnreadMark
+                        key={`${item.mentions}-${item.unread}`}
+                        mentions={item.mentions}
+                        unread={item.unread}
+                      />
+                    }
+                    indicator={
+                      item.member_ids.some((id) => running.has(id)) ? (
+                        <StateDot state="running" />
+                      ) : undefined
+                    }
+                    onSelect={() =>
+                      selectRoute({ name: "discussion", id: item.id })
+                    }
+                  />
+                ))}
+              </NavItem>
+              <NavItem
+                icon={<Users size={16} />}
+                label="Members"
+                active={active === "members"}
+                onSelect={() => selectRoute({ name: "members" })}
+              />
+              <NavItem
+                icon={<ChartNoAxesCombined size={16} />}
+                label="Usage"
+                active={active === "usage"}
+                onSelect={() => selectRoute({ name: "usage" })}
+              />
+              <NavItem
+                icon={<BookText size={16} />}
+                label="Library"
+                active={active === "library"}
+                onSelect={() => selectRoute({ name: "library" })}
+              />
+            </Nav>
+          </Sidebar>
+        )
       }
     >
       {organization.error &&
