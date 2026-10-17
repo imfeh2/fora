@@ -171,6 +171,7 @@ function AgentModelsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<BackendError | null>(null);
   const [saving, setSaving] = useState<number | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -221,11 +222,23 @@ function AgentModelsPanel() {
 
   const save = async (agentId: number, values: AgentModelConfig) => {
     setSaving(agentId);
+    setRowErrors((current) => {
+      if (!(agentId in current)) return current;
+      const next = { ...current };
+      delete next[agentId];
+      return next;
+    });
     try {
       await backend.configureModel("set_agent", agentId, values);
       await load();
     } catch (failure) {
-      setError(reportLoadFailure(failure));
+      setRowErrors((current) => ({
+        ...current,
+        [agentId]:
+          failure instanceof Error
+            ? failure.message
+            : "Could not save the selection",
+      }));
     } finally {
       setSaving(null);
     }
@@ -255,12 +268,21 @@ function AgentModelsPanel() {
                 aria-label={`Model for ${agent.name}`}
                 value={saved.model_id ?? ""}
                 disabled={saving === agent.id}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const modelId = event.target.value || null;
+                  if (modelId === null) {
+                    void save(agent.id, { model_id: null, thinking: null });
+                    return;
+                  }
+                  const next = models.find((item) => item.id === modelId);
+                  const keep =
+                    saved.thinking !== null &&
+                    (next?.thinking_options ?? []).includes(saved.thinking);
                   void save(agent.id, {
-                    model_id: event.target.value || null,
-                    thinking: saved.thinking,
-                  })
-                }
+                    model_id: modelId,
+                    thinking: keep ? saved.thinking : null,
+                  });
+                }}
               >
                 <option value="">Default</option>
                 {models.map((item) => (
@@ -287,6 +309,11 @@ function AgentModelsPanel() {
                   </option>
                 ))}
               </Select>
+              {rowErrors[agent.id] ? (
+                <p className="w-full text-xs text-danger">
+                  {rowErrors[agent.id]}
+                </p>
+              ) : null}
             </div>
           );
         })}
