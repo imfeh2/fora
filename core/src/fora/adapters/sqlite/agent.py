@@ -34,12 +34,16 @@ from fora.ports.agent import (
     AgentHistoryRun,
     AgentHistoryWindow,
     AgentHistoryWindows,
+    AgentInputSource,
     AgentLifecycle,
     AgentMessagePage,
     AgentModelRequest,
     AgentModelRequestSummary,
     AgentRun,
     AgentTextPage,
+    AgentWindowRequest,
+    AgentWindowRequestPage,
+    AgentWindowStats,
     HistorySlice,
     HistoryWindowFilter,
     ModelRequestHandle,
@@ -139,6 +143,8 @@ CREATE TABLE IF NOT EXISTS agent_model_requests (
 );
 CREATE INDEX IF NOT EXISTS agent_model_requests_summary
 ON agent_model_requests (agent_id, sequence, ordinal, status, started_at, completed_at);
+CREATE INDEX IF NOT EXISTS agent_model_requests_window
+ON agent_model_requests (agent_id, window_number, sequence, ordinal);
 CREATE TABLE IF NOT EXISTS agent_history_message_blobs (
     content_hash TEXT PRIMARY KEY,
     content_json TEXT NOT NULL,
@@ -1224,6 +1230,267 @@ class SqliteAgentStore:
             )
         )
         return str(row["content_json"]) if row is not None else None
+
+    def _window_by_number(
+        self, agent_id: int, window: int
+    ) -> AgentHistoryWindow | None:
+        state = first(
+            self._db.execute(
+                "SELECT number, since_sequence FROM agent_windows WHERE agent_id = ?",
+                (agent_id,),
+            )
+        )
+        current_number = int(state["number"]) if state is not None else 1
+        current_since = int(state["since_sequence"]) if state is not None else 1
+        event = first(
+            self._db.execute(
+                "SELECT since_sequence, reset_at, reason FROM agent_window_events"
+                " WHERE agent_id = ? AND number = ?",
+                (agent_id, window),
+            )
+        )
+        following = first(
+            self._db.execute(
+                "SELECT reset_at, reason FROM agent_window_events"
+                " WHERE agent_id = ? AND number = ?",
+                (agent_id, window + 1),
+            )
+        )
+        runs = first(
+            self._db.execute(
+                "SELECT MIN(sequence) AS since_sequence, MIN(started_at) AS started_at"
+                " FROM agent_runs INDEXED BY agent_runs_summary"
+                " WHERE agent_id = ? AND window_number = ?",
+                (agent_id, window),
+            )
+        )
+        has_runs = runs is not None and runs["since_sequence"] is not None
+        if event is None and not has_runs and window != 1 and window != current_number:
+            return None
+        since_sequence: int | None = None
+        if event is not None and event["since_sequence"] is not None:
+            since_sequence = int(event["since_sequence"])
+        elif has_runs and runs is not None:
+            since_sequence = int(runs["since_sequence"])
+        elif window == current_number:
+            since_sequence = current_since
+        started_at = event["reset_at"] if event is not None else None
+        if started_at is None and has_runs and runs is not None:
+            started_at = runs["started_at"]
+        return AgentHistoryWindow(
+            number=window,
+            since_sequence=since_sequence,
+            started_at=started_at,
+            start_reason=event["reason"] if event is not None else None,
+            ended_at=following["reset_at"] if following is not None else None,
+            end_reason=following["reason"] if following is not None else None,
+            is_current=window == current_number,
+        )
+
+    @reading
+    def window_by_number(self, agent_id: int, window: int) -> AgentHistoryWindow | None:
+        return self._window_by_number(agent_id, window)
+
+    @reading
+    def window_stats(self, agent_id: int, window: int) -> AgentWindowStats | None:
+        info = self._window_by_number(agent_id, window)
+        if info is None:
+            return None
+        row = first(
+            self._db.execute(
+                "SELECT COUNT(*) AS request_count,"
+                " COUNT(DISTINCT sequence) AS run_count,"
+                " MIN(started_at) AS first_started_at,"
+                " MAX(completed_at) AS last_completed_at"
+                " FROM agent_model_requests"
+                " WHERE agent_id = ? AND window_number = ?",
+                (agent_id, window),
+            )
+        )
+        assert row is not None
+        return AgentWindowStats(
+            window_number=window,
+            request_count=int(row["request_count"]),
+            run_count=int(row["run_count"]),
+            first_started_at=row["first_started_at"],
+            last_completed_at=row["last_completed_at"],
+            since_sequence=info.since_sequence,
+            started_at=info.started_at,
+            start_reason=info.start_reason,
+            ended_at=info.ended_at,
+            end_reason=info.end_reason,
+            is_current=info.is_current,
+        )
+
+    @reading
+    def window_requests(
+        self,
+        agent_id: int,
+        window: int,
+        *,
+        before: tuple[int, int] | None = None,
+        limit: int = 50,
+    ) -> AgentWindowRequestPage:
+        total_row = first(
+            self._db.execute(
+                "SELECT COUNT(*) AS total FROM agent_model_requests"
+                " WHERE agent_id = ? AND window_number = ?",
+                (agent_id, window),
+            )
+        )
+        assert total_row is not None
+        clause = "" if before is None else " AND (sequence, ordinal) < (?, ?)"
+        parameters: tuple[object, ...] = (
+            (agent_id, window)
+            if before is None
+            else (agent_id, window, before[0], before[1])
+        )
+        rows = list(
+            self._db.execute(
+                "SELECT sequence, ordinal, request_id, run_id, window_number, status,"
+                " started_at, completed_at, streaming, input_length, parameters_length,"
+                " settings_length, model_length, response_length, input_count,"
+                " response_count, related_count, error"
+                " FROM agent_model_requests"
+                " WHERE agent_id = ? AND window_number = ?"
+                f"{clause} ORDER BY sequence DESC, ordinal DESC LIMIT ?",
+                (*parameters, limit + 1),
+            )
+        )
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+        requests = tuple(self._model_request_summary(row) for row in rows)
+        start_index = None
+        if rows:
+            index_row = first(
+                self._db.execute(
+                    "SELECT COUNT(*) AS position FROM agent_model_requests"
+                    " WHERE agent_id = ? AND window_number = ?"
+                    " AND (sequence, ordinal) <= (?, ?)",
+                    (agent_id, window, rows[0]["sequence"], rows[0]["ordinal"]),
+                )
+            )
+            assert index_row is not None
+            start_index = int(index_row["position"])
+        next_before = (
+            (rows[-1]["sequence"], rows[-1]["ordinal"]) if has_more and rows else None
+        )
+        return AgentWindowRequestPage(
+            window_number=window,
+            total=int(total_row["total"]),
+            start_index=start_index,
+            requests=requests,
+            has_more=has_more,
+            next_before=next_before,
+        )
+
+    @reading
+    def window_request(
+        self, agent_id: int, window: int, sequence: int, ordinal: int
+    ) -> AgentWindowRequest | None:
+        row = first(
+            self._db.execute(
+                "SELECT ordinal, request_id, run_id, window_number, status, started_at,"
+                " completed_at, streaming, input_length, parameters_length,"
+                " settings_length, model_length, response_length, input_count,"
+                " response_count, related_count, error"
+                " FROM agent_model_requests"
+                " WHERE agent_id = ? AND sequence = ? AND ordinal = ?"
+                " AND window_number = ?",
+                (agent_id, sequence, ordinal, window),
+            )
+        )
+        if row is None:
+            return None
+        total_row = first(
+            self._db.execute(
+                "SELECT COUNT(*) AS total FROM agent_model_requests"
+                " WHERE agent_id = ? AND window_number = ?",
+                (agent_id, window),
+            )
+        )
+        index_row = first(
+            self._db.execute(
+                "SELECT COUNT(*) AS position FROM agent_model_requests"
+                " WHERE agent_id = ? AND window_number = ?"
+                " AND (sequence, ordinal) <= (?, ?)",
+                (agent_id, window, sequence, ordinal),
+            )
+        )
+        assert total_row is not None and index_row is not None
+        return AgentWindowRequest(
+            request=AgentModelRequest(self._model_request_summary(row)),
+            index=int(index_row["position"]),
+            total=int(total_row["total"]),
+        )
+
+    @reading
+    def input_sources(
+        self, agent_id: int, sequence: int, ordinal: int
+    ) -> tuple[AgentInputSource, ...]:
+        row = first(
+            self._db.execute(
+                "SELECT parameters_json FROM agent_model_requests"
+                " WHERE agent_id = ? AND sequence = ? AND ordinal = ?",
+                (agent_id, sequence, ordinal),
+            )
+        )
+        if row is None:
+            return ()
+        sources: list[AgentInputSource] = []
+        try:
+            parameters = json.loads(str(row["parameters_json"]))
+        except (TypeError, ValueError):
+            parameters = None
+        parts = (
+            parameters.get("instruction_parts")
+            if isinstance(parameters, dict)
+            else None
+        )
+        if isinstance(parts, list) and parts:
+            texts = [
+                part["content"]
+                for part in parts
+                if isinstance(part, dict) and isinstance(part.get("content"), str)
+            ]
+            text = "\n\n".join(texts).strip()
+            if text:
+                sources.append(
+                    AgentInputSource(
+                        kind="instruction_parts", text=text, message_position=None
+                    )
+                )
+        message_row = first(
+            self._db.execute(
+                "SELECT b.content_json FROM agent_model_request_messages r"
+                " JOIN agent_history_message_blobs b ON b.content_hash = r.content_hash"
+                " WHERE r.agent_id = ? AND r.sequence = ? AND r.ordinal = ?"
+                " AND r.channel = 'input' AND r.position = 0",
+                (agent_id, sequence, ordinal),
+            )
+        )
+        if message_row is not None:
+            try:
+                message = json.loads(str(message_row["content_json"]))
+            except ValueError:
+                message = None
+            if isinstance(message, dict):
+                for part in message.get("parts", []):
+                    if (
+                        isinstance(part, dict)
+                        and part.get("part_kind") == "system-prompt"
+                    ):
+                        content = part.get("content")
+                        if isinstance(content, str) and content.strip():
+                            sources.append(
+                                AgentInputSource(
+                                    kind="system_message",
+                                    text=content.strip(),
+                                    message_position=0,
+                                )
+                            )
+                        break
+        return tuple(sources)
 
     @reading
     def window(self, agent_id: int) -> WindowState:

@@ -579,6 +579,30 @@ class Api:
         )
 
         register(
+            "agent.history.window",
+            partial(agent_history_window, context),
+            scope=partial(agent_query, context),
+        )
+
+        register(
+            "agent.history.window_requests",
+            partial(agent_history_window_requests, context),
+            scope=partial(agent_query, context),
+        )
+
+        register(
+            "agent.history.window_request",
+            partial(agent_history_window_request, context),
+            scope=partial(agent_query, context),
+        )
+
+        register(
+            "agent.history.input_sources",
+            partial(agent_history_input_sources, context),
+            scope=partial(agent_query, context),
+        )
+
+        register(
             "agent.history.text",
             partial(agent_history_text, context),
             scope=partial(agent_query, context),
@@ -1101,6 +1125,103 @@ def agent_history_windows(context: _Context, params: dict[str, Any]) -> Any:
         "has_unassigned": page.has_unassigned,
         "has_before": has_before,
         "next_before": windows[-1].number if has_before else None,
+    }
+
+
+def agent_history_window(context: _Context, params: dict[str, Any]) -> Any:
+    agent_id = _required_integer(params, "agent_id")
+    window = _required_integer(params, "window")
+    context.api._human().authorize_agent_history(agent_id)
+    with context.api._reading():
+        context.api._human().authorize_agent_history(agent_id)
+        info = context.api._scheduler.history.window_by_number(agent_id, window)
+        if info is None:
+            raise DomainError(ErrorCode.UNKNOWN_WINDOW, "Window is not recorded")
+        stats = context.api._scheduler.history.window_stats(agent_id, window)
+    assert stats is not None
+    return {
+        "agent_id": agent_id,
+        "window": asdict(info),
+        "stats": asdict(stats),
+    }
+
+
+def agent_history_window_requests(context: _Context, params: dict[str, Any]) -> Any:
+    agent_id = _required_integer(params, "agent_id")
+    window = _required_integer(params, "window")
+    limit = _integer_param(params, "limit", default=50, maximum=50)
+    assert limit is not None
+    if limit == 0:
+        raise DomainError(ErrorCode.INVALID_PARAMS, "history limits must be positive")
+    before_sequence = _integer_param(params, "before_sequence", maximum=2**63 - 1)
+    before_ordinal = _integer_param(params, "before_ordinal", maximum=2**63 - 1)
+    before = (
+        (before_sequence, before_ordinal)
+        if before_sequence is not None and before_ordinal is not None
+        else None
+    )
+    with context.api._reading():
+        context.api._human().authorize_agent_history(agent_id)
+        if context.api._scheduler.history.window_by_number(agent_id, window) is None:
+            raise DomainError(ErrorCode.UNKNOWN_WINDOW, "Window is not recorded")
+        page = context.api._scheduler.history.window_requests(
+            agent_id, window, before=before, limit=limit
+        )
+    return {
+        "agent_id": agent_id,
+        "window_number": page.window_number,
+        "total": page.total,
+        "start_index": page.start_index,
+        "requests": [asdict(item) for item in page.requests],
+        "has_more": page.has_more,
+        "next_before": (
+            {"sequence": page.next_before[0], "ordinal": page.next_before[1]}
+            if page.next_before is not None
+            else None
+        ),
+    }
+
+
+def agent_history_window_request(context: _Context, params: dict[str, Any]) -> Any:
+    agent_id = _required_integer(params, "agent_id")
+    window = _required_integer(params, "window")
+    sequence = _required_integer(params, "sequence")
+    ordinal = _required_integer(params, "ordinal")
+    with context.api._reading():
+        context.api._human().authorize_agent_history(agent_id, include_deleted=True)
+        if context.api._scheduler.history.window_by_number(agent_id, window) is None:
+            raise DomainError(ErrorCode.UNKNOWN_WINDOW, "Window is not recorded")
+        found = context.api._scheduler.history.window_request(
+            agent_id, window, sequence, ordinal
+        )
+    if found is None:
+        raise DomainError(
+            ErrorCode.REQUEST_NOT_IN_WINDOW, "Request does not belong to the window"
+        )
+    return {
+        "agent_id": agent_id,
+        "window_number": window,
+        "index": found.index,
+        "total": found.total,
+        "request": asdict(found.request.summary),
+    }
+
+
+def agent_history_input_sources(context: _Context, params: dict[str, Any]) -> Any:
+    agent_id = _required_integer(params, "agent_id")
+    sequence = _required_integer(params, "sequence")
+    ordinal = _required_integer(params, "ordinal")
+    with context.api._reading():
+        context.api._human().authorize_agent_history(agent_id, include_deleted=True)
+        sources = context.api._scheduler.history.input_sources(
+            agent_id, sequence, ordinal
+        )
+    return {
+        "agent_id": agent_id,
+        "sequence": sequence,
+        "ordinal": ordinal,
+        "sources": [asdict(item) for item in sources],
+        "has_instructions": any(item.kind == "instruction_parts" for item in sources),
     }
 
 

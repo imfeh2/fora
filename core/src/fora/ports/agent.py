@@ -190,6 +190,45 @@ class AgentModelRequest:
 
 
 @dataclass(frozen=True)
+class AgentWindowRequestPage:
+    window_number: int
+    total: int
+    start_index: int | None
+    requests: tuple[AgentModelRequestSummary, ...]
+    has_more: bool
+    next_before: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class AgentWindowRequest:
+    request: AgentModelRequest
+    index: int
+    total: int
+
+
+@dataclass(frozen=True)
+class AgentWindowStats:
+    window_number: int
+    request_count: int
+    run_count: int
+    first_started_at: str | None
+    last_completed_at: str | None
+    since_sequence: int | None
+    started_at: str | None
+    start_reason: str | None
+    ended_at: str | None
+    end_reason: str | None
+    is_current: bool
+
+
+@dataclass(frozen=True)
+class AgentInputSource:
+    kind: str
+    text: str
+    message_position: int | None
+
+
+@dataclass(frozen=True)
 class AgentTextPage:
     field: str
     offset: int
@@ -557,6 +596,29 @@ class HistoryStore(Protocol):
         channel: str,
         position: int,
     ) -> str | None: ...
+
+    def window_by_number(
+        self, agent_id: int, window: int
+    ) -> AgentHistoryWindow | None: ...
+
+    def window_stats(self, agent_id: int, window: int) -> AgentWindowStats | None: ...
+
+    def window_requests(
+        self,
+        agent_id: int,
+        window: int,
+        *,
+        before: tuple[int, int] | None = None,
+        limit: int = 50,
+    ) -> AgentWindowRequestPage: ...
+
+    def window_request(
+        self, agent_id: int, window: int, sequence: int, ordinal: int
+    ) -> AgentWindowRequest | None: ...
+
+    def input_sources(
+        self, agent_id: int, sequence: int, ordinal: int
+    ) -> tuple[AgentInputSource, ...]: ...
 
     def runs(self, agent_id: int, *, limit: int = 50) -> tuple[AgentRun, ...]: ...
 

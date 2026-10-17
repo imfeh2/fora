@@ -17,12 +17,28 @@
       "handler": "partial:agent_history_image",
       "scope": "partial:agent_query"
     },
+    "agent.history.input_sources": {
+      "handler": "partial:agent_history_input_sources",
+      "scope": "partial:agent_query"
+    },
     "agent.history.read": {
       "handler": "partial:agent_history_read",
       "scope": "partial:agent_query"
     },
     "agent.history.text": {
       "handler": "partial:agent_history_text",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.window": {
+      "handler": "partial:agent_history_window",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.window_request": {
+      "handler": "partial:agent_history_window_request",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.window_requests": {
+      "handler": "partial:agent_history_window_requests",
       "scope": "partial:agent_query"
     },
     "agent.history.windows": {
@@ -284,8 +300,12 @@
     "agent.generation.text",
     "agent.history",
     "agent.history.image",
+    "agent.history.input_sources",
     "agent.history.read",
     "agent.history.text",
+    "agent.history.window",
+    "agent.history.window_request",
+    "agent.history.window_requests",
     "agent.history.windows",
     "agent.live",
     "agent.live.read",
@@ -320,6 +340,7 @@
     "organization.pause_agent",
     "organization.rename_member",
     "organization.resume_agent",
+    "ping",
     "settings.get",
     "settings.list_models",
     "settings.test_model",
@@ -331,8 +352,7 @@
     "usage.query",
     "usage.read",
     "workspace.list",
-    "workspace.read",
-    "ping"
+    "workspace.read"
   ],
   "source": "core/src/fora/adapters/jsonl/api.py"
 }
