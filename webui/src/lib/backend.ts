@@ -248,8 +248,6 @@ export type DiscussionDetail = {
   total_messages: number;
   archived: boolean;
   read_through: number;
-  awaiting_ack: number[];
-  acknowledged: number[];
   messages: Message[];
 };
 
@@ -354,9 +352,6 @@ export type DiscussionPage = {
   has_before: boolean;
   has_after: boolean;
   previous_sender_id: number | null;
-  awaiting_ack: number[];
-  acknowledged: number[];
-  pending_count: number;
   metadata?: {
     topic: string;
     archived: boolean;
@@ -1368,14 +1363,6 @@ export class Backend {
     });
   }
 
-  ackPending(discussion_id: number, through_message_id: number) {
-    return this.call<{
-      acked: number;
-      read_through: number;
-      pending_count: number;
-    }>("discussion.ack_pending", { discussion_id, through_message_id });
-  }
-
   sendVisible(
     discussion_id: number,
     body: string,
@@ -1540,20 +1527,6 @@ export class Backend {
     return this.call<{ id: number }>("discussion.send", {
       discussion_id,
       body,
-    });
-  }
-
-  ack(discussion_id: number, message_ids: number[]) {
-    return this.call<{ acked: number }>("discussion.ack", {
-      discussion_id,
-      message_ids,
-    });
-  }
-
-  revokeAck(discussion_id: number, message_ids: number[]) {
-    return this.call<{ revoked: number }>("discussion.revoke_ack", {
-      discussion_id,
-      message_ids,
     });
   }
 

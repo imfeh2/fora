@@ -30,7 +30,6 @@ from fora.locking import LockLevel, OrderedRLock
 from fora.ports.agent import GenerationKey, GenerationStore
 from fora.ports.store import (
     DiscussionPage,
-    PendingAcknowledgement,
     ReadSummary,
     UnreadCounts,
 )
@@ -1651,37 +1650,6 @@ class SqliteStore:
             " message_id = MAX(message_id, excluded.message_id)",
             (discussion_id, member_id, message_id),
         )
-
-    def ack_pending(
-        self, discussion_id: int, member_id: int, through_message_id: int
-    ) -> PendingAcknowledgement:
-        with self._db as db:
-            self._member_discussion(discussion_id, member_id)
-            self._require_message(discussion_id, through_message_id)
-            count, last = self._pending_summary(
-                discussion_id, member_id, through_message_id
-            )
-            if count:
-                db.execute(
-                    "INSERT INTO acks (discussion_id, message_id, member_id, created_at)"
-                    " SELECT m.discussion_id, m.message_id, m.member_id, ? FROM mentions m"
-                    " WHERE m.discussion_id = ? AND m.member_id = ? AND m.message_id <= ?"
-                    " AND NOT EXISTS (SELECT 1 FROM acks a WHERE"
-                    " a.discussion_id = m.discussion_id AND a.message_id = m.message_id"
-                    " AND a.member_id = m.member_id)",
-                    (now(), discussion_id, member_id, through_message_id),
-                )
-                self._advance_read(discussion_id, member_id, last)
-            latest = int(
-                db.execute(
-                    "SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE discussion_id = ?",
-                    (discussion_id,),
-                )[0]["id"]
-            )
-            remaining, _ = self._pending_summary(discussion_id, member_id, latest)
-            return PendingAcknowledgement(
-                count, self.watermark(discussion_id, member_id), remaining
-            )
 
     @reading
     def message_count(self, discussion_id: int) -> int:

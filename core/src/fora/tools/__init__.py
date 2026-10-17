@@ -485,19 +485,6 @@ class AgentTools:
             "read_through": watermark,
         }
 
-    def ack_pending(
-        self, discussion_id: int, through_message_id: int
-    ) -> dict[str, Any]:
-        self._human_discussion("discussion.ack_pending", discussion_id)
-        self._message_id(through_message_id)
-        result = self._deps.store.ack_pending(
-            discussion_id, self._actor.member_id, through_message_id
-        )
-        self._changed(
-            "mention.acked", {"discussion_id": discussion_id, "acked": result.acked}
-        )
-        return asdict(result)
-
     def view_attachment(
         self, discussion_id: int, message_id: int, attachment_id: str
     ) -> ViewedAttachment:

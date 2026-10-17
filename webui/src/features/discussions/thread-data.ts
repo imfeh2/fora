@@ -10,10 +10,7 @@ import {
 } from "@/lib/backend";
 
 export const PAGE_SIZE = 50;
-export type ThreadMessage = Message & {
-  pending: boolean;
-  acknowledged: boolean;
-};
+export type ThreadMessage = Message;
 export type ThreadData = {
   id: number;
   topic: string;
@@ -23,7 +20,6 @@ export type ThreadData = {
   divider: number | null;
   latest: number;
   readThrough: number;
-  pendingCount: number;
   hasBefore: boolean;
   hasAfter: boolean;
   previousSender: number | null;
@@ -56,13 +52,7 @@ export function mergePage(
 ): ThreadData {
   if (current && current.id !== page.id)
     throw new Error("Discussion page belongs to another thread");
-  const pending = new Set(page.awaiting_ack);
-  const acknowledged = new Set(page.acknowledged);
-  const incoming = page.messages.map((message) => ({
-    ...message,
-    pending: pending.has(message.id),
-    acknowledged: acknowledged.has(message.id),
-  }));
+  const incoming = page.messages.map((message) => ({ ...message }));
   const reset = mode === "entry" || mode === "latest";
   const messages = new Map(
     (reset ? [] : (current?.messages ?? [])).map((message) => [
@@ -100,7 +90,6 @@ export function mergePage(
         : (current?.divider ?? null),
     latest: Math.max(current?.latest ?? 0, page.latest_id),
     readThrough: Math.max(current?.readThrough ?? 0, page.read_through),
-    pendingCount: page.pending_count,
     hasBefore:
       reset || mode === "before"
         ? page.has_before
@@ -388,11 +377,7 @@ export function useThreadData(id: number, memberId: number) {
                   : "entry",
             );
         }
-      } else if (
-        ["mention.acked", "mention.revoked", "discussion.updated"].includes(
-          event.type,
-        )
-      ) {
+      } else if (event.type === "discussion.updated") {
         fresh.current.clear();
         if (inFlight.current) dirty.current = true;
         else if (!blocked.current)

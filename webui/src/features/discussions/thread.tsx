@@ -3,7 +3,6 @@ import { clsx } from "clsx";
 import {
   Archive,
   ArchiveRestore,
-  Check,
   ChevronDown,
   Loader2,
   MessageCircle,
@@ -191,7 +190,6 @@ function ThreadSession({
   const thread = useThreadData(id, humanId);
   const { data: detail, missing, failed: loadFailed } = thread;
   const [busy, setBusy] = useState(false);
-  const [ackBusy, setAckBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [composerSize, setComposerSize] = useState(64);
@@ -649,49 +647,6 @@ function ThreadSession({
     }
   };
 
-  const ack = async (messageIds: number[], revoke = false) => {
-    if (ackBusy) return;
-    setAckBusy(true);
-    const title = revoke ? "Could not undo" : "Could not mark handled";
-    try {
-      if (revoke) {
-        await backend.revokeAck(id, messageIds);
-        dismissToast(discussionWriteToastId(id, title));
-      } else {
-        await thread.markRead(Math.max(...messageIds));
-        if (!thread.live.current) return;
-        await backend.ack(id, messageIds);
-        dismissToast(discussionWriteToastId(id, title));
-      }
-      if (thread.live.current) await load();
-    } catch (failure) {
-      if (
-        thread.live.current &&
-        !(
-          failure instanceof BackendError &&
-          ["reading_position_failed", "reading_position_blocked"].includes(
-            failure.code,
-          )
-        )
-      )
-        reportDiscussionWriteFailure(id, title, failure);
-    } finally {
-      if (thread.live.current) setAckBusy(false);
-    }
-  };
-
-  const ackRef = useRef(ack);
-  useEffect(() => {
-    ackRef.current = ack;
-  }, [ack]);
-  const handleAck = useCallback(
-    (messageId: number) => void ackRef.current([messageId]),
-    [],
-  );
-  const handleRevoke = useCallback(
-    (messageId: number) => void ackRef.current([messageId], true),
-    [],
-  );
   const handleMore = useCallback(
     (previewId: string) => void previews.more(previewId),
     [previews.more],
@@ -700,21 +655,6 @@ function ThreadSession({
     (previewId: string) => void previews.retry(previewId),
     [previews.retry],
   );
-
-  const ackAll = async () => {
-    if (ackBusy || !detail) return;
-    setAckBusy(true);
-    try {
-      await backend.ackPending(id, detail.latest);
-      dismissToast(discussionWriteToastId(id, "Could not mark all handled"));
-      if (thread.live.current) await load();
-    } catch (failure) {
-      if (thread.live.current)
-        reportDiscussionWriteFailure(id, "Could not mark all handled", failure);
-    } finally {
-      if (thread.live.current) setAckBusy(false);
-    }
-  };
 
   const archive = async (archived: boolean) => {
     if (archiveBusy) return;
@@ -794,16 +734,6 @@ function ThreadSession({
                   <AvatarStack members={detail.members} />
                 </Button>
               </Tooltip>
-              {detail.pendingCount > 0 ? (
-                <Button
-                  variant="primary"
-                  disabled={ackBusy}
-                  onClick={() => void ackAll()}
-                >
-                  <Check size={16} />
-                  Mark all handled
-                </Button>
-              ) : null}
               <OverflowMenu
                 label="Discussion actions"
                 actions={[
@@ -954,11 +884,6 @@ function ThreadSession({
                       identity={unit.key}
                       compact={compact}
                       fresh={false}
-                      pending={message?.pending ?? false}
-                      acknowledged={message?.acknowledged ?? false}
-                      busy={ackBusy}
-                      onAck={handleAck}
-                      onRevoke={handleRevoke}
                       onMore={handleMore}
                       onRetry={handleRetry}
                     />
@@ -1095,11 +1020,6 @@ export const MessageRow = memo(function MessageRow({
   onRetry,
   compact,
   fresh,
-  pending,
-  acknowledged,
-  busy,
-  onAck,
-  onRevoke,
 }: {
   discussionId: number;
   message?: Message;
@@ -1109,11 +1029,6 @@ export const MessageRow = memo(function MessageRow({
   onRetry?: (previewId: string) => void;
   compact: boolean;
   fresh: boolean;
-  pending: boolean;
-  acknowledged: boolean;
-  busy: boolean;
-  onAck: (messageId: number) => void;
-  onRevoke: (messageId: number) => void;
 }) {
   const { members } = useOrganization();
   const [details, setDetails] = useState(false);
@@ -1147,12 +1062,7 @@ export const MessageRow = memo(function MessageRow({
       <div className="w-[26px] flex-none">
         {compact ? null : <Avatar memberId={senderId} />}
       </div>
-      <div
-        className={clsx(
-          "-ml-3 min-w-0 flex-1 border-l-2 pl-3",
-          pending ? "border-l-yellow-300" : "border-l-transparent",
-        )}
-      >
+      <div className="-ml-3 min-w-0 flex-1 border-l-2 border-l-transparent pl-3">
         <div className="mb-0.5 flex items-center gap-2">
           {compact ? null : (
             <>
@@ -1222,33 +1132,6 @@ export const MessageRow = memo(function MessageRow({
             attachment={attachment}
           />
         ))}
-        {pending ? (
-          <div className="mt-2 flex items-center gap-2">
-            <Chip tone="warning">Mentions you</Chip>
-            <Button
-              size="sm"
-              touchTarget
-              disabled={busy}
-              onClick={() => message && onAck(message.id)}
-            >
-              <Check size={13} />
-              Mark handled
-            </Button>
-          </div>
-        ) : acknowledged ? (
-          <div className="mt-2 flex items-center gap-2">
-            <Chip tone="success">Handled</Chip>
-            <Button
-              size="sm"
-              touchTarget
-              disabled={busy}
-              aria-label="Undo confirmation"
-              onClick={() => message && onRevoke(message.id)}
-            >
-              Undo
-            </Button>
-          </div>
-        ) : null}
         {details && saved ? (
           <TurnHistoryModal
             agentId={saved.metadata.key.agent_id}

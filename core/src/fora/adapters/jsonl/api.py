@@ -480,20 +480,6 @@ class Api:
             self._dispatcher.emit("discussion.read_updated", result)
             return result
 
-        def discussion_ack_pending(params: dict[str, Any]) -> Any:
-            result = self._human().ack_pending(
-                params["discussion_id"], params["through_message_id"]
-            )
-            self._dispatcher.emit(
-                "discussion.read_updated",
-                {
-                    "discussion_id": params["discussion_id"],
-                    "member_id": HUMAN_ID,
-                    "read_through": result["read_through"],
-                },
-            )
-            return result
-
         def discussion_send(params: dict[str, Any]) -> Any:
             return self._human().send_message(
                 int(params["discussion_id"]),
@@ -640,16 +626,6 @@ class Api:
             ),
             scope=discussion_change,
         )
-
-        def discussion_ack(params: dict[str, Any]) -> Any:
-            return self._human().ack(
-                int(params["discussion_id"]), list(params.get("message_ids", []))
-            )
-
-        def discussion_revoke_ack(params: dict[str, Any]) -> Any:
-            return self._human().revoke_ack(
-                int(params["discussion_id"]), list(params.get("message_ids", []))
-            )
 
         def discussion_members(params: dict[str, Any]) -> Any:
             return self._human().set_discussion_members(
@@ -1538,14 +1514,7 @@ class Api:
             "discussion.preview.text", discussion_preview_text, scope=discussion_query
         )
         register("discussion.mark_read", discussion_mark_read, scope=discussion_change)
-        register(
-            "discussion.ack_pending", discussion_ack_pending, scope=discussion_change
-        )
         register("discussion.send", discussion_send, scope=discussion_send_scope)
-        register("discussion.ack", discussion_ack, scope=discussion_change)
-        register(
-            "discussion.revoke_ack", discussion_revoke_ack, scope=discussion_change
-        )
         register("discussion.set_members", discussion_members, scope=discussion_change)
         register(
             "discussion.add_members", discussion_add_members, scope=discussion_change

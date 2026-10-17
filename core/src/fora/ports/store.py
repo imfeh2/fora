@@ -27,13 +27,6 @@ class DiscussionPage:
 
 
 @dataclass(frozen=True)
-class PendingAcknowledgement:
-    acked: int
-    read_through: int
-    pending_count: int
-
-
-@dataclass(frozen=True)
 class UnreadCounts:
     unread: int
     mentions: int
@@ -177,10 +170,6 @@ class OrganizationStore(Protocol):
     ) -> DiscussionPage: ...
 
     def mark_read(self, discussion_id: int, member_id: int, message_id: int) -> int: ...
-
-    def ack_pending(
-        self, discussion_id: int, member_id: int, through_message_id: int
-    ) -> PendingAcknowledgement: ...
 
     def message_count(self, discussion_id: int) -> int: ...
 
