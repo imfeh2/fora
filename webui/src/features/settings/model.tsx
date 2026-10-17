@@ -615,6 +615,18 @@ export function ModelPanel({
     ...(catalog?.providers ?? []),
     ...(providerMissing && provider ? [provider] : []),
   ];
+  const providerGroups = [true, false]
+    .map((enabled) => ({
+      enabled,
+      items: visibleProviders.filter(
+        (item) =>
+          item.enabled === enabled &&
+          `${item.name} ${item.api_type}`
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+      ),
+    }))
+    .filter((group) => group.items.length > 0);
   const closeMissingModel = (id: string) => {
     const proceed = () => {
       modelDraft(id, false);
@@ -877,97 +889,91 @@ export function ModelPanel({
                     />
                   </div>
                   <div className="flex-1">
-                    {[true, false].map((group) => (
+                    {providerGroups.map((group) => (
                       <section
-                        key={String(group)}
+                        key={String(group.enabled)}
                         aria-label={
-                          group ? "Enabled providers" : "Disabled providers"
+                          group.enabled
+                            ? "Enabled providers"
+                            : "Disabled providers"
                         }
                       >
                         <h3 className="py-2 text-xs text-fg-muted">
-                          {group ? "Enabled" : "Disabled"}
+                          {group.enabled ? "Enabled" : "Disabled"}
                         </h3>
-                        {visibleProviders
-                          .filter(
-                            (item) =>
-                              item.enabled === group &&
-                              `${item.name} ${item.api_type}`
-                                .toLowerCase()
-                                .includes(search.toLowerCase()),
-                          )
-                          .map((item) => {
-                            const modelCount = catalog.models.filter(
-                              (model) => model.provider_id === item.id,
-                            ).length;
-                            return (
-                              <div
-                                key={item.id}
-                                className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 hover:bg-surface-hover ${selected === item.id ? "bg-surface-hover" : ""}`}
+                        {group.items.map((item) => {
+                          const modelCount = catalog.models.filter(
+                            (model) => model.provider_id === item.id,
+                          ).length;
+                          return (
+                            <div
+                              key={item.id}
+                              className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 hover:bg-surface-hover ${selected === item.id ? "bg-surface-hover" : ""}`}
+                            >
+                              <button
+                                type="button"
+                                data-provider-target
+                                className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
+                                aria-current={
+                                  selected === item.id ? "true" : undefined
+                                }
+                                disabled={busy || uncertain || !connected}
+                                onKeyDown={navigateList}
+                                onClick={(event) =>
+                                  activate(item.id, event.currentTarget)
+                                }
                               >
-                                <button
-                                  type="button"
-                                  data-provider-target
-                                  className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
-                                  aria-current={
-                                    selected === item.id ? "true" : undefined
-                                  }
-                                  disabled={busy || uncertain || !connected}
-                                  onKeyDown={navigateList}
-                                  onClick={(event) =>
-                                    activate(item.id, event.currentTarget)
-                                  }
-                                >
-                                  <span className="block font-medium">
-                                    {item.name}
-                                  </span>
-                                  <span className="text-xs text-fg-muted">
-                                    {item.api_type} · {modelCount}{" "}
-                                    {modelCount === 1 ? "model" : "models"} ·{" "}
-                                    {item.api_key_set ? "Key set" : "No key"}
-                                  </span>
-                                </button>
-                                <Input
-                                  type="checkbox"
-                                  aria-label={`Enable ${item.name}`}
-                                  checked={item.enabled}
-                                  disabled={busy || uncertain || !connected}
-                                  onChange={(event) =>
-                                    void save("save_provider", item.id, {
-                                      enabled: event.target.checked,
-                                    })
-                                  }
-                                />
-                                <OverflowMenu
-                                  label={`Actions for ${item.name}`}
-                                  actions={[
-                                    {
-                                      id: "edit",
-                                      label: "Edit",
-                                      disabled: busy || uncertain || !connected,
-                                      onSelect: () => choose(item.id, true),
-                                    },
-                                    {
-                                      id: "delete",
-                                      label: "Delete",
-                                      tone: "danger",
-                                      disabled:
-                                        busy ||
-                                        uncertain ||
-                                        !connected ||
-                                        catalog.models.some(
-                                          (model) =>
-                                            model.provider_id === item.id,
-                                        ) ||
-                                        !catalog.providers.some(
-                                          (provider) => provider.id === item.id,
-                                        ),
-                                      onSelect: () => setDeleteProvider(item),
-                                    },
-                                  ]}
-                                />
-                              </div>
-                            );
-                          })}
+                                <span className="block font-medium">
+                                  {item.name}
+                                </span>
+                                <span className="text-xs text-fg-muted">
+                                  {item.api_type} · {modelCount}{" "}
+                                  {modelCount === 1 ? "model" : "models"} ·{" "}
+                                  {item.api_key_set ? "Key set" : "No key"}
+                                </span>
+                              </button>
+                              <Input
+                                type="checkbox"
+                                aria-label={`Enable ${item.name}`}
+                                checked={item.enabled}
+                                disabled={busy || uncertain || !connected}
+                                onChange={(event) =>
+                                  void save("save_provider", item.id, {
+                                    enabled: event.target.checked,
+                                  })
+                                }
+                              />
+                              <OverflowMenu
+                                label={`Actions for ${item.name}`}
+                                actions={[
+                                  {
+                                    id: "edit",
+                                    label: "Edit",
+                                    disabled: busy || uncertain || !connected,
+                                    onSelect: () => choose(item.id, true),
+                                  },
+                                  {
+                                    id: "delete",
+                                    label: "Delete",
+                                    tone: "danger",
+                                    disabled:
+                                      busy ||
+                                      uncertain ||
+                                      !connected ||
+                                      catalog.models.some(
+                                        (model) =>
+                                          model.provider_id === item.id,
+                                      ) ||
+                                      !catalog.providers.some(
+                                        (provider) => provider.id === item.id,
+                                      ),
+                                    onSelect: () => setDeleteProvider(item),
+                                  },
+                                ]}
+                              />
+                            </div>
+                          );
+                        })}
                       </section>
                     ))}
                     {!visibleProviders.some((item) =>
