@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Modal } from "@/components/ui/dialog";
-import { IconButton, UnreadMark } from "@/components/ui/index";
+import { IconButton } from "@/components/ui/index";
 import brandIcon from "../../../../assets/icon.svg";
 
 const crumbClasses =
@@ -26,7 +26,7 @@ const columnVisibility = {
   sm: "max-[940px]:hidden",
 };
 
-const badgeSlot = "flex w-5 flex-none items-center justify-center";
+const badgeSlot = "flex min-w-5 flex-none items-center justify-end";
 const trailingSlot = "flex w-[26px] flex-none items-center justify-center";
 
 function subscribeViewport(listener: () => void) {
@@ -81,8 +81,6 @@ export function Shell({
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onClosed: () => void;
-    unread: number | null;
-    mentions: number | null;
     trigger: RefObject<HTMLButtonElement | null>;
     restoreFocus: () => HTMLElement | null;
     desktop: RefObject<HTMLDivElement | null>;
@@ -119,10 +117,6 @@ export function Shell({
               >
                 <Menu size={16} />
               </IconButton>
-              <UnreadMark
-                mentions={navigation.mentions}
-                unread={navigation.unread}
-              />
             </>
           ) : null}
         </div>
@@ -217,7 +211,6 @@ export function NavItem({
   icon,
   label,
   active,
-  badge,
   trailing,
   onSelect,
   children,
@@ -225,7 +218,6 @@ export function NavItem({
   icon: ReactNode;
   label: string;
   active: boolean;
-  badge?: ReactNode;
   trailing?: ReactNode;
   onSelect: () => void;
   children?: ReactNode;
@@ -260,7 +252,6 @@ export function NavItem({
             {icon}
           </span>
           <span className="flex-1 min-w-0 truncate">{label}</span>
-          <span className={badgeSlot}>{badge}</span>
         </button>
         <span className={trailingSlot}>{trailing}</span>
       </div>
@@ -307,10 +298,7 @@ export function NavSubItem({
           </span>
         ) : null}
         <span className="flex-1 min-w-0 truncate">{label}</span>
-        <span className="flex flex-none items-center">
-          <span className={badgeSlot}>{badge}</span>
-          <span className={trailingSlot} aria-hidden="true" />
-        </span>
+        <span className={badgeSlot}>{badge}</span>
       </button>
     </li>
   );

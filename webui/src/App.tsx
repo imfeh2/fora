@@ -210,9 +210,6 @@ function Chrome({
       )
       .map((member) => member.id),
   );
-  const unread = list?.reduce((total, item) => total + item.unread, 0) ?? null;
-  const mentions =
-    list?.reduce((total, item) => total + item.mentions, 0) ?? null;
   const regionError =
     route.name === "discussion" && organization.data === null
       ? organization.error
@@ -243,8 +240,6 @@ function Chrome({
         open: drawerOpen,
         onOpenChange: setDrawerOpen,
         onClosed: drawerClosed,
-        unread: unread ?? 0,
-        mentions: mentions,
         trigger: menuTrigger,
         desktop: desktopNavigation,
         restoreFocus: restoreNavigationFocus,
@@ -275,17 +270,6 @@ function Chrome({
               icon={<MessagesSquare size={16} />}
               label="Discussions"
               active={route.name === "discussions" || unlisted}
-              badge={
-                unread === null && !discussions.error && !failure ? (
-                  <Skeleton className="h-3 w-4" />
-                ) : (
-                  <UnreadMark
-                    key={`${mentions}-${unread}`}
-                    mentions={mentions}
-                    unread={unread}
-                  />
-                )
-              }
               trailing={
                 <IconButton
                   size="sm"
