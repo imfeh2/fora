@@ -76,6 +76,11 @@ def _body(node: ast.FunctionDef) -> str:
     clone = copy.deepcopy(node)
     if clone.args.args and clone.args.args[0].arg == "context":
         clone.args.args = clone.args.args[1:]
+    clone.body = [
+        statement
+        for statement in clone.body
+        if not (isinstance(statement, ast.FunctionDef) and statement.name in BODIES)
+    ]
     module = ast.Module(body=clone.body, type_ignores=[])
     return ast.dump(_Normalize().visit(module), include_attributes=False)
 
