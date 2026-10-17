@@ -119,7 +119,8 @@ async function fetchPreview(
 ): Promise<PreviewData> {
   const kind = previewKind(path);
   const entry = await lookupEntry(path);
-  const size = entry?.size ?? null;
+  if (entry === null) return { status: "failed" };
+  const size = entry.size;
   if (kind === "audio" || kind === "binary")
     return {
       status: "ready",
@@ -226,8 +227,6 @@ function PreviewCard({
     return () => observer.disconnect();
   }, [card, data]);
 
-  if (data?.status === "failed") return null;
-
   const above =
     anchor.bottom + CARD_GAP + height > window.innerHeight - CARD_GAP;
   const left = Math.min(
@@ -256,6 +255,8 @@ function PreviewCard({
     element.addEventListener("click", onCard);
     return () => element.removeEventListener("click", onCard);
   }, [card, data]);
+
+  if (data?.status === "failed") return null;
 
   return createPortal(
     <div
