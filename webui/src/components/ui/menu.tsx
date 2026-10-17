@@ -26,17 +26,26 @@ export function OverflowMenu({
   actions,
   align = "end",
   icon,
+  onOpenChange,
 }: {
   label: string;
   actions: MenuAction[];
   align?: "start" | "end";
   icon?: ReactNode;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const wrapper = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const menuId = useId();
+  const notified = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    if (notified.current === open) return;
+    notified.current = open;
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   useEffect(() => {
     if (!open) return;

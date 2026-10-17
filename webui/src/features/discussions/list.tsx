@@ -608,6 +608,7 @@ export function DiscussionRow({
     .filter((member): member is Member => member !== undefined);
   const shown = people.slice(0, 3);
   const rest = people.length - shown.length;
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <tr data-highlight={item.unread > 0}>
@@ -656,9 +657,12 @@ export function DiscussionRow({
           <StatusText dot={<Dot tone="green" />}>{null}</StatusText>
         )}
       </td>
-      <td className="relative z-1 w-12 text-right">
+      <td
+        className={clsx("relative w-12 text-right", menuOpen ? "z-20" : "z-1")}
+      >
         <OverflowMenu
           label={`Actions for ${item.topic}`}
+          onOpenChange={setMenuOpen}
           actions={[
             {
               id: "archive",
