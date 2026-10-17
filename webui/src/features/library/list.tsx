@@ -217,6 +217,7 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
 
   const selectFolder = (path: string) => {
     setTreeOpen(false);
+    setQuery("");
     navigate({ name: "library", folder: path || undefined });
   };
 
@@ -252,6 +253,7 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
     );
 
   const empty = entries !== null && entries.length === 0;
+  const currentEmpty = documents.length === 0 && media.length === 0;
 
   return (
     <Page>
@@ -322,7 +324,7 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
                     onClick: () => selectFolder(""),
                   }}
                 />
-              ) : empty || (needle && visible.length === 0) ? (
+              ) : empty || currentEmpty ? (
                 <StatePanel
                   icons={
                     needle
@@ -332,16 +334,16 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
                   title={
                     needle
                       ? "No documents match"
-                      : folder
-                        ? "This folder has no documents"
-                        : "The Library is empty"
+                      : empty
+                        ? "The Library is empty"
+                        : "This folder has no documents"
                   }
                   description={
                     needle
                       ? "Try a different name or clear the search to see the Library."
-                      : folder
-                        ? "Create a document here or pick another folder."
-                        : "Create a document or folder to share information with Members."
+                      : empty
+                        ? "Create a document or folder to share information with Members."
+                        : "Create a document here, or open a folder from the tree."
                   }
                   action={
                     needle

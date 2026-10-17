@@ -135,10 +135,7 @@ export function routeFromPath(pathname: string, search = ""): Route | null {
     if (segments.length === 1) {
       const folder = new URLSearchParams(search).get("folder");
       const decoded = folder === null ? null : readSegments(folder);
-      if (
-        decoded !== null &&
-        decoded.some((segment) => segment === "." || segment === "..")
-      )
+      if (decoded?.some((segment) => segment === "." || segment === ".."))
         return null;
       return {
         name: "library",
