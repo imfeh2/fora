@@ -63,8 +63,10 @@ type PreviewData =
   | { status: "failed" };
 
 const cache = new Map<string, PreviewData>();
+const ENTRY_REFRESH_MS = 5000;
 let entries: LibraryEntry[] | null = null;
 let entriesRequest: Promise<LibraryEntry[]> | null = null;
+let entriesFetchedAt = 0;
 let active: (() => void) | null = null;
 
 export function previewKind(path: string): PreviewKind {
@@ -90,16 +92,23 @@ export function previewText(text: string): string {
   return kept.join("\n") + (rows.length > TEXT_LINES ? "\n…" : "");
 }
 
+async function loadEntries(): Promise<LibraryEntry[]> {
+  entriesRequest ??= backend.library().finally(() => {
+    entriesRequest = null;
+  });
+  entries = await entriesRequest;
+  entriesFetchedAt = Date.now();
+  return entries;
+}
+
 async function lookupEntry(path: string): Promise<LibraryEntry | null> {
-  if (entries === null) {
-    entriesRequest ??= backend.library();
-    try {
-      entries = await entriesRequest;
-    } finally {
-      entriesRequest = null;
-    }
-  }
-  return entries.find((entry) => entry.path === path) ?? null;
+  const find = (list: LibraryEntry[]) =>
+    list.find((entry) => entry.path === path) ?? null;
+  if (entries === null) return find(await loadEntries());
+  const found = find(entries);
+  if (found !== null) return found;
+  if (Date.now() - entriesFetchedAt < ENTRY_REFRESH_MS) return null;
+  return find(await loadEntries());
 }
 
 function remember(path: string, data: PreviewData) {
@@ -187,7 +196,7 @@ function PreviewCard({
     void fetchPreview(path, controller.signal).then(
       (value) => {
         if (!alive || controller.signal.aborted) return;
-        remember(path, value);
+        if (value.status === "ready") remember(path, value);
         setData(value);
       },
       () => {
