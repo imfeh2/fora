@@ -198,6 +198,27 @@ class AgentTools:
             raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
         return self._deps.settings.agent_model_selection(agent_id)
 
+    def set_agent_model(
+        self, agent_id: int, model_config: object | None
+    ) -> dict[str, object]:
+        self._check("organization.set_model", agent_id)
+        if model_config is None:
+            values: dict[str, object] = {}
+        elif isinstance(model_config, Mapping):
+            values = dict(model_config)
+        else:
+            dump = getattr(model_config, "model_dump", None)
+            if not callable(dump):
+                raise DomainError(
+                    ErrorCode.INVALID_MODEL_CONFIG, "Invalid model configuration"
+                )
+            values = dict(dump(exclude_none=True))
+        self._deps.settings.update_settings(
+            "model",
+            {"action": "set_agent", "id": agent_id, "values": values},
+        )
+        return self.get_agent_model(agent_id)
+
     def rename_member(self, member_id: int, name: str) -> dict[str, Any]:
         self._check("organization.rename_member", member_id)
         validated = validate_name(name)

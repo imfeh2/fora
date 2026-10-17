@@ -1037,6 +1037,7 @@ class PydanticModelRunner:
                 "Manage organization Members and Agent model settings. "
                 "list_models returns public model IDs, thinking options, budgets, and defaults. "
                 "get_model returns an Agent's saved model_config and effective selection. "
+                "set_model sets an Agent's model_config; an empty object follows the global default. "
                 "create_agent accepts model_config with optional model_id and thinking fields; "
                 "omitting the object or either field inherits the matching global setting, "
                 "while thinking=default keeps the model's default thinking behavior."
@@ -1064,6 +1065,12 @@ class PydanticModelRunner:
                 return _guard(
                     lambda: tools.create_agent(
                         _required(name, "name", action), model_config
+                    )
+                )
+            if action in ("set_model", "set_agent_model"):
+                return _guard(
+                    lambda: tools.set_agent_model(
+                        _required(member_id, "member_id", action), model_config
                     )
                 )
             if action == "rename_member":

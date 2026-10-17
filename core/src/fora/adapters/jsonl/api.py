@@ -328,6 +328,14 @@ class Api:
         )
 
         register(
+            "organization.set_model",
+            partial(organization_set_model, context),
+            scope=lambda params: RequestScope(
+                writes=(context.member_set, context.model_settings)
+            ),
+        )
+
+        register(
             "organization.rename_member",
             partial(rename_member, context),
             scope=lambda params: RequestScope(
@@ -707,6 +715,15 @@ def create_agent(context: _Context, params: dict[str, Any]) -> Any:
     return context.api._human().create_agent(
         str(params.get("name", "")), params.get("model_config")
     )
+
+
+def organization_set_model(context: _Context, params: dict[str, Any]) -> Any:
+    agent_id = _required_integer(params, "agent_id")
+    result = context.api._human().set_agent_model(
+        agent_id, params.get("model_config")
+    )
+    context.api._dispatcher.emit("settings.updated", {"section": "model"})
+    return result
 
 
 def rename_member(context: _Context, params: dict[str, Any]) -> Any:
