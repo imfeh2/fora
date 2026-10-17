@@ -27,6 +27,8 @@ import {
   useNarrowViewport,
 } from "@/components/layout/shell";
 import { AccessError, LoadError } from "@/components/ui/access-error";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
+import { ErrorFace } from "@/components/ui/error-face";
 import {
   Badge,
   Button,
@@ -694,26 +696,38 @@ export function useApplication() {
 export default function App() {
   const application = useApplication();
   return (
-    <TooltipProvider>
-      <RouterProvider>
-        <OrganizationProvider
-          value={{
-            members: application.organization.data?.members ?? null,
-            humanId: application.organization.data?.human_id ?? null,
-            discussions: application.discussions.data,
-            refresh: application.refresh,
-            connectionError: application.failure,
-            organizationError: application.organization.error,
-            discussionsError: application.discussions.error,
-            retry: application.retryResource,
-          }}
-        >
-          <SettingsSaveProvider>
-            <Chrome application={application} />
-          </SettingsSaveProvider>
-        </OrganizationProvider>
-      </RouterProvider>
-      <Toaster />
-    </TooltipProvider>
+    <ErrorBoundary
+      fallback={() => (
+        <div className="flex h-full min-h-0 flex-col bg-app">
+          <ErrorFace
+            title="Something went wrong"
+            description="Fora could not display this window. Reload to start again."
+            action={{ label: "Reload", run: () => window.location.reload() }}
+          />
+        </div>
+      )}
+    >
+      <TooltipProvider>
+        <RouterProvider>
+          <OrganizationProvider
+            value={{
+              members: application.organization.data?.members ?? null,
+              humanId: application.organization.data?.human_id ?? null,
+              discussions: application.discussions.data,
+              refresh: application.refresh,
+              connectionError: application.failure,
+              organizationError: application.organization.error,
+              discussionsError: application.discussions.error,
+              retry: application.retryResource,
+            }}
+          >
+            <SettingsSaveProvider>
+              <Chrome application={application} />
+            </SettingsSaveProvider>
+          </OrganizationProvider>
+        </RouterProvider>
+        <Toaster />
+      </TooltipProvider>
+    </ErrorBoundary>
   );
 }
