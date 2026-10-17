@@ -26,6 +26,9 @@ const columnVisibility = {
   sm: "max-[940px]:hidden",
 };
 
+const badgeSlot = "flex w-5 flex-none items-center justify-center";
+const trailingSlot = "flex w-[26px] flex-none items-center justify-center";
+
 function subscribeViewport(listener: () => void) {
   window.addEventListener("resize", listener);
   return () => window.removeEventListener("resize", listener);
@@ -240,7 +243,7 @@ export function NavItem({
         <button
           type="button"
           className={clsx(
-            "flex-1 min-w-0 flex items-center gap-2 h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-4 border-0 rounded-sm bg-transparent text-sm font-medium text-left cursor-pointer transition-[color] duration-(--duration-fast) ease-linear group-hover:text-fg focus-visible:bg-surface-hover focus-visible:text-fg",
+            "flex-1 min-w-0 flex items-center gap-2 h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-1 pl-4 border-0 rounded-sm bg-transparent text-sm font-medium text-left cursor-pointer transition-[color] duration-(--duration-fast) ease-linear group-hover:text-fg focus-visible:bg-surface-hover focus-visible:text-fg",
             active ? "text-fg" : "text-fg-muted",
           )}
           data-nav="item"
@@ -257,11 +260,9 @@ export function NavItem({
             {icon}
           </span>
           <span className="flex-1 min-w-0 truncate">{label}</span>
-          {badge}
+          <span className={badgeSlot}>{badge}</span>
         </button>
-        {trailing ? (
-          <span className="flex flex-none pr-0.5">{trailing}</span>
-        ) : null}
+        <span className={trailingSlot}>{trailing}</span>
       </div>
       {nested.length > 0 ? (
         <ul className="flex flex-col gap-px pt-px px-0 pb-1 *:animate-fade-in">
@@ -290,7 +291,7 @@ export function NavSubItem({
       <button
         type="button"
         className={clsx(
-          "relative flex items-center gap-2 w-full h-[26px] narrow:min-h-11 touch:min-h-11 py-0 pr-2 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
+          "relative flex items-center gap-2 w-full h-[26px] narrow:min-h-11 touch:min-h-11 py-0 pr-1 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
           active
             ? "bg-surface-raised text-fg font-medium"
             : "bg-transparent text-fg-muted",
@@ -306,7 +307,10 @@ export function NavSubItem({
           </span>
         ) : null}
         <span className="flex-1 min-w-0 truncate">{label}</span>
-        {badge}
+        <span className="flex flex-none items-center">
+          <span className={badgeSlot}>{badge}</span>
+          <span className={trailingSlot} aria-hidden="true" />
+        </span>
       </button>
     </li>
   );
