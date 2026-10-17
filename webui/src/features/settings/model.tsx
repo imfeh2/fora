@@ -675,7 +675,7 @@ export function ModelPanel({
     <fieldset
       ref={editor}
       aria-label="Provider configuration"
-      className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
+      className="m-0 flex min-w-0 max-w-[720px] flex-col gap-6 border-0 p-0"
       key={`${selected}-${revision}`}
     >
       {error ? (

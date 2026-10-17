@@ -128,7 +128,7 @@ export function LangfusePanel() {
     return loadFailed ? (
       recovery
     ) : (
-      <div className="max-w-[560px]">
+      <div className="w-full max-w-[720px]">
         <LoadingSkeleton label="Loading Langfuse settings">
           {["enabled", "url", "public", "secret"].map((field) => (
             <FieldSkeleton key={field} />
@@ -149,7 +149,7 @@ export function LangfusePanel() {
     >
       {recovery}
       <fieldset
-        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
+        className="m-0 flex w-full max-w-[720px] min-w-0 flex-col gap-4 border-0 p-0"
         disabled={busy || !values}
       >
         <label

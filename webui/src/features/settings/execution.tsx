@@ -220,7 +220,7 @@ export function ExecutionForm({
   };
   return (
     <form
-      className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0 [&_button]:h-auto [&_button]:min-h-[26px] [&_button]:max-w-full [&_button]:flex-wrap [&_button]:whitespace-normal [&_button]:wrap-anywhere"
+      className="m-0 flex w-full max-w-[720px] min-w-0 flex-col gap-4 border-0 p-0 [&_button]:h-auto [&_button]:min-h-[26px] [&_button]:max-w-full [&_button]:flex-wrap [&_button]:whitespace-normal [&_button]:wrap-anywhere"
       aria-label="Execution settings"
       onSubmit={(event) => {
         event.preventDefault();
@@ -236,7 +236,7 @@ export function ExecutionForm({
         </div>
       ) : null}
       <fieldset
-        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
+        className="m-0 flex w-full max-w-[720px] min-w-0 flex-col gap-4 border-0 p-0"
         disabled={busy}
       >
         <Field label={<span id={id}>Writable directories</span>}>

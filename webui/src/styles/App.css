@@ -236,7 +236,6 @@
 
 .model-settings {
   width: 100%;
-  max-width: 920px;
 }
 
 .default-model-card,
@@ -246,6 +245,10 @@
   border: 1px solid var(--color-line);
   border-radius: 6px;
   background: var(--color-app);
+}
+
+.default-model-card {
+  max-width: 720px;
 }
 
 .provider-card,
@@ -262,10 +265,6 @@
 .provider-form,
 .model-form {
   min-width: 0;
-}
-
-.models-section {
-  max-width: 920px;
 }
 
 .model-item {
@@ -326,7 +325,6 @@
 
 .agent-form {
   width: 100%;
-  max-width: 920px;
 }
 
 .agent-groups,

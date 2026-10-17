@@ -114,7 +114,7 @@ export function VoicePanel() {
 
   if (values === null && !loadFailed)
     return (
-      <div className="max-w-[560px]">
+      <div className="w-full max-w-[720px]">
         <LoadingSkeleton label="Loading voice settings">
           {["address", "model", "key"].map((field) => (
             <FieldSkeleton key={field} />
@@ -124,7 +124,7 @@ export function VoicePanel() {
     );
 
   return (
-    <div className="flex max-w-[560px] flex-col gap-4">
+    <div className="flex w-full max-w-[720px] flex-col gap-4">
       {error ? (
         <div
           role="alert"
