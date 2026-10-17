@@ -240,7 +240,6 @@ export function Composer({
   }, []);
   const [voiceState, setVoiceState] = useState<VoiceState>("closed");
 
-  const [levels, setLevels] = useState([0, 0, 0, 0, 0]);
   const recording = useRef<VoiceRecording | null>(null);
   const voiceConfigRead = useRef<number | null>(null);
   const voiceConfigVersion = useRef(0);
@@ -403,7 +402,6 @@ export function Composer({
       updateResult();
     }
     dismissToast("voice-input");
-    setLevels([0, 0, 0, 0, 0]);
     const active = new VoiceRecording((event) => {
       if (
         recording.current !== active ||
@@ -437,18 +435,16 @@ export function Composer({
         target.setVoiceBody(text, voiceSubmission);
         session.bodyRevision = target.snapshot().draft.bodyRevision;
         setCaret(text.length);
-      } else if (event.type === "level") {
-        setLevels((previous) => [...previous.slice(1), event.level]);
-      } else if (event.code === "voice_config") {
-        showVoiceSettingsToast();
-      } else {
-        toast({
-          id: "voice-input",
-          tone: "danger",
-          title: "Could not transcribe voice input",
-          description: event.message,
-          duration: null,
-        });
+      } else if (event.type === "error") {
+        if (event.code === "voice_config") showVoiceSettingsToast();
+        else
+          toast({
+            id: "voice-input",
+            tone: "danger",
+            title: "Could not transcribe voice input",
+            description: event.message,
+            duration: null,
+          });
       }
     });
     recording.current = active;
@@ -1172,44 +1168,6 @@ export function Composer({
               : "opacity-0 blur-sm translate-y-2 pointer-events-none",
           )}
         >
-          {!recordingActive && canSend ? (
-            <button
-              type="button"
-              aria-label="Start voice input"
-              disabled={disabled}
-              onClick={() => void startRecording()}
-              className="flex size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 items-center justify-center rounded-full text-fg-muted hover:bg-surface-hover"
-            >
-              <MicIcon />
-            </button>
-          ) : null}
-          {recordingActive ? (
-            <div className="flex items-center gap-3 text-xs" role="status">
-              <div
-                className="flex h-5 items-center gap-1"
-                role="img"
-                aria-label="Microphone volume"
-              >
-                {levels.map((level, index) => (
-                  <span
-                    key={index}
-                    className="w-1 rounded-full bg-current"
-                    style={{
-                      height: `${Math.max(2, Math.min(20, level * 100))}px`,
-                    }}
-                  />
-                ))}
-              </div>
-              {voiceState === "starting" ? (
-                <Spinner label="Starting microphone" />
-              ) : voiceState === "finishing" ? (
-                <Spinner label="Transcribing" />
-              ) : null}
-              <button type="button" onClick={cancelRecording}>
-                Cancel
-              </button>
-            </div>
-          ) : null}
           <button
             type="button"
             disabled={!controller || !!view?.recovering || !!view?.moved}
