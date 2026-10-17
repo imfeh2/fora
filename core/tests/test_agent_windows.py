@@ -185,3 +185,43 @@ def test_window_queries_use_the_window_index(store: SqliteAgentStore) -> None:
         rows = list(store._db.execute("EXPLAIN QUERY PLAN " + statement, parameters))
         detail = " ".join(str(row["detail"]) for row in rows)
         assert "agent_model_requests_window" in detail
+
+
+def test_message_paging_caps_at_one_hundred(store: SqliteAgentStore) -> None:
+    messages = tuple(
+        json.dumps(
+            {
+                "kind": "request",
+                "parts": [{"part_kind": "user-prompt", "content": f"m{index}"}],
+            }
+        )
+        for index in range(101)
+    )
+    _request(store, 10, input_messages=messages)
+
+    first = store.model_request_messages(AGENT, 10, 1, "input", 0, 100)
+    assert first.total == 101
+    assert len(first.messages) == 100
+    assert first.has_more is True
+
+    second = store.model_request_messages(AGENT, 10, 1, "input", 100, 100)
+    assert len(second.messages) == 1
+    assert second.has_more is False
+
+
+def test_empty_input_with_instructions_is_recorded(store: SqliteAgentStore) -> None:
+    instructions = {"instruction_parts": [{"content": "SYSTEM"}]}
+    _request(store, 10, parameters=instructions)
+    _request(store, 11)
+
+    recorded = store.window_request(AGENT, WINDOW, 10, 1)
+    assert recorded is not None
+    assert recorded.request.summary.input_count == 0
+    assert [source.kind for source in store.input_sources(AGENT, 10, 1)] == [
+        "instruction_parts"
+    ]
+
+    unknown = store.window_request(AGENT, WINDOW, 11, 1)
+    assert unknown is not None
+    assert unknown.request.summary.input_count == 0
+    assert store.input_sources(AGENT, 11, 1) == ()
