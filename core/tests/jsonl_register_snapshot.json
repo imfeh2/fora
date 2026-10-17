@@ -1,5 +1,219 @@
 {
   "base": "93110e31",
+  "bindings": {
+    "agent.generation.parts": {
+      "handler": "partial:agent_generation_parts",
+      "scope": "partial:agent_query"
+    },
+    "agent.generation.text": {
+      "handler": "partial:agent_generation_text",
+      "scope": "partial:agent_query"
+    },
+    "agent.history": {
+      "handler": "partial:agent_history",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.image": {
+      "handler": "partial:agent_history_image",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.read": {
+      "handler": "partial:agent_history_read",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.text": {
+      "handler": "partial:agent_history_text",
+      "scope": "partial:agent_query"
+    },
+    "agent.history.windows": {
+      "handler": "partial:agent_history_windows",
+      "scope": "partial:agent_query"
+    },
+    "agent.live": {
+      "handler": "partial:agent_live",
+      "scope": "partial:agent_query"
+    },
+    "agent.live.read": {
+      "handler": "partial:agent_live_read",
+      "scope": "partial:agent_query"
+    },
+    "discussion.add_members": {
+      "handler": "partial:discussion_add_members",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.archive": {
+      "handler": "partial:discussion_archive",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.cancel_send": {
+      "handler": "lambda:36087a3f2a6b74f9",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.create": {
+      "handler": "partial:discussion_create",
+      "scope": "lambda:38df7518358638eb"
+    },
+    "discussion.list": {
+      "handler": "partial:discussion_list",
+      "scope": "lambda:0b4c45a4ae442894"
+    },
+    "discussion.mark_read": {
+      "handler": "partial:discussion_mark_read",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.page": {
+      "handler": "partial:discussion_page",
+      "scope": "partial:discussion_query"
+    },
+    "discussion.preview": {
+      "handler": "partial:discussion_preview",
+      "scope": "partial:discussion_query"
+    },
+    "discussion.preview.text": {
+      "handler": "partial:discussion_preview_text",
+      "scope": "partial:discussion_query"
+    },
+    "discussion.previews": {
+      "handler": "partial:discussion_previews",
+      "scope": "partial:discussion_query"
+    },
+    "discussion.read": {
+      "handler": "partial:discussion_read",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.remove_members": {
+      "handler": "partial:discussion_remove_members",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.search": {
+      "handler": "partial:discussion_search",
+      "scope": "lambda:27957e866773e1cf"
+    },
+    "discussion.send": {
+      "handler": "partial:discussion_send",
+      "scope": "partial:discussion_send_scope"
+    },
+    "discussion.send_status": {
+      "handler": "lambda:4510b3651cfe00d6",
+      "scope": "partial:discussion_query"
+    },
+    "discussion.set_members": {
+      "handler": "partial:discussion_members",
+      "scope": "partial:discussion_change"
+    },
+    "discussion.unarchive": {
+      "handler": "partial:discussion_unarchive",
+      "scope": "partial:discussion_change"
+    },
+    "info.get": {
+      "handler": "partial:info_get",
+      "scope": "partial:independent"
+    },
+    "library.delete": {
+      "handler": "partial:library_delete",
+      "scope": "lambda:eb9eed4f5860b49f"
+    },
+    "library.edit": {
+      "handler": "partial:library_edit",
+      "scope": "lambda:16bda9c98030a7cd"
+    },
+    "library.list": {
+      "handler": "partial:library_list",
+      "scope": "lambda:2a48900a571fb27e"
+    },
+    "library.mkdir": {
+      "handler": "partial:library_mkdir",
+      "scope": "lambda:eb9eed4f5860b49f"
+    },
+    "library.move": {
+      "handler": "partial:library_move",
+      "scope": "lambda:8dcc34d122893765"
+    },
+    "library.read": {
+      "handler": "partial:library_read",
+      "scope": "partial:library_scope"
+    },
+    "library.write": {
+      "handler": "partial:library_write",
+      "scope": "lambda:16bda9c98030a7cd"
+    },
+    "organization.create_agent": {
+      "handler": "partial:create_agent",
+      "scope": "lambda:3268606e9d45a5ec"
+    },
+    "organization.delete_agent": {
+      "handler": "partial:delete_agent",
+      "scope": "lambda:7318437137dfdf55"
+    },
+    "organization.get": {
+      "handler": "partial:organization_get",
+      "scope": "lambda:174723208ac32de0"
+    },
+    "organization.pause_agent": {
+      "handler": "partial:pause_agent",
+      "scope": "partial:agent_change"
+    },
+    "organization.rename_member": {
+      "handler": "partial:rename_member",
+      "scope": "lambda:0d49ec06df7c8784"
+    },
+    "organization.resume_agent": {
+      "handler": "partial:resume_agent",
+      "scope": "partial:agent_change"
+    },
+    "ping": {
+      "handler": "lambda:b117a067ebfe1e51",
+      "scope": "lambda:1d5dcf0f2fe9b250"
+    },
+    "settings.get": {
+      "handler": "partial:settings_get",
+      "scope": "partial:setting_query"
+    },
+    "settings.list_models": {
+      "handler": "partial:settings_list_models",
+      "scope": "lambda:3dd4163f55e049c8"
+    },
+    "settings.test_model": {
+      "handler": "partial:settings_test_model",
+      "scope": "lambda:3dd4163f55e049c8"
+    },
+    "settings.update": {
+      "handler": "partial:settings_update",
+      "scope": "partial:setting_change"
+    },
+    "upload.cancel": {
+      "handler": "lambda:847a0ec4d0421920",
+      "scope": "lambda:43138400e40420a4"
+    },
+    "upload.create": {
+      "handler": "partial:upload_create",
+      "scope": "lambda:6f6664e6bfe750fe"
+    },
+    "upload.status": {
+      "handler": "lambda:94efa9663be87a61",
+      "scope": "lambda:43138400e40420a4"
+    },
+    "usage.advance": {
+      "handler": "partial:usage_advance",
+      "scope": "lambda:0937a0a6d588ef5f"
+    },
+    "usage.query": {
+      "handler": "partial:usage_query",
+      "scope": "lambda:4fd6bdcaf6ff3084"
+    },
+    "usage.read": {
+      "handler": "partial:usage_read",
+      "scope": "lambda:4fd6bdcaf6ff3084"
+    },
+    "workspace.list": {
+      "handler": "partial:workspace_list",
+      "scope": "partial:workspace_scope"
+    },
+    "workspace.read": {
+      "handler": "partial:workspace_read",
+      "scope": "partial:workspace_scope"
+    }
+  },
   "bodies": {
     "agent_change": "Module(body=[Return(value=Call(func=Name(id='RequestScope', ctx=Load()), keywords=[keyword(arg='writes', value=Tuple(elts=[Call(func=Name(id='Resource', ctx=Load()), args=[Constant(value='member'), Call(func=Name(id='int', ctx=Load()), args=[Subscript(value=Name(id='params', ctx=Load()), slice=Constant(value='agent_id'), ctx=Load())])])], ctx=Load()))]))])",
     "agent_generation_parts": "Module(body=[Assign(targets=[Name(id='agent_id', ctx=Store())], value=Call(func=Name(id='_required_integer', ctx=Load()), args=[Name(id='params', ctx=Load()), Constant(value='agent_id')])), Assign(targets=[Name(id='sequence', ctx=Store())], value=Call(func=Name(id='_required_integer', ctx=Load()), args=[Name(id='params', ctx=Load()), Constant(value='sequence')])), Assign(targets=[Name(id='ordinal', ctx=Store())], value=Call(func=Name(id='_required_integer', ctx=Load()), args=[Name(id='params', ctx=Load()), Constant(value='ordinal')])), Assign(targets=[Name(id='after', ctx=Store())], value=Call(func=Name(id='_integer_param', ctx=Load()), args=[Name(id='params', ctx=Load()), Constant(value='after')], keywords=[keyword(arg='maximum', value=BinOp(left=BinOp(left=Constant(value=2), op=Pow(), right=Constant(value=63)), op=Sub(), right=Constant(value=1)))])), Assign(targets=[Name(id='limit', ctx=Store())], value=Call(func=Name(id='_integer_param', ctx=Load()), args=[Name(id='params', ctx=Load()), Constant(value='limit')], keywords=[keyword(arg='default', value=Constant(value=30)), keyword(arg='maximum', value=Constant(value=50))])), Assert(test=Compare(left=Name(id='limit', ctx=Load()), ops=[IsNot()], comparators=[Constant(value=None)])), If(test=Compare(left=Name(id='limit', ctx=Load()), ops=[Eq()], comparators=[Constant(value=0)]), body=[Raise(exc=Call(func=Name(id='DomainError', ctx=Load()), args=[Attribute(value=Name(id='ErrorCode', ctx=Load()), attr='INVALID_PARAMS', ctx=Load()), Constant(value='limit must be positive')]))]), With(items=[withitem(context_expr=Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='_reading', ctx=Load())))], body=[Expr(value=Call(func=Attribute(value=Call(func=Attribute(value=Name(id='self', ctx=Load()), attr='_human', ctx=Load())), attr='authorize_agent_history', ctx=Load()), args=[Name(id='agent_id', ctx=Load())])), Assign(targets=[Name(id='page', ctx=Store())], value=Call(func=Attribute(value=Attribute(value=Attribute(value=Attribute(value=Name(id='self', ctx=Load()), attr='_scheduler', ctx=Load()), attr='history', ctx=Load()), attr='generation', ctx=Load()), attr='parts', ctx=Load()), args=[Name(id='agent_id', ctx=Load()), Name(id='sequence', ctx=Load()), Name(id='ordinal', ctx=Load())], keywords=[keyword(arg='after', value=IfExp(test=Compare(left=Name(id='after', ctx=Load()), ops=[IsNot()], comparators=[Constant(value=None)]), body=Name(id='after', ctx=Load()), orelse=UnaryOp(op=USub(), operand=Constant(value=1)))), keyword(arg='limit', value=BinOp(left=Name(id='limit', ctx=Load()), op=Add(), right=Constant(value=1)))]))]), Assign(targets=[Name(id='parts', ctx=Store())], value=Subscript(value=Name(id='page', ctx=Load()), slice=Slice(upper=Name(id='limit', ctx=Load())), ctx=Load())), Assign(targets=[Name(id='has_more', ctx=Store())], value=Compare(left=Call(func=Name(id='len', ctx=Load()), args=[Name(id='page', ctx=Load())]), ops=[Gt()], comparators=[Name(id='limit', ctx=Load())])), Return(value=Dict(keys=[Constant(value='agent_id'), Constant(value='sequence'), Constant(value='ordinal'), Constant(value='parts'), Constant(value='has_more'), Constant(value='next_after')], values=[Name(id='agent_id', ctx=Load()), Name(id='sequence', ctx=Load()), Name(id='ordinal', ctx=Load()), ListComp(elt=Call(func=Name(id='asdict', ctx=Load()), args=[Name(id='item', ctx=Load())]), generators=[comprehension(target=Name(id='item', ctx=Store()), iter=Name(id='parts', ctx=Load()), is_async=0)]), Name(id='has_more', ctx=Load()), IfExp(test=BoolOp(op=And(), values=[Name(id='parts', ctx=Load()), Name(id='has_more', ctx=Load())]), body=Attribute(value=Attribute(value=Subscript(value=Name(id='parts', ctx=Load()), slice=UnaryOp(op=USub(), operand=Constant(value=1)), ctx=Load()), attr='key', ctx=Load()), attr='part_index', ctx=Load()), orelse=Constant(value=None))]))])",

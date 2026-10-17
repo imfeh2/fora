@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import copy
+import functools
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,10 +96,32 @@ def _functions() -> dict[str, list[ast.FunctionDef]]:
     return found
 
 
+def _identify(handler: Any) -> str:
+    if isinstance(handler, functools.partial):
+        return f"partial:{handler.func.__qualname__}"
+    code = handler.__code__
+    digest = hashlib.sha256(
+        repr((code.co_code, code.co_consts, code.co_names)).encode()
+    ).hexdigest()[:16]
+    return f"lambda:{digest}"
+
+
 def test_method_surface_is_locked() -> None:
     dispatcher, _ = _dispatcher()
     assert set(dispatcher.methods()) == METHODS
     assert set(dispatcher._scopes) == METHODS
+
+
+def test_handler_bindings_are_locked() -> None:
+    dispatcher, _ = _dispatcher()
+    bindings = {
+        method: {
+            "handler": _identify(dispatcher._handlers[method]),
+            "scope": _identify(dispatcher._scopes[method]),
+        }
+        for method in dispatcher.methods()
+    }
+    assert bindings == DATA["bindings"]
 
 
 def test_library_read_returns_the_tool_result() -> None:
