@@ -24,7 +24,6 @@ import {
   Avatar,
   Button,
   Chip,
-  CountPill,
   LoadingSkeleton,
   Meter,
   SearchField,
@@ -38,7 +37,7 @@ import { StatePanel } from "@/components/ui/state-panel";
 import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
 import { backend, type Member } from "@/lib/backend";
-import { formatInteger, plural } from "@/lib/format";
+import { formatInteger } from "@/lib/format";
 
 type Filter = "all" | "agents" | "humans";
 
@@ -47,12 +46,6 @@ const FILTERS: { value: Filter; label: string }[] = [
   { value: "agents", label: "Agents" },
   { value: "humans", label: "Humans" },
 ];
-
-const COUNTED: Record<Filter, string> = {
-  all: "Member",
-  agents: "Agent",
-  humans: "Human",
-};
 
 export function memberActions(
   member: Member,
@@ -147,9 +140,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
             error={organizationError}
             retry={() => void retry("organization")}
           />
-        ) : null}
-        {shown !== null ? (
-          <CountPill>{plural(shown.length, COUNTED[filter])}</CountPill>
         ) : null}
         {shown === null ? (
           organizationError || connectionError ? null : (
