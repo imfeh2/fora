@@ -391,7 +391,6 @@ export function MemberRow({
   const paused = canResume(member);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const inFlight = useRef(false);
   const toggle = async () => {
     if (inFlight.current) return;
@@ -468,8 +467,7 @@ export function MemberRow({
       </div>
       <div
         className={clsx(
-          "relative ml-auto flex min-w-0 flex-wrap items-center gap-2 [@media(max-width:640px)]:col-span-2 [@media(max-width:640px)]:w-full [@media(max-width:640px)]:justify-end",
-          menuOpen ? "z-20" : "z-1",
+          "relative z-1 ml-auto flex min-w-0 flex-wrap items-center gap-2 [@media(max-width:640px)]:col-span-2 [@media(max-width:640px)]:w-full [@media(max-width:640px)]:justify-end",
         )}
       >
         <Button
@@ -490,7 +488,6 @@ export function MemberRow({
         </Button>
         <OverflowMenu
           label={`Actions for ${member.name}`}
-          onOpenChange={setMenuOpen}
           actions={memberActions(member, {
             toggle: onToggle,
             rename: onRename,
