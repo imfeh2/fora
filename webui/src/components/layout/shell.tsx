@@ -107,17 +107,15 @@ export function Shell({
       <div className="flex flex-col min-w-0 min-h-0">
         <div className="hidden flex-none items-center gap-2 border-b border-line px-3 py-2 narrow:flex">
           {navigation ? (
-            <>
-              <IconButton
-                ref={navigation.trigger}
-                label="Open navigation"
-                aria-expanded={navigation.open && narrow}
-                onClick={() => navigation.onOpenChange(true)}
-                touchTarget
-              >
-                <Menu size={16} />
-              </IconButton>
-            </>
+            <IconButton
+              ref={navigation.trigger}
+              label="Open navigation"
+              aria-expanded={navigation.open && narrow}
+              onClick={() => navigation.onOpenChange(true)}
+              touchTarget
+            >
+              <Menu size={16} />
+            </IconButton>
           ) : null}
         </div>
         {children}
