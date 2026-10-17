@@ -12,6 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -679,6 +680,27 @@ function ThreadSession({
     }
   };
 
+  const ackRef = useRef(ack);
+  useEffect(() => {
+    ackRef.current = ack;
+  }, [ack]);
+  const handleAck = useCallback(
+    (messageId: number) => void ackRef.current([messageId]),
+    [],
+  );
+  const handleRevoke = useCallback(
+    (messageId: number) => void ackRef.current([messageId], true),
+    [],
+  );
+  const handleMore = useCallback(
+    (previewId: string) => void previews.more(previewId),
+    [previews.more],
+  );
+  const handleRetry = useCallback(
+    (previewId: string) => void previews.retry(previewId),
+    [previews.retry],
+  );
+
   const ackAll = async () => {
     if (ackBusy || !detail) return;
     setAckBusy(true);
@@ -935,20 +957,10 @@ function ThreadSession({
                       pending={message?.pending ?? false}
                       acknowledged={message?.acknowledged ?? false}
                       busy={ackBusy}
-                      onAck={() => message && void ack([message.id])}
-                      onRevoke={() => message && void ack([message.id], true)}
-                      onMore={() =>
-                        unit.preview?.data &&
-                        void previews.more(
-                          unit.preview.data.metadata.preview_id,
-                        )
-                      }
-                      onRetry={() =>
-                        unit.preview?.data &&
-                        void previews.retry(
-                          unit.preview.data.metadata.preview_id,
-                        )
-                      }
+                      onAck={handleAck}
+                      onRevoke={handleRevoke}
+                      onMore={handleMore}
+                      onRetry={handleRetry}
                     />
                   </li>
                 );
@@ -1074,7 +1086,7 @@ export function ScrollToBottomButton({
   );
 }
 
-export function MessageRow({
+export const MessageRow = memo(function MessageRow({
   discussionId,
   message,
   preview,
@@ -1093,15 +1105,15 @@ export function MessageRow({
   message?: Message;
   preview?: PreviewState;
   identity?: string;
-  onMore?: () => void;
-  onRetry?: () => void;
+  onMore?: (previewId: string) => void;
+  onRetry?: (previewId: string) => void;
   compact: boolean;
   fresh: boolean;
   pending: boolean;
   acknowledged: boolean;
   busy: boolean;
-  onAck: () => void;
-  onRevoke: () => void;
+  onAck: (messageId: number) => void;
+  onRevoke: (messageId: number) => void;
 }) {
   const { members } = useOrganization();
   const [details, setDetails] = useState(false);
@@ -1176,7 +1188,13 @@ export function MessageRow({
         {preview?.error ? (
           <div role="alert" className="mt-2 text-sm text-danger">
             <p>{preview.error.message}</p>
-            <Button size="sm" disabled={preview.loading} onClick={onRetry}>
+            <Button
+              size="sm"
+              disabled={preview.loading}
+              onClick={() =>
+                preview.data && onRetry?.(preview.data.metadata.preview_id)
+              }
+            >
               Retry
             </Button>
           </div>
@@ -1186,7 +1204,9 @@ export function MessageRow({
             disabled={preview?.loading}
             aria-label="Load more text"
             aria-busy={preview?.loading}
-            onClick={onMore}
+            onClick={() =>
+              preview?.data && onMore?.(preview.data.metadata.preview_id)
+            }
           >
             {preview?.loading ? (
               <Loader2 size={14} className="animate-spin" aria-hidden="true" />
@@ -1205,7 +1225,12 @@ export function MessageRow({
         {pending ? (
           <div className="mt-2 flex items-center gap-2">
             <Chip tone="warning">Mentions you</Chip>
-            <Button size="sm" touchTarget disabled={busy} onClick={onAck}>
+            <Button
+              size="sm"
+              touchTarget
+              disabled={busy}
+              onClick={() => message && onAck(message.id)}
+            >
               <Check size={13} />
               Mark handled
             </Button>
@@ -1218,7 +1243,7 @@ export function MessageRow({
               touchTarget
               disabled={busy}
               aria-label="Undo confirmation"
-              onClick={onRevoke}
+              onClick={() => message && onRevoke(message.id)}
             >
               Undo
             </Button>
@@ -1236,4 +1261,4 @@ export function MessageRow({
       </div>
     </div>
   );
-}
+});
