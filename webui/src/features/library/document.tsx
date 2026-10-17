@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { type Route, useNavigate } from "@/app/router";
+import { type Route, useNavigate, useRouter } from "@/app/router";
 import {
   type Crumb,
   Page,
@@ -15,7 +15,7 @@ import {
   Toolbar,
 } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
-import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -166,6 +166,7 @@ export function DocumentPage({ path }: { path: string }) {
 
 function TextDocument({ path }: { path: string }) {
   const navigate = useNavigate();
+  const { registerNavigationBlocker } = useRouter();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [draft, setDraft] = useState("");
   const [unavailable, setUnavailable] = useState<
@@ -311,6 +312,20 @@ function TextDocument({ path }: { path: string }) {
   useEffect(() => () => dismissToast(conflictToastId(path)), [path]);
 
   const dirty = loaded !== null && draft !== loaded.content;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const [discardNavigation, setDiscardNavigation] = useState<
+    (() => void) | null
+  >(null);
+  useEffect(
+    () =>
+      registerNavigationBlocker((_next, proceed) => {
+        if (!dirtyRef.current) return false;
+        setDiscardNavigation(() => proceed);
+        return true;
+      }),
+    [registerNavigationBlocker],
+  );
   const crumb = documentCrumbs(path, navigate);
 
   const save = async () => {
@@ -420,6 +435,32 @@ function TextDocument({ path }: { path: string }) {
           </div>
         )}
       </div>
+      <Modal
+        open={discardNavigation !== null}
+        onOpenChange={(next) => {
+          if (!next) setDiscardNavigation(null);
+        }}
+        title="Discard unsaved changes?"
+        variant="confirm"
+        description="Your changes have not been saved."
+        footer={
+          <>
+            <Button onClick={() => setDiscardNavigation(null)}>
+              Keep Editing
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                const proceed = discardNavigation;
+                setDiscardNavigation(null);
+                proceed?.();
+              }}
+            >
+              Discard
+            </Button>
+          </>
+        }
+      />
     </DocumentFrame>
   );
 }
