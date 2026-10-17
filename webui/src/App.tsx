@@ -239,13 +239,25 @@ function Chrome({
         ) : (
           <Sidebar
             inert={settingsSaving}
+            footer={
+              <Nav label="Application">
+                <NavItem
+                  icon={<Settings size={16} />}
+                  label="Settings"
+                  active={false}
+                  onSelect={() =>
+                    selectRoute({ name: "settings", section: "providers" })
+                  }
+                />
+              </Nav>
+            }
             list={
               <Nav label="Discussions">
                 {list === null && !discussions.error && !failure ? (
                   <li
                     aria-busy="true"
                     aria-label="Loading Discussions"
-                    className="pl-10 pr-2"
+                    className="pl-4 pr-2"
                   >
                     {["75%", "55%", "85%"].map((width) => (
                       <div key={width} className="flex h-[30px] items-center">
@@ -328,14 +340,6 @@ function Chrome({
                 label="Library"
                 active={active === "library"}
                 onSelect={() => selectRoute({ name: "library" })}
-              />
-              <NavItem
-                icon={<Settings size={16} />}
-                label="Settings"
-                active={active === "settings"}
-                onSelect={() =>
-                  selectRoute({ name: "settings", section: "providers" })
-                }
               />
             </Nav>
           </Sidebar>
