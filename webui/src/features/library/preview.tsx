@@ -8,7 +8,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { documentPath, useNavigate } from "@/app/router";
-import { Button } from "@/components/ui/index";
 import { mediaKind } from "@/features/library/media";
 import { backend, type LibraryEntry } from "@/lib/backend";
 import { documentName, formatBytes } from "@/lib/format";
@@ -90,6 +89,13 @@ export function previewText(text: string): string {
   const rows = text.split(/\r?\n/);
   const kept = rows.slice(0, TEXT_LINES);
   return kept.join("\n") + (rows.length > TEXT_LINES ? "\n…" : "");
+}
+
+function formatSeconds(value: number): string {
+  const total = Math.round(value);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 async function loadEntries(): Promise<LibraryEntry[]> {
@@ -188,6 +194,7 @@ function PreviewCard({
     () => cache.get(path) ?? null,
   );
   const [height, setHeight] = useState(0);
+  const [duration, setDuration] = useState<number | null>(null);
 
   useEffect(() => {
     if (data !== null) return;
@@ -272,20 +279,10 @@ function PreviewCard({
       ref={card}
       role="dialog"
       aria-label={`Preview of ${documentName(path)}`}
-      className="fixed z-(--layer-tooltip) flex flex-col gap-2 overflow-hidden rounded-sm border border-line bg-surface-raised p-3 text-xs shadow-tooltip"
+      className="fixed z-(--layer-tooltip) flex flex-col overflow-hidden rounded-sm border border-line bg-surface-raised p-3 text-xs shadow-tooltip"
       style={{ left, top, width: CARD_WIDTH }}
       onMouseLeave={onClose}
     >
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 truncate text-sm font-medium text-fg">
-          {documentName(path)}
-        </span>
-        <span className="flex-none text-fg-muted tabular-nums">
-          {data?.status === "ready" && data.size !== null
-            ? formatBytes(data.size)
-            : null}
-        </span>
-      </div>
       {data === null ? (
         <span className="text-fg-muted">Loading preview…</span>
       ) : data.kind === "image" && data.url !== null ? (
@@ -295,25 +292,36 @@ function PreviewCard({
           className="max-h-[240px] max-w-[320px] self-center rounded-xs object-contain"
         />
       ) : data.kind === "video" && data.url !== null ? (
-        <video
-          src={data.url}
-          muted
-          playsInline
-          preload="metadata"
-          className="max-h-[240px] max-w-[320px] self-center rounded-xs object-contain"
-        />
+        <div className="relative self-center">
+          <video
+            src={data.url}
+            muted
+            playsInline
+            preload="metadata"
+            className="max-h-[240px] max-w-[320px] rounded-xs object-contain"
+            onLoadedMetadata={(event) => {
+              const value = event.currentTarget.duration;
+              if (Number.isFinite(value) && value > 0) setDuration(value);
+            }}
+          />
+          {duration === null ? null : (
+            <span className="absolute right-1 bottom-1 rounded-xs bg-app/80 px-1 py-0.5 text-[11px] tabular-nums text-fg">
+              {formatSeconds(duration)}
+            </span>
+          )}
+        </div>
       ) : data.kind === "text" && data.text !== null ? (
         <pre className="max-h-[220px] overflow-hidden font-mono text-[11px] leading-4 whitespace-pre-wrap wrap-anywhere text-fg-muted">
           {data.text}
         </pre>
       ) : (
-        <span className="text-fg-muted">{previewType(path)}</span>
+        <span className="text-fg-muted">
+          {previewType(path)}
+          {data.status === "ready" && data.size !== null
+            ? ` · ${formatBytes(data.size)}`
+            : null}
+        </span>
       )}
-      <div className="flex justify-end">
-        <Button size="sm" onClick={() => open()}>
-          Open
-        </Button>
-      </div>
     </div>,
     document.body,
   );
