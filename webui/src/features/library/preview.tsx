@@ -255,7 +255,7 @@ function PreviewCard({
 
   const open = () => {
     onClose();
-    navigate({ name: "document", path });
+    navigate({ name: "library", path });
   };
   const openRef = useRef(open);
   openRef.current = open;
@@ -391,7 +391,7 @@ export function LibraryLink({
           event.preventDefault();
           hide();
           release(hide);
-          navigate({ name: "document", path });
+          navigate({ name: "library", path });
         }}
       >
         {children}
