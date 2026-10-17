@@ -289,7 +289,7 @@ export function NavSubItem({
       <button
         type="button"
         className={clsx(
-          "relative flex items-center gap-2 w-full h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-1 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
+          "relative flex items-center gap-2 w-full h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-1 pl-4 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
           active
             ? "bg-surface-raised text-fg font-medium"
             : "bg-transparent text-fg-muted",
