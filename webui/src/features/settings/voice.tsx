@@ -1,3 +1,4 @@
+import { CircleHelp } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Button,
@@ -7,6 +8,7 @@ import {
   LoadingSkeleton,
   Spinner,
 } from "@/components/ui/index";
+import { Tooltip } from "@/components/ui/tooltip";
 import { backend } from "@/lib/backend";
 import { VoiceRecording, type VoiceState } from "@/lib/voice";
 
@@ -201,9 +203,19 @@ export function VoicePanel() {
         </fieldset>
       </form>
       <div className="flex flex-col gap-3 border-t border-line pt-4">
-        <p className="text-sm">
-          Test saved OpenAI Realtime settings · {values?.address ?? ""}
-        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span>Microphone test</span>
+          <span className="text-fg-muted">{values?.address ?? ""}</span>
+          <Tooltip label="Uses the saved OpenAI Realtime settings. Audio is sent through Fora to this service for transcription and is not stored.">
+            <button
+              type="button"
+              aria-label="About the microphone test"
+              className="inline-flex cursor-help text-fg-muted"
+            >
+              <CircleHelp size={14} />
+            </button>
+          </Tooltip>
+        </div>
         <div className="flex items-center gap-2">
           {active ? (
             <>
@@ -245,12 +257,14 @@ export function VoicePanel() {
             </Button>
           )}
         </div>
-        <p
-          className="min-h-16 whitespace-pre-wrap rounded border border-line p-3"
-          aria-live="polite"
-        >
-          {text || "Transcribed text appears here."}
-        </p>
+        {active || text ? (
+          <p
+            className="min-h-16 whitespace-pre-wrap rounded border border-line p-3"
+            aria-live="polite"
+          >
+            {text || "Transcribed text appears here."}
+          </p>
+        ) : null}
       </div>
     </div>
   );
