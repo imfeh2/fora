@@ -14,6 +14,7 @@ import {
   FieldSkeleton,
   Input,
   LoadingSkeleton,
+  Select,
   Spinner,
 } from "@/components/ui/index";
 import {
@@ -21,7 +22,14 @@ import {
   useReportSettingsSave,
   useSaver,
 } from "@/features/settings/saver";
-import { type BackendError, backend } from "@/lib/backend";
+import {
+  type AgentModelConfig,
+  type BackendError,
+  backend,
+  type Member,
+  type ModelCatalog,
+  type Thinking,
+} from "@/lib/backend";
 
 const FIELDS = [
   { key: "context_window_tokens", label: "Context window (tokens)" },
@@ -157,6 +165,141 @@ export function AgentForm({
   );
 }
 
+function AgentModelsPanel() {
+  const [agents, setAgents] = useState<Member[]>([]);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<BackendError | null>(null);
+  const [saving, setSaving] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [organization, model] = await Promise.all([
+        backend.organization(),
+        backend.modelCatalog(),
+      ]);
+      setAgents(
+        organization.members.filter((member) => member.type === "agent"),
+      );
+      setCatalog(model);
+      setError(null);
+    } catch (failure) {
+      setError(reportLoadFailure(failure));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading && !catalog) {
+    return (
+      <LoadingSkeleton label="Loading Agent models">
+        <div className="agent-groups">
+          <section className="agent-group">
+            <h3>Agent models</h3>
+            <div className="agent-fields">
+              <FieldSkeleton />
+              <FieldSkeleton />
+            </div>
+          </section>
+        </div>
+      </LoadingSkeleton>
+    );
+  }
+
+  if (error && !(error.transport && backend.disconnected)) {
+    return <LoadError error={error} retry={() => void load()} />;
+  }
+
+  if (!catalog) return null;
+
+  const models = catalog.models.filter((model) => model.enabled);
+
+  const save = async (agentId: number, values: AgentModelConfig) => {
+    setSaving(agentId);
+    try {
+      await backend.configureModel("set_agent", agentId, values);
+      await load();
+    } catch (failure) {
+      setError(reportLoadFailure(failure));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <section className="agent-group">
+      <h3>Agent models</h3>
+      <div className="flex flex-col gap-2">
+        {agents.map((agent) => {
+          const saved = catalog.agent_configs[String(agent.id)] ?? {
+            model_id: null,
+            thinking: null,
+          };
+          const effective = saved.model_id ?? catalog.default_model_id;
+          const model = models.find((item) => item.id === effective);
+          const options = model?.thinking_options ?? [];
+          return (
+            <div
+              key={agent.id}
+              className="flex min-w-0 flex-wrap items-center gap-3 px-2 py-1"
+            >
+              <span className="min-w-0 flex-1 text-sm font-medium wrap-anywhere">
+                {agent.name}
+              </span>
+              <Select
+                aria-label={`Model for ${agent.name}`}
+                value={saved.model_id ?? ""}
+                disabled={saving === agent.id}
+                onChange={(event) =>
+                  void save(agent.id, {
+                    model_id: event.target.value || null,
+                    thinking: saved.thinking,
+                  })
+                }
+              >
+                <option value="">Default</option>
+                {models.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </Select>
+              <Select
+                aria-label={`Thinking for ${agent.name}`}
+                value={saved.thinking ?? ""}
+                disabled={saving === agent.id || options.length === 0}
+                onChange={(event) =>
+                  void save(agent.id, {
+                    model_id: saved.model_id,
+                    thinking: (event.target.value || null) as Thinking | null,
+                  })
+                }
+              >
+                <option value="">Default</option>
+                {options.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          );
+        })}
+        {agents.length === 0 ? (
+          <p className="text-sm text-fg-muted">
+            No Agents in this organization.
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 export function AgentPanel() {
   const first = useRef<HTMLInputElement>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -233,6 +376,7 @@ export function AgentPanel() {
         onChange={setDrafts}
         onSave={(values) => void save("agent", values)}
       />
+      <AgentModelsPanel />
     </>
   );
 }
