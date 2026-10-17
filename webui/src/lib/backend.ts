@@ -1467,11 +1467,11 @@ export class Backend {
       };
       request.onerror = () => {
         finish();
-        reject(new Error("Upload interrupted. Your draft is preserved."));
+        reject(new Error("Upload interrupted. Your message is preserved."));
       };
       request.ontimeout = () => {
         finish();
-        reject(new Error("Upload timed out. Your draft is preserved."));
+        reject(new Error("Upload timed out. Your message is preserved."));
       };
       request.onabort = () => {
         finish();
