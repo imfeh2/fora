@@ -279,7 +279,7 @@ function PreviewCard({
       ref={card}
       role="dialog"
       aria-label={`Preview of ${documentName(path)}`}
-      className="fixed z-(--layer-tooltip) flex flex-col overflow-hidden rounded-sm border border-line bg-surface-raised p-3 text-xs shadow-tooltip"
+      className="fixed z-(--layer-tooltip) flex cursor-pointer flex-col overflow-hidden rounded-sm border border-line bg-surface-raised p-3 text-xs shadow-tooltip"
       style={{ left, top, width: CARD_WIDTH }}
       onMouseLeave={onClose}
     >
