@@ -20,9 +20,9 @@ import {
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
-import { documentPath, useNavigate } from "@/app/router";
 import { Button } from "@/components/ui/index";
 import { toast } from "@/components/ui/toast";
+import { LibraryLink } from "@/features/library/preview";
 import { remarkLiteralHtml, remarkMentions } from "@/features/markdown-plugins";
 import type { MessageMention } from "@/lib/backend";
 
@@ -106,28 +106,6 @@ export function libraryPathFromHref(href: string): string | null {
   if (segments.some((segment) => segment === "..")) return null;
   const path = segments.filter((segment) => segment.length > 0).join("/");
   return path.length > 0 ? path : null;
-}
-
-function LibraryLink({
-  path,
-  children,
-}: {
-  path: string;
-  children: React.ReactNode;
-}) {
-  const navigate = useNavigate();
-  return (
-    <a
-      href={documentPath(path)}
-      className="markdown-link"
-      onClick={(event) => {
-        event.preventDefault();
-        navigate({ name: "document", path });
-      }}
-    >
-      {children}
-    </a>
-  );
 }
 
 const components: Components = {
