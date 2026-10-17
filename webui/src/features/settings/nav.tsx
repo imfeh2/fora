@@ -4,6 +4,7 @@ import {
   Bot,
   Cpu,
   FlaskConical,
+  Server,
   SlidersHorizontal,
 } from "lucide-react";
 import { type SettingsSection, useNavigate } from "@/app/router";
@@ -15,7 +16,8 @@ const SECTIONS: {
   label: string;
   icon: React.ReactNode;
 }[] = [
-  { id: "model", label: "Model", icon: <Cpu size={16} /> },
+  { id: "providers", label: "Providers", icon: <Server size={16} /> },
+  { id: "models", label: "Models", icon: <Cpu size={16} /> },
   {
     id: "execution",
     label: "Execution",

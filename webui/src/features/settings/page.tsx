@@ -8,8 +8,10 @@ import { VoicePanel } from "@/features/settings/voice";
 
 function Panel({ section }: { section: SettingsSection }) {
   switch (section) {
-    case "model":
-      return <ModelPanel />;
+    case "providers":
+      return <ModelPanel view="providers" />;
+    case "models":
+      return <ModelPanel view="models" />;
     case "execution":
       return <ExecutionPanel />;
     case "agent":

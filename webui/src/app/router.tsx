@@ -10,7 +10,8 @@ import {
 } from "react";
 
 export type SettingsSection =
-  | "model"
+  | "providers"
+  | "models"
   | "execution"
   | "agent"
   | "langfuse"
@@ -63,7 +64,8 @@ const RouterContext = createContext<Router | null>(null);
 const LIST_PATH = "/discussions";
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
-  "model",
+  "providers",
+  "models",
   "execution",
   "agent",
   "langfuse",

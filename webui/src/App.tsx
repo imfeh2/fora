@@ -257,7 +257,7 @@ function Chrome({
                   onSelect={() =>
                     selectRoute({
                       name: "settings",
-                      section: "model",
+                      section: "providers",
                     })
                   }
                 />
