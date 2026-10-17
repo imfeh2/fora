@@ -87,10 +87,12 @@ function DocumentFrame({
   if (embedded)
     return (
       <div className="flex flex-1 min-h-0 flex-col">
-        <div className="flex flex-none flex-wrap items-center gap-2 border-b border-line px-6 py-2">
-          {toolbar}
-          <span className="ml-auto flex items-center gap-2">{actions}</span>
-        </div>
+        {toolbar || actions ? (
+          <div className="flex flex-none flex-wrap items-center gap-2 border-b border-line px-6 py-2">
+            {toolbar}
+            <span className="ml-auto flex items-center gap-2">{actions}</span>
+          </div>
+        ) : null}
         <div className="flex flex-1 min-h-0 flex-col">{children}</div>
       </div>
     );
@@ -570,9 +572,6 @@ function MediaDocument({
       path={path}
       embedded={embedded}
       menuDisabled={state.status === "loading"}
-      toolbar={
-        state.status === "ready" ? <Chip>{formatBytes(state.size)}</Chip> : null
-      }
     >
       <div className="flex flex-1 min-h-0 items-center justify-center p-8">
         {state.status === "loading" ? (

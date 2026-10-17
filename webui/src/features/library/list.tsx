@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { StatePanel } from "@/components/ui/state-panel";
+import { Tooltip } from "@/components/ui/tooltip";
 import { DocumentBody } from "@/features/library/document";
 import { FolderTree } from "@/features/library/folder-tree";
 import { mediaKind } from "@/features/library/media";
@@ -32,7 +33,12 @@ import { MediaGrid } from "@/features/library/media-grid";
 import { expandedFolders } from "@/features/library/tree";
 import { FileList } from "@/features/library/tree-view";
 import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
-import { documentFolder, documentName, plural } from "@/lib/format";
+import {
+  documentFolder,
+  documentName,
+  formatBytes,
+  plural,
+} from "@/lib/format";
 
 type Creation = { kind: LibraryEntry["kind"]; parent: string };
 
@@ -323,9 +329,17 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               {file ? (
                 <span className="flex min-w-0 items-center gap-1">
                   <ChevronRight size={14} className="flex-none text-fg-muted" />
-                  <span className="min-w-0 truncate text-fg">
-                    {documentName(file)}
-                  </span>
+                  {fileEntry && mediaKind(file) !== null ? (
+                    <Tooltip label={formatBytes(fileEntry.size)}>
+                      <span className="min-w-0 truncate text-fg">
+                        {documentName(file)}
+                      </span>
+                    </Tooltip>
+                  ) : (
+                    <span className="min-w-0 truncate text-fg">
+                      {documentName(file)}
+                    </span>
+                  )}
                 </span>
               ) : null}
             </nav>
