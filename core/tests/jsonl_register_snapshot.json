@@ -177,6 +177,10 @@
       "handler": "partial:resume_agent",
       "scope": "partial:agent_change"
     },
+    "organization.set_model": {
+      "handler": "partial:organization_set_model",
+      "scope": "lambda:3268606e9d45a5ec"
+    },
     "ping": {
       "handler": "lambda:b117a067ebfe1e51",
       "scope": "lambda:1d5dcf0f2fe9b250"
@@ -340,6 +344,7 @@
     "organization.pause_agent",
     "organization.rename_member",
     "organization.resume_agent",
+    "organization.set_model",
     "ping",
     "settings.get",
     "settings.list_models",
