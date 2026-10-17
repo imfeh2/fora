@@ -139,10 +139,12 @@ export function Shell({
 export function Sidebar({
   children,
   footer,
+  list,
   inert = false,
 }: {
   children: ReactNode;
   footer?: ReactNode;
+  list?: ReactNode;
   inert?: boolean;
 }) {
   return (
@@ -150,9 +152,18 @@ export function Sidebar({
       className="flex flex-1 flex-col min-h-0 border-r border-line bg-app"
       inert={inert}
     >
-      <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
-        {children}
-      </div>
+      {list === undefined ? (
+        <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
+          {children}
+        </div>
+      ) : (
+        <>
+          <div className="flex-none">{children}</div>
+          <div className="flex flex-col flex-1 min-h-0 overflow-y-auto border-t border-line">
+            {list}
+          </div>
+        </>
+      )}
       {footer ? (
         <div className="flex-none border-t border-line">{footer}</div>
       ) : null}
@@ -266,13 +277,11 @@ export function NavSubItem({
   label,
   active,
   badge,
-  indicator,
   onSelect,
 }: {
   label: string;
   active: boolean;
   badge?: ReactNode;
-  indicator?: ReactNode;
   onSelect: () => void;
 }) {
   return (
@@ -280,7 +289,7 @@ export function NavSubItem({
       <button
         type="button"
         className={clsx(
-          "relative flex items-center gap-2 w-full h-[26px] narrow:min-h-11 touch:min-h-11 py-0 pr-1 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
+          "relative flex items-center gap-2 w-full h-[30px] narrow:min-h-11 touch:min-h-11 py-0 pr-1 pl-10 border-0 rounded-sm text-sm text-left cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-raised hover:text-fg data-[unread=true]:font-medium data-[unread=true]:text-fg",
           active
             ? "bg-surface-raised text-fg font-medium"
             : "bg-transparent text-fg-muted",
@@ -290,11 +299,6 @@ export function NavSubItem({
         data-unread={badge ? "true" : undefined}
         onClick={onSelect}
       >
-        {indicator ? (
-          <span className="absolute left-6 top-1/2 flex -translate-x-1/2 -translate-y-1/2">
-            {indicator}
-          </span>
-        ) : null}
         <span className="flex-1 min-w-0 truncate">{label}</span>
         <span className={badgeSlot}>{badge}</span>
       </button>

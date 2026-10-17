@@ -34,7 +34,6 @@ import {
   dismissToast,
   IconButton,
   Skeleton,
-  StateDot,
   Toaster,
   toast,
   UnreadMark,
@@ -152,7 +151,6 @@ function Chrome({
 }) {
   const { organization, discussions, failure, retry, reconnecting, loading } =
     application;
-  const members = organization.data?.members;
   const list = discussions.data;
   const { route } = useRouter();
   const navigate = useNavigate();
@@ -201,13 +199,6 @@ function Chrome({
   const active = navIdOf(route);
   const unlisted =
     route.name === "discussion" && !list?.some((item) => item.id === route.id);
-  const running = new Set(
-    members
-      ?.filter(
-        (member) => member.type === "agent" && member.state === "running",
-      )
-      .map((member) => member.id),
-  );
   const regionError =
     route.name === "discussion" && organization.data === null
       ? organization.error
@@ -248,43 +239,8 @@ function Chrome({
         ) : (
           <Sidebar
             inert={settingsSaving}
-            footer={
-              <Nav label="Settings">
-                <NavItem
-                  icon={<Settings size={16} />}
-                  label="Settings"
-                  active={active === "settings"}
-                  onSelect={() =>
-                    selectRoute({
-                      name: "settings",
-                      section: "providers",
-                    })
-                  }
-                />
-              </Nav>
-            }
-          >
-            <SidebarBrand />
-            <Nav label="Sections">
-              <NavItem
-                icon={<MessagesSquare size={16} />}
-                label="Discussions"
-                active={route.name === "discussions" || unlisted}
-                trailing={
-                  <IconButton
-                    size="sm"
-                    label="New Discussion"
-                    touchTarget
-                    disabled={!organization.data || backend.disconnected}
-                    onClick={() => {
-                      if (!settingsSaving) closeThen(() => setCreating(true));
-                    }}
-                  >
-                    <Plus size={15} />
-                  </IconButton>
-                }
-                onSelect={() => selectRoute({ name: "discussions" })}
-              >
+            list={
+              <Nav label="Discussions">
                 {list === null && !discussions.error && !failure ? (
                   <li
                     aria-busy="true"
@@ -292,7 +248,7 @@ function Chrome({
                     className="pl-10 pr-2"
                   >
                     {["75%", "55%", "85%"].map((width) => (
-                      <div key={width} className="flex h-[26px] items-center">
+                      <div key={width} className="flex h-[30px] items-center">
                         <Skeleton style={{ width }} />
                       </div>
                     ))}
@@ -326,17 +282,35 @@ function Chrome({
                         unread={item.unread}
                       />
                     }
-                    indicator={
-                      item.member_ids.some((id) => running.has(id)) ? (
-                        <StateDot state="running" />
-                      ) : undefined
-                    }
                     onSelect={() =>
                       selectRoute({ name: "discussion", id: item.id })
                     }
                   />
                 ))}
-              </NavItem>
+              </Nav>
+            }
+          >
+            <SidebarBrand />
+            <Nav label="Sections">
+              <NavItem
+                icon={<MessagesSquare size={16} />}
+                label="Discussions"
+                active={route.name === "discussions" || unlisted}
+                trailing={
+                  <IconButton
+                    size="sm"
+                    label="New Discussion"
+                    touchTarget
+                    disabled={!organization.data || backend.disconnected}
+                    onClick={() => {
+                      if (!settingsSaving) closeThen(() => setCreating(true));
+                    }}
+                  >
+                    <Plus size={15} />
+                  </IconButton>
+                }
+                onSelect={() => selectRoute({ name: "discussions" })}
+              />
               <NavItem
                 icon={<Users size={16} />}
                 label="Members"
@@ -354,6 +328,14 @@ function Chrome({
                 label="Library"
                 active={active === "library"}
                 onSelect={() => selectRoute({ name: "library" })}
+              />
+              <NavItem
+                icon={<Settings size={16} />}
+                label="Settings"
+                active={active === "settings"}
+                onSelect={() =>
+                  selectRoute({ name: "settings", section: "providers" })
+                }
               />
             </Nav>
           </Sidebar>
