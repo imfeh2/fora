@@ -317,6 +317,7 @@ function TextDocument({ path }: { path: string }) {
   const [discardNavigation, setDiscardNavigation] = useState<
     (() => void) | null
   >(null);
+  const keepEditing = useRef<HTMLButtonElement>(null);
   useEffect(
     () =>
       registerNavigationBlocker((_next, proceed) => {
@@ -326,6 +327,15 @@ function TextDocument({ path }: { path: string }) {
       }),
     [registerNavigationBlocker],
   );
+  useEffect(() => {
+    if (!dirty) return;
+    const guard = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [dirty]);
   const crumb = documentCrumbs(path, navigate);
 
   const save = async () => {
@@ -443,9 +453,13 @@ function TextDocument({ path }: { path: string }) {
         title="Discard unsaved changes?"
         variant="confirm"
         description="Your changes have not been saved."
+        initialFocus={() => keepEditing.current}
         footer={
           <>
-            <Button onClick={() => setDiscardNavigation(null)}>
+            <Button
+              ref={keepEditing}
+              onClick={() => setDiscardNavigation(null)}
+            >
               Keep Editing
             </Button>
             <Button

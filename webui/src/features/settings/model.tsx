@@ -329,6 +329,7 @@ export function ModelPanel() {
   const [catalogEpoch, setCatalogEpoch] = useState(0);
   const defaultDirty = useRef(false);
   const [discard, setDiscard] = useState<(() => void) | null>(null);
+  const keepEditing = useRef<HTMLButtonElement>(null);
   const generation = useRef(0);
   const reading = useRef<number | null>(null);
   const saving = useRef(false);
@@ -1020,9 +1021,12 @@ export function ModelPanel() {
         title="Discard unsaved changes?"
         variant="confirm"
         description="Your changes have not been saved."
+        initialFocus={() => keepEditing.current}
         footer={
           <>
-            <Button onClick={() => setDiscard(null)}>Keep Editing</Button>
+            <Button ref={keepEditing} onClick={() => setDiscard(null)}>
+              Keep Editing
+            </Button>
             <Button
               variant="danger"
               onClick={() => {
