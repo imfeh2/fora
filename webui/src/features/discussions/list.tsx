@@ -27,7 +27,6 @@ import {
   Badge,
   Button,
   Chip,
-  CountPill,
   Dot,
   dismissToast,
   IconButton,
@@ -296,14 +295,6 @@ export function DiscussionsPage({
             retry={() => void retry("discussions")}
           />
         ) : null}
-        {(searching ? results !== null : list !== null) ? (
-          <CountPill>
-            {results
-              ? plural(results.length, "result")
-              : plural(list?.length ?? 0, "Discussion")}
-          </CountPill>
-        ) : null}
-
         {searching ? (
           results === null ? null : results.length === 0 ? (
             <StatePanel
