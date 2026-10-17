@@ -86,6 +86,17 @@
   }
 }
 
+.message-row .message-copy-float {
+  opacity: 0;
+  transition: opacity var(--duration-fast) linear;
+}
+
+.message-row:hover .message-copy-float,
+.message-row:focus-within .message-copy-float,
+.message-row[data-copy-open="true"] .message-copy-float {
+  opacity: 1;
+}
+
 @custom-variant narrow (@media (max-width: 640px));
 @custom-variant touch (@media (pointer: coarse));
 

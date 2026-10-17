@@ -1032,7 +1032,19 @@ export const MessageRow = memo(function MessageRow({
 }) {
   const { members } = useOrganization();
   const [details, setDetails] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
   const saved = preview?.data;
+  useEffect(() => {
+    if (!copyOpen) return;
+    const away = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".message-copy-float"))
+        return;
+      setCopyOpen(false);
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  }, [copyOpen]);
   if (!message && !saved)
     throw new Error("Message reading unit has no content");
   const senderId = message?.sender_id ?? saved?.metadata.key.agent_id;
@@ -1062,7 +1074,16 @@ export const MessageRow = memo(function MessageRow({
       <div className="w-[26px] flex-none">
         {compact ? null : <Avatar memberId={senderId} />}
       </div>
-      <div className="-ml-3 min-w-0 flex-1 border-l-2 border-l-transparent pl-3">
+      <div
+        data-copy-open={copyOpen ? "true" : undefined}
+        className="relative -ml-3 min-w-0 flex-1 border-l-2 border-l-transparent pl-3"
+        onPointerDown={(event) => {
+          if (event.pointerType !== "mouse") setCopyOpen(true);
+        }}
+      >
+        <span className="message-copy message-copy-float absolute top-0 right-0 z-10 rounded-xs bg-app/95">
+          <CopyTextButton source={source} label="Copy message text" />
+        </span>
         <div className="mb-0.5 flex items-center gap-2">
           {compact ? null : (
             <>
@@ -1083,9 +1104,6 @@ export const MessageRow = memo(function MessageRow({
               }}
             />
           ) : null}
-          <span className="message-copy ml-auto">
-            <CopyTextButton source={source} label="Copy message text" />
-          </span>
         </div>
         <MarkdownContent
           source={source}
