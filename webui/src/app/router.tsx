@@ -21,8 +21,7 @@ export type Route =
   | { name: "discussion"; id: number }
   | { name: "members" }
   | { name: "usage" }
-  | { name: "library"; folder?: string }
-  | { name: "document"; path: string }
+  | { name: "library"; path?: string }
   | { name: "settings"; section: SettingsSection };
 
 export type NavId =
@@ -38,7 +37,6 @@ const NAV_OF: Record<Route["name"], NavId> = {
   members: "members",
   usage: "usage",
   library: "library",
-  document: "library",
   settings: "settings",
 };
 
@@ -95,11 +93,7 @@ export function routePath(route: Route): string {
     case "usage":
       return "/usage";
     case "library":
-      return route.folder
-        ? `/library?folder=${encodeURIComponent(route.folder)}`
-        : "/library";
-    case "document":
-      return documentPath(route.path);
+      return route.path ? documentPath(route.path) : "/library";
     case "settings":
       return `/settings/${route.section}`;
   }
@@ -116,7 +110,7 @@ function readSegments(pathname: string): string[] | null {
   }
 }
 
-export function routeFromPath(pathname: string, search = ""): Route | null {
+export function routeFromPath(pathname: string): Route | null {
   const segments = readSegments(pathname);
   if (segments === null) return null;
   if (segments.some((segment) => segment === "." || segment === ".."))
@@ -132,17 +126,8 @@ export function routeFromPath(pathname: string, search = ""): Route | null {
   if (head === "members" && segments.length === 1) return { name: "members" };
   if (head === "usage" && segments.length === 1) return { name: "usage" };
   if (head === "library") {
-    if (segments.length === 1) {
-      const folder = new URLSearchParams(search).get("folder");
-      const decoded = folder === null ? null : readSegments(folder);
-      if (decoded?.some((segment) => segment === "." || segment === ".."))
-        return null;
-      return {
-        name: "library",
-        folder: decoded === null ? undefined : decoded.join("/") || undefined,
-      };
-    }
-    return { name: "document", path: segments.slice(1).join("/") };
+    if (segments.length === 1) return { name: "library" };
+    return { name: "library", path: segments.slice(1).join("/") };
   }
   if (head === "settings" && segments.length === 2) {
     const section = SETTINGS_SECTIONS.find((item) => item === segments[1]);
@@ -153,7 +138,7 @@ export function routeFromPath(pathname: string, search = ""): Route | null {
 
 export function RouterProvider({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => {
-    const initial = routeFromPath(location.pathname, location.search);
+    const initial = routeFromPath(location.pathname);
     if (initial === null) {
       history.replaceState(history.state, "", LIST_PATH);
       return { name: "discussions" };
@@ -212,7 +197,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
         reverting.current = false;
         return;
       }
-      const next = routeFromPath(location.pathname, location.search);
+      const next = routeFromPath(location.pathname);
       if (next === null) {
         history.replaceState(history.state, "", LIST_PATH);
         settle({ name: "discussions" });
@@ -247,8 +232,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 
 function paramOf(route: Route): string | number | null {
   if ("id" in route) return route.id;
-  if ("path" in route) return route.path ?? null;
-  if ("folder" in route) return `${route.folder ?? ""}`;
+  if ("path" in route) return route.path ?? "";
   if ("section" in route) return route.section;
   return null;
 }

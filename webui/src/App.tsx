@@ -43,7 +43,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { CreateDiscussionDialog } from "@/features/discussions/create";
 import { DiscussionsPage } from "@/features/discussions/list";
 import { ThreadPage } from "@/features/discussions/thread";
-import { DocumentPage } from "@/features/library/document";
 import { LibraryPage } from "@/features/library/list";
 import { MembersPage } from "@/features/members/list";
 import { SettingsPage } from "@/features/settings/page";
@@ -88,9 +87,7 @@ function View({
     case "usage":
       return <UsagePage entrySignal={usageEntrySignal} />;
     case "library":
-      return <LibraryPage folder={route.folder} />;
-    case "document":
-      return <DocumentPage path={route.path} />;
+      return <LibraryPage path={route.path} />;
     case "settings":
       return <SettingsPage section={route.section} />;
   }

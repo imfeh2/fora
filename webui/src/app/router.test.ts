@@ -8,12 +8,17 @@ describe("route paths", () => {
     );
   });
 
-  it("round trips a nested library path", () => {
+  it("opens a nested library path", () => {
     const path = "tasks/界面 说明/README.md";
     expect(routeFromPath(documentPath(path))).toEqual({
-      name: "document",
+      name: "library",
       path,
     });
+  });
+
+  it("round trips a library path", () => {
+    const route = { name: "library", path: "notes/a.md" } as const;
+    expect(routeFromPath(routePath(route))).toEqual(route);
   });
 
   it("maps the known paths", () => {

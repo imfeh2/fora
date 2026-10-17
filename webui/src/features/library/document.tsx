@@ -1,4 +1,4 @@
-import { Save, SquarePen, Trash2 } from "lucide-react";
+import { Eye, Save, SquarePen, Trash2 } from "lucide-react";
 import {
   type ReactNode,
   useCallback,
@@ -21,6 +21,7 @@ import {
   Chip,
   dismissToast,
   EmptyState,
+  IconButton,
   LoadingSkeleton,
   Skeleton,
   Spinner,
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { type MediaKind, mediaKind } from "@/features/library/media";
+import { MarkdownContent } from "@/features/markdown";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend } from "@/lib/backend";
 import { formatBytes } from "@/lib/format";
@@ -54,7 +56,7 @@ export function documentCrumbs(
       onSelect: () =>
         navigate({
           name: "library",
-          folder:
+          path:
             (index === parts.length - 1
               ? parts.slice(0, index).join("/")
               : parts.slice(0, index + 1).join("/")) || undefined,
@@ -69,17 +71,29 @@ function DocumentFrame({
   menuDisabled = false,
   toolbar,
   children,
+  embedded = false,
 }: {
   path: string;
   actions?: ReactNode;
   menuDisabled?: boolean;
   toolbar?: ReactNode;
   children: ReactNode;
+  embedded?: boolean;
 }) {
   const navigate = useNavigate();
   const crumb = documentCrumbs(path, navigate);
   const [renaming, setRenaming] = useState(false);
   const [doomed, setDoomed] = useState(false);
+  if (embedded)
+    return (
+      <div className="flex flex-1 min-h-0 flex-col">
+        <div className="flex flex-none flex-wrap items-center gap-2 border-b border-line px-6 py-2">
+          {toolbar}
+          <span className="ml-auto flex items-center gap-2">{actions}</span>
+        </div>
+        <div className="flex flex-1 min-h-0 flex-col">{children}</div>
+      </div>
+    );
   return (
     <Page>
       <PageHeader
@@ -123,7 +137,7 @@ function DocumentFrame({
         onSubmit={async (destination) => {
           const moved = await backend.moveLibrary(path, destination);
           setRenaming(false);
-          navigate({ name: "document", path: moved.path });
+          navigate({ name: "library", path: moved.path });
         }}
       />
       <ConfirmDialog
@@ -135,7 +149,12 @@ function DocumentFrame({
         onConfirm={async () => {
           await backend.deleteLibrary(path);
           setDoomed(false);
-          navigate({ name: "library" });
+          navigate({
+            name: "library",
+            path: path.includes("/")
+              ? path.slice(0, path.lastIndexOf("/"))
+              : undefined,
+          });
         }}
       />
     </Page>
@@ -158,16 +177,22 @@ export function DocumentUnavailable({
   );
 }
 
-export function DocumentPage({ path }: { path: string }) {
+export function DocumentBody({ path }: { path: string }) {
   const kind = mediaKind(path);
   return kind === null ? (
-    <TextDocument path={path} />
+    <TextDocument path={path} embedded />
   ) : (
-    <MediaDocument path={path} kind={kind} />
+    <MediaDocument path={path} kind={kind} embedded />
   );
 }
 
-function TextDocument({ path }: { path: string }) {
+function TextDocument({
+  path,
+  embedded,
+}: {
+  path: string;
+  embedded?: boolean;
+}) {
   const navigate = useNavigate();
   const { registerNavigationBlocker } = useRouter();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -179,6 +204,7 @@ function TextDocument({ path }: { path: string }) {
   const [loadError, setLoadError] = useState<BackendError | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(true);
 
   const editing = useRef({ loaded, draft });
   editing.current = { loaded, draft };
@@ -391,16 +417,26 @@ function TextDocument({ path }: { path: string }) {
   return (
     <DocumentFrame
       path={path}
+      embedded={embedded}
       menuDisabled={loaded === null || failed}
       actions={
-        <Button
-          variant="primary"
-          disabled={!dirty || busy || failed}
-          onClick={save}
-        >
-          {busy ? <Spinner label="Saving document" /> : <Save size={16} />}
-          Save
-        </Button>
+        <>
+          <IconButton
+            label={preview ? "Edit document" : "Preview document"}
+            disabled={loaded === null}
+            onClick={() => setPreview((value) => !value)}
+          >
+            {preview ? <SquarePen size={16} /> : <Eye size={16} />}
+          </IconButton>
+          <Button
+            variant="primary"
+            disabled={!dirty || busy || failed}
+            onClick={save}
+          >
+            {busy ? <Spinner label="Saving document" /> : <Save size={16} />}
+            Save
+          </Button>
+        </>
       }
       toolbar={
         <>
@@ -433,6 +469,12 @@ function TextDocument({ path }: { path: string }) {
               ))}
             </LoadingSkeleton>
           )
+        ) : preview ? (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="mx-auto w-full max-w-[72ch]">
+              <MarkdownContent source={draft} identity={`library:${path}`} />
+            </div>
+          </div>
         ) : (
           <div className="mx-auto grid w-full max-w-[72ch] flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0] leading-[1.6] [&_textarea]:leading-[1.6]">
             <Textarea
@@ -487,7 +529,15 @@ type MediaState =
   | { status: "error"; message: string }
   | { status: "ready"; url: string; size: number };
 
-function MediaDocument({ path, kind }: { path: string; kind: MediaKind }) {
+function MediaDocument({
+  path,
+  kind,
+  embedded,
+}: {
+  path: string;
+  kind: MediaKind;
+  embedded?: boolean;
+}) {
   const [state, setState] = useState<MediaState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
 
@@ -518,6 +568,7 @@ function MediaDocument({ path, kind }: { path: string; kind: MediaKind }) {
   return (
     <DocumentFrame
       path={path}
+      embedded={embedded}
       menuDisabled={state.status === "loading"}
       toolbar={
         state.status === "ready" ? <Chip>{formatBytes(state.size)}</Chip> : null

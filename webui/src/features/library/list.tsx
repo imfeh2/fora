@@ -1,4 +1,5 @@
 import {
+  ChevronRight,
   File,
   FileText,
   FolderPlus,
@@ -12,7 +13,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
-import { Page, PageBody, PageHeader, Toolbar } from "@/components/layout/shell";
+import { Page } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
 import {
@@ -22,15 +23,16 @@ import {
   SearchField,
   Skeleton,
 } from "@/components/ui/index";
-import type { MenuAction } from "@/components/ui/menu";
+import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { StatePanel } from "@/components/ui/state-panel";
+import { DocumentBody } from "@/features/library/document";
 import { FolderTree } from "@/features/library/folder-tree";
 import { mediaKind } from "@/features/library/media";
 import { MediaGrid } from "@/features/library/media-grid";
 import { expandedFolders } from "@/features/library/tree";
 import { FileList } from "@/features/library/tree-view";
 import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
-import { documentFolder, plural } from "@/lib/format";
+import { documentFolder, documentName, plural } from "@/lib/format";
 
 type Creation = { kind: LibraryEntry["kind"]; parent: string };
 
@@ -132,42 +134,14 @@ export function deleteConsequence(
   return `Removes ${plural(count, "file")} for every Member.`;
 }
 
-function CreateActions({
-  onCreate,
-  disabled = false,
-}: {
-  onCreate: (creation: Creation) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <>
-      <Button
-        variant="primary"
-        disabled={disabled}
-        onClick={() => onCreate({ kind: "file", parent: "" })}
-      >
-        <Plus size={16} />
-        New document
-      </Button>
-      <IconButton
-        label="New folder"
-        disabled={disabled}
-        onClick={() => onCreate({ kind: "directory", parent: "" })}
-      >
-        <FolderPlus size={16} />
-      </IconButton>
-    </>
-  );
-}
-
-export function LibraryPage({ folder = "" }: { folder?: string }) {
+export function LibraryPage({ path = "" }: { path?: string }) {
   const navigate = useNavigate();
   const read = useCallback(() => backend.library(), []);
   const { resource, refresh: load, invalidate } = useResource(read);
   const entries = resource.data;
   const failed = resource.error !== null;
   const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState(() => expandedFolders(folder));
+  const [expanded, setExpanded] = useState(() => expandedFolders(path));
   const [treeOpen, setTreeOpen] = useState(false);
   const [creating, setCreating] = useState<Creation | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
@@ -180,8 +154,11 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
   }, [load, invalidate]);
 
   useEffect(() => {
-    setExpanded((current) => new Set([...current, ...expandedFolders(folder)]));
-  }, [folder]);
+    setExpanded((current) => {
+      const next = expandedFolders(path);
+      return new Set([...current, ...next]);
+    });
+  }, [path]);
 
   useEffect(
     () =>
@@ -200,25 +177,44 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
     [load, invalidate],
   );
 
+  const fileEntry = (entries ?? []).find(
+    (entry) => entry.kind === "file" && entry.path === path,
+  );
+  const file = fileEntry?.path;
+  const folder = fileEntry ? (documentFolder(fileEntry.path) ?? "") : path;
   const needle = query.trim().toLowerCase();
   const files = (entries ?? []).filter((entry) => entry.kind === "file");
+  const directory = files.filter(
+    (entry) => (documentFolder(entry.path) ?? "") === folder,
+  );
   const visible = needle
-    ? files.filter((entry) => entry.path.toLowerCase().includes(needle))
-    : files.filter((entry) => (documentFolder(entry.path) ?? "") === folder);
-  const media = needle
-    ? []
-    : visible.filter((entry) => mediaKind(entry.path) !== null);
-  const documents = needle
-    ? visible
-    : visible.filter((entry) => mediaKind(entry.path) === null);
+    ? directory.filter((entry) => entry.path.toLowerCase().includes(needle))
+    : directory;
+  const media = visible.filter((entry) => mediaKind(entry.path) !== null);
+  const documents = visible.filter((entry) => mediaKind(entry.path) === null);
   const folderEntry = (entries ?? []).find(
     (entry) => entry.kind === "directory" && entry.path === folder,
   );
+  const parts = folder ? folder.split("/") : [];
+  const empty = entries !== null && entries.length === 0;
+  const currentEmpty = documents.length === 0 && media.length === 0;
+  const disabled = entries === null || failed || backend.disconnected;
 
-  const selectFolder = (path: string) => {
+  const selectFolder = (next: string) => {
     setTreeOpen(false);
     setQuery("");
-    navigate({ name: "library", folder: path || undefined });
+    navigate({ name: "library", path: next || undefined });
+  };
+
+  const openFile = (next: string) => {
+    setTreeOpen(false);
+    setQuery("");
+    navigate({ name: "library", path: next });
+  };
+
+  const changeQuery = (value: string) => {
+    setQuery(value);
+    if (fileEntry) navigate({ name: "library", path: folder || undefined });
   };
 
   const actionsFor = (entry: LibraryEntry) =>
@@ -252,68 +248,167 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
       />
     );
 
-  const empty = entries !== null && entries.length === 0;
-  const currentEmpty = documents.length === 0 && media.length === 0;
-
   return (
     <Page>
-      <PageHeader
-        title="Library"
-        actions={
-          <CreateActions
-            onCreate={setCreating}
-            disabled={entries === null || failed || backend.disconnected}
-          />
-        }
-      />
-      <Toolbar>
-        <span className="hidden max-[900px]:inline-flex">
-          <IconButton label="Folders" onClick={() => setTreeOpen(true)}>
-            <FolderTreeIcon size={16} />
-          </IconButton>
-        </span>
-        <SearchField
-          icon={<Search size={15} />}
-          value={query}
-          placeholder="Search documents"
-          aria-label="Search documents"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </Toolbar>
-      <PageBody variant="flush">
-        {resource.error &&
-        !(resource.error.transport && backend.disconnected) ? (
-          <div className="px-8 pb-4">
-            <LoadError
-              error={resource.error}
-              retry={() =>
-                void (backend.disconnected
-                  ? backend.reconnect().catch(backend.reportFailure)
-                  : load())
-              }
+      <div className="flex flex-1 min-h-0 min-w-0">
+        <aside className="flex flex-none flex-col w-[248px] min-h-0 border-r border-line max-[900px]:hidden">
+          <div className="flex flex-none items-center gap-2 p-2">
+            <SearchField
+              icon={<Search size={15} />}
+              value={query}
+              placeholder="Search documents"
+              aria-label="Search documents"
+              onChange={(event) => changeQuery(event.target.value)}
+            />
+            <OverflowMenu
+              label="New"
+              icon={<Plus size={16} />}
+              actions={[
+                {
+                  id: "document",
+                  label: "New document",
+                  icon: <Plus size={15} />,
+                  disabled,
+                  onSelect: () => setCreating({ kind: "file", parent: folder }),
+                },
+                {
+                  id: "folder",
+                  label: "New folder",
+                  icon: <FolderPlus size={15} />,
+                  disabled,
+                  onSelect: () =>
+                    setCreating({ kind: "directory", parent: folder }),
+                },
+              ]}
             />
           </div>
-        ) : null}
-        {entries === null ? (
-          failed ? null : (
-            <div className="px-8 pt-2">
-              <LoadingSkeleton label="Loading Library">
-                {[1, 2, 3, 4, 5].map((row) => (
-                  <div key={row} className="flex h-11 items-center gap-2">
-                    <Skeleton className="size-4 shrink-0" />
-                    <Skeleton className="w-40 max-w-full" />
-                  </div>
-                ))}
-              </LoadingSkeleton>
-            </div>
-          )
-        ) : (
-          <div className="flex flex-1 min-h-0">
-            <aside className="flex-none w-[232px] min-h-0 overflow-y-auto px-2 pb-6 max-[900px]:hidden">
-              {tree}
-            </aside>
-            <div className="flex-1 min-w-0 min-h-0 overflow-y-auto px-8 pb-8 max-[900px]:px-3">
-              {!needle && folderEntry === undefined && folder !== "" ? (
+          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-6">{tree}</div>
+        </aside>
+        <div className="flex flex-1 min-w-0 min-h-0 flex-col">
+          <header className="flex flex-none items-center gap-2 border-b border-line px-6 py-2">
+            <span className="hidden max-[900px]:inline-flex">
+              <IconButton label="Folders" onClick={() => setTreeOpen(true)}>
+                <FolderTreeIcon size={16} />
+              </IconButton>
+            </span>
+            <nav
+              aria-label="Breadcrumb"
+              className="flex min-w-0 items-center gap-1 text-sm"
+            >
+              <button
+                type="button"
+                className="min-w-0 truncate border-0 bg-transparent text-fg-muted cursor-pointer hover:text-fg"
+                onClick={() => selectFolder("")}
+              >
+                Library
+              </button>
+              {parts.map((part, index) => {
+                const path = parts.slice(0, index + 1).join("/");
+                return (
+                  <span key={path} className="flex min-w-0 items-center gap-1">
+                    <ChevronRight
+                      size={14}
+                      className="flex-none text-fg-muted"
+                    />
+                    <button
+                      type="button"
+                      className="min-w-0 truncate border-0 bg-transparent text-fg-muted cursor-pointer hover:text-fg"
+                      onClick={() => selectFolder(path)}
+                    >
+                      {part}
+                    </button>
+                  </span>
+                );
+              })}
+              {file ? (
+                <span className="flex min-w-0 items-center gap-1">
+                  <ChevronRight size={14} className="flex-none text-fg-muted" />
+                  <span className="min-w-0 truncate text-fg">
+                    {documentName(file)}
+                  </span>
+                </span>
+              ) : null}
+            </nav>
+            <span className="ml-auto flex flex-none items-center gap-2">
+              {file ? (
+                <OverflowMenu
+                  label={`Actions for ${file}`}
+                  actions={[
+                    {
+                      id: "rename",
+                      label: "Rename",
+                      icon: <SquarePen size={15} />,
+                      disabled: !fileEntry,
+                      onSelect: () => {
+                        if (fileEntry) setRenaming(fileEntry);
+                      },
+                    },
+                    {
+                      id: "delete",
+                      label: "Delete",
+                      icon: <Trash2 size={15} />,
+                      tone: "danger",
+                      disabled: !fileEntry,
+                      onSelect: () => {
+                        if (fileEntry) setDoomed(fileEntry);
+                      },
+                    },
+                  ]}
+                />
+              ) : (
+                <>
+                  <Button
+                    variant="primary"
+                    disabled={disabled}
+                    onClick={() =>
+                      setCreating({ kind: "file", parent: folder })
+                    }
+                  >
+                    <Plus size={16} />
+                    New document
+                  </Button>
+                  <IconButton
+                    label="New folder"
+                    disabled={disabled}
+                    onClick={() =>
+                      setCreating({ kind: "directory", parent: folder })
+                    }
+                  >
+                    <FolderPlus size={16} />
+                  </IconButton>
+                </>
+              )}
+            </span>
+          </header>
+          {file ? (
+            <DocumentBody path={file} />
+          ) : (
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
+              {resource.error &&
+              !(resource.error.transport && backend.disconnected) ? (
+                <div className="pb-4">
+                  <LoadError
+                    error={resource.error}
+                    retry={() =>
+                      void (backend.disconnected
+                        ? backend.reconnect().catch(backend.reportFailure)
+                        : load())
+                    }
+                  />
+                </div>
+              ) : null}
+              {entries === null ? (
+                failed ? null : (
+                  <LoadingSkeleton label="Loading Library">
+                    {[1, 2, 3, 4, 5].map((row) => (
+                      <div key={row} className="flex h-11 items-center gap-2">
+                        <Skeleton className="size-4 shrink-0" />
+                        <Skeleton className="w-40 max-w-full" />
+                      </div>
+                    ))}
+                  </LoadingSkeleton>
+                )
+              ) : !needle && folderEntry === undefined && folder !== "" ? (
                 <StatePanel
                   icons={[FolderPlus, FileText, File]}
                   title="This folder no longer exists"
@@ -379,7 +474,7 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
                       </h2>
                       <MediaGrid
                         entries={media}
-                        onOpen={(path) => navigate({ name: "document", path })}
+                        onOpen={openFile}
                         rowActions={actionsFor}
                       />
                     </section>
@@ -387,8 +482,7 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
                   {documents.length > 0 ? (
                     <FileList
                       entries={documents}
-                      query={query}
-                      onOpen={(path) => navigate({ name: "document", path })}
+                      onOpen={openFile}
                       rowActions={actionsFor}
                       label={
                         needle
@@ -402,9 +496,9 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
                 </div>
               )}
             </div>
-          </div>
-        )}
-      </PageBody>
+          )}
+        </div>
+      </div>
       <Modal
         open={treeOpen}
         onOpenChange={setTreeOpen}
@@ -437,10 +531,11 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
               (current) =>
                 new Set([...current, ...expandedFolders(destination)]),
             );
+            await load();
           } else {
-            navigate({ name: "document", path: destination });
+            await load();
+            openFile(destination);
           }
-          await load();
         }}
       />
       <PromptDialog
@@ -466,6 +561,8 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
                   ),
                 ),
             );
+            if (file === renaming.path)
+              navigate({ name: "library", path: destination });
           }
           await load();
         }}
@@ -480,6 +577,8 @@ export function LibraryPage({ folder = "" }: { folder?: string }) {
         }
         onConfirm={async () => {
           if (doomed) await backend.deleteLibrary(doomed.path);
+          if (file && doomed && file === doomed.path)
+            navigate({ name: "library", path: folder || undefined });
           await load();
         }}
       />

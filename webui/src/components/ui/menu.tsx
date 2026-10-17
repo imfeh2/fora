@@ -25,10 +25,12 @@ export function OverflowMenu({
   label,
   actions,
   align = "end",
+  icon,
 }: {
   label: string;
   actions: MenuAction[];
   align?: "start" | "end";
+  icon?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -88,7 +90,7 @@ export function OverflowMenu({
             setOpen(false);
         }}
       >
-        <MoreHorizontal size={16} />
+        {icon ?? <MoreHorizontal size={16} />}
       </button>
       {open ? (
         <div
