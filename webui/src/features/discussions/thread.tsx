@@ -46,6 +46,7 @@ import {
 import {
   combineThreadUnits,
   type PreviewState,
+  type ThreadUnit,
   useDiscussionPreviews,
 } from "@/features/discussions/thread-previews";
 import { GenerationIndicator } from "@/features/generation-state";
@@ -214,8 +215,14 @@ function ThreadSession({
   const monitoring = useRef(false);
   const monitorStaleFrames = useRef(0);
   const monitorLastTop = useRef(-1);
+  const unitCache = useRef(new Map<string, ThreadUnit>());
   const units = useMemo(
-    () => combineThreadUnits(detail?.messages ?? [], previews.state),
+    () =>
+      combineThreadUnits(
+        detail?.messages ?? [],
+        previews.state,
+        unitCache.current,
+      ),
     [detail?.messages, previews.state],
   );
   const virtual = useVirtualizer({

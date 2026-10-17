@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ThreadMessage } from "@/features/discussions/thread-data";
 import {
   GenerationResource,
@@ -33,6 +33,7 @@ export type ThreadUnit = {
 export function combineThreadUnits(
   messages: ThreadMessage[],
   directory: PreviewDirectory,
+  cache?: Map<string, ThreadUnit>,
 ): ThreadUnit[] {
   const present = new Set<number>();
   const aliases = new Set(
@@ -42,12 +43,18 @@ export function combineThreadUnits(
     present.add(message.id);
     const alias = directory.aliases[message.id];
     const preview = alias ? directory.metadata[alias] : undefined;
-    return {
-      key: alias ? `preview:${alias}` : `message:${message.id}`,
+    const key = alias ? `preview:${alias}` : `message:${message.id}`;
+    const cached = cache?.get(key);
+    if (cached && cached.message === message && cached.preview === preview)
+      return cached;
+    const unit = {
+      key,
       timestamp: preview?.created_at ?? message.created_at,
       senderId: message.sender_id,
       message,
     };
+    cache?.set(key, unit);
+    return unit;
   });
   for (const [id, resource] of Object.entries(directory.resources)) {
     const preview = resource.data?.metadata;
@@ -57,12 +64,20 @@ export function combineThreadUnits(
       (preview.message_id !== null && present.has(preview.message_id))
     )
       continue;
-    units.push({
-      key: `preview:${id}`,
+    const key = `preview:${id}`;
+    const cached = cache?.get(key);
+    if (cached && cached.preview === resource) {
+      units.push(cached);
+      continue;
+    }
+    const unit = {
+      key,
       senderId: preview.key.agent_id,
       timestamp: preview.created_at,
       preview: resource,
-    });
+    };
+    cache?.set(key, unit);
+    units.push(unit);
   }
   return units.sort(
     (left, right) =>
@@ -331,11 +346,15 @@ export function useDiscussionPreviews(id: number) {
       if (reader.current === current) reader.current = null;
     };
   }, [id]);
-  return {
-    state,
-    more: (previewId: string) => reader.current?.more(previewId),
-    retry: (previewId: string) => reader.current?.retry(previewId),
-    earlier: () => reader.current?.earlier(),
-    refresh: () => reader.current?.refresh(),
-  };
+  const more = useCallback(
+    (previewId: string) => reader.current?.more(previewId),
+    [],
+  );
+  const retry = useCallback(
+    (previewId: string) => reader.current?.retry(previewId),
+    [],
+  );
+  const earlier = useCallback(() => reader.current?.earlier(), []);
+  const refresh = useCallback(() => reader.current?.refresh(), []);
+  return { state, more, retry, earlier, refresh };
 }
