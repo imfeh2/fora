@@ -35,6 +35,10 @@ describe("route paths", () => {
       name: "settings",
       section: "voice",
     });
+    expect(routeFromPath("/settings/model")).toEqual({
+      name: "settings",
+      section: "models",
+    });
   });
 
   it("rejects unknown and malformed paths", () => {

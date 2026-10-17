@@ -132,7 +132,8 @@ export function routeFromPath(pathname: string): Route | null {
     return { name: "library", path: segments.slice(1).join("/") };
   }
   if (head === "settings" && segments.length === 2) {
-    const section = SETTINGS_SECTIONS.find((item) => item === segments[1]);
+    const name = segments[1] === "model" ? "models" : segments[1];
+    const section = SETTINGS_SECTIONS.find((item) => item === name);
     return section ? { name: "settings", section } : null;
   }
   return null;
