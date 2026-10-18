@@ -794,7 +794,7 @@ export function Composer({
         }}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-line bg-surface text-fg shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-line-hover hover:border-line-interactive transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh] touch:max-h-[35dvh]",
+          "pointer-events-auto relative flex flex-col min-h-0 w-full rounded-[24px] border border-line-interactive bg-surface text-fg shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-line-focus hover:not-focus-within:border-line-hover transition-[width,height] motion-reduce:transition-none narrow:max-h-[35dvh] touch:max-h-[35dvh]",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
