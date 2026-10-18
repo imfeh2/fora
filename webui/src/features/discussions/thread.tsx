@@ -867,7 +867,7 @@ function ThreadSession({
                 ) : null,
             )}
             <ol
-              className="relative"
+              className="relative transition-none"
               hidden={units.length === 0}
               style={{ height: virtual.getTotalSize() }}
             >
