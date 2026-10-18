@@ -843,7 +843,8 @@ class LiveModel(WrapperModel):
         self, handle: ModelRequestHandle | None, response: ModelResponse
     ) -> None:
         self.current_response = response
-        self._last_input_tokens = response.usage.input_tokens
+        if response.usage.input_tokens:
+            self._last_input_tokens = response.usage.input_tokens
         if any(isinstance(part, ToolCallPart) for part in response.parts):
             self.tool_response = (response, handle)
         provided_cost = response.usage.cost is not None
@@ -979,7 +980,7 @@ class LiveModel(WrapperModel):
             wrapped, messages, model_request_parameters
         )
         settings = self._caching(wrapped, model_settings)
-        self._last_message_count = len(outgoing)
+        self._last_message_count = len(messages)
         handle = self._start_request(wrapped, outgoing, settings, parameters, False)
         self.current_request_handle = handle
         self._response_version = None
@@ -1007,7 +1008,7 @@ class LiveModel(WrapperModel):
             wrapped, messages, model_request_parameters
         )
         settings = self._caching(wrapped, model_settings)
-        self._last_message_count = len(outgoing)
+        self._last_message_count = len(messages)
         handle = self._start_request(wrapped, outgoing, settings, parameters, True)
         self.current_request_handle = handle
         self._response_version = None

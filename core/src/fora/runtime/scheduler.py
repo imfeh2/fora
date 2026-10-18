@@ -559,8 +559,11 @@ class Scheduler:
             agent_id
         ).since_sequence or run.status not in ("completed", "failed"):
             return False
-        tokens = json.loads(run.usage_json or "{}").get("last_input_tokens")
-        window = json.loads(run.usage_json or "{}").get("context_window")
+        payload = json.loads(run.usage_json or "{}")
+        if payload.get("context_limit_reached") is True:
+            return True
+        tokens = payload.get("last_input_tokens")
+        window = payload.get("context_window")
         parameters = self.parameters()
         threshold = threshold_tokens(
             window if type(window) is int else None,
@@ -807,7 +810,6 @@ class Scheduler:
         error: str | None = None
         usage_json: str | None = None
         context_exceeded = False
-        context_limit_reached = False
         overflow_context = None
         messages = persisted_history
         run_failure: Exception | None = None
@@ -833,7 +835,6 @@ class Scheduler:
             )
             usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
-            context_limit_reached = outcome.context_limit_reached
             overflow_context = outcome.overflow_context
             messages = outcome.messages_json
             if outcome.error:
@@ -930,14 +931,7 @@ class Scheduler:
                             )
                         ):
                             reason = "overflow"
-                        elif status == "completed" and (
-                            reminder is None
-                            or (
-                                context_limit_reached
-                                and run.sequence
-                                != self.history.window(agent_id).since_sequence
-                            )
-                        ):
+                        elif status == "completed" and reminder is None:
                             reason = "prepared"
                         if reason is not None:
                             window = self.history.reset_window(

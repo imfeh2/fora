@@ -95,6 +95,7 @@ class ScriptedRunner:
     def __init__(self, *reached: bool) -> None:
         self.script = list(reached)
         self.calls = 0
+        self.reminders: list[bool] = []
 
     def validate_history(self, raw: str) -> None:
         pass
@@ -107,6 +108,7 @@ class ScriptedRunner:
 
     def run(self, request, tools):
         self.calls += 1
+        self.reminders.append(request.reminder is None)
         reached = self.script.pop(0) if self.script else False
         usage = json.dumps(
             {
@@ -165,15 +167,16 @@ def fora(tmp_path: Path) -> Iterator[Fora]:
         database.close()
 
 
-def prepare(fora: Fora, *flags: bool) -> tuple[Scheduler, int, int]:
+def prepare(fora: Fora, *flags: bool) -> tuple[Scheduler, ScriptedRunner, int, int]:
     human = fora.database.create_member("human", "You")
     agent = fora.database.create_member("agent", "Stub")
     discussion = fora.database.create_discussion("Topic", [human.id, agent.id])
-    return Scheduler(fora.deps, ScriptedRunner(*flags)), agent.id, discussion.id
+    runner = ScriptedRunner(*flags)
+    return Scheduler(fora.deps, runner), runner, agent.id, discussion.id
 
 
-def test_early_stop_prepares_the_window_without_a_failure(fora: Fora) -> None:
-    scheduler, agent, discussion = prepare(fora, False, True)
+def test_early_stop_waits_for_a_preparation_turn(fora: Fora) -> None:
+    scheduler, runner, agent, discussion = prepare(fora, False, True, False)
     fora.database.append_message(discussion, 1, "@Stub first")
     first = scheduler.run_turn(agent)
     assert first is not None
@@ -181,38 +184,27 @@ def test_early_stop_prepares_the_window_without_a_failure(fora: Fora) -> None:
     assert fora.settings.window(agent).number == 1
 
     fora.database.append_message(discussion, 1, "@Stub second")
-    record = scheduler.run_turn(agent)
+    stopped = scheduler.run_turn(agent)
 
-    assert record is not None
-    assert record.status == "completed"
-    assert record.error is None
-    window = fora.settings.window(agent)
-    assert window.number == 2
-    assert window.reason == "prepared"
+    assert stopped is not None
+    assert stopped.status == "completed"
+    assert stopped.error is None
+    assert fora.settings.window(agent).number == 1
     run = fora.settings.run_summaries(agent, limit=1)[0]
     assert json.loads(run.usage_json or "{}")["context_limit_reached"] is True
 
+    prepared = scheduler.run_turn(agent)
 
-def test_a_second_stop_in_the_new_window_does_not_reset_again(fora: Fora) -> None:
-    scheduler, agent, discussion = prepare(fora, False, True, True)
-    fora.database.append_message(discussion, 1, "@Stub first")
-    first = scheduler.run_turn(agent)
-    assert first is not None
-    fora.database.append_message(discussion, 1, "@Stub second")
-    second = scheduler.run_turn(agent)
-    assert second is not None
-    assert fora.settings.window(agent).number == 2
-
-    fora.database.append_message(discussion, 1, "@Stub third")
-    third = scheduler.run_turn(agent)
-
-    assert third is not None
-    assert third.status == "completed"
-    assert fora.settings.window(agent).number == 2
+    assert prepared is not None
+    assert prepared.status == "completed"
+    assert runner.reminders[-1] is True
+    window = fora.settings.window(agent)
+    assert window.number == 2
+    assert window.reason == "prepared"
 
 
 def test_a_normal_turn_does_not_reset_the_window(fora: Fora) -> None:
-    scheduler, agent, discussion = prepare(fora, False)
+    scheduler, _runner, agent, discussion = prepare(fora, False)
     fora.database.append_message(discussion, 1, "@Stub first")
 
     record = scheduler.run_turn(agent)
