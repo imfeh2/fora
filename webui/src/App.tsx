@@ -94,13 +94,7 @@ function View({
 }
 
 const CONNECTION_TOAST = "connection";
-const REGION_READ_OPERATIONS = new Set([
-  "agent.history.read",
-  "agent.history.text",
-  "agent.history.image",
-  "usage.query",
-  "usage.read",
-]);
+const REGION_READ_OPERATIONS = new Set(["usage.query", "usage.read"]);
 const COMPOSER_OPERATIONS = new Set([
   "discussion.send",
   "upload.create",

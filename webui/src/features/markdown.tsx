@@ -1,15 +1,7 @@
 import { createCodePlugin } from "@streamdown/code";
 import { clsx } from "clsx";
 import { Check, Copy } from "lucide-react";
-import {
-  memo,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import remarkBreaks from "remark-breaks";
 import remarkMath from "remark-math";
 import {
@@ -20,7 +12,6 @@ import {
   Streamdown,
   type StreamdownProps,
 } from "streamdown";
-import { Button } from "@/components/ui/index";
 import { toast } from "@/components/ui/toast";
 import { LibraryLink } from "@/features/library/preview";
 import { remarkLiteralHtml, remarkMentions } from "@/features/markdown-plugins";
@@ -234,52 +225,3 @@ export const MarkdownContent = memo(function MarkdownContent({
     </div>
   );
 });
-
-export function CollapsibleText({ children }: { children: React.ReactNode }) {
-  const root = useRef<HTMLDivElement>(null);
-  const id = useId();
-  const [overflow, setOverflow] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  useLayoutEffect(() => {
-    const element = root.current;
-    if (!element) return;
-    const measure = () => setOverflow(element.scrollHeight > 300);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    if (element.firstElementChild) observer.observe(element.firstElementChild);
-    return () => observer.disconnect();
-  }, []);
-  return (
-    <div className="min-w-0 flex flex-col items-start gap-2">
-      <div
-        id={id}
-        ref={root}
-        className="relative w-full min-w-0"
-        style={
-          !expanded && overflow
-            ? { maxHeight: 300, overflow: "hidden" }
-            : undefined
-        }
-      >
-        {children}
-        {!expanded && overflow ? (
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-surface to-transparent"
-          />
-        ) : null}
-      </div>
-      {overflow ? (
-        <Button
-          size="sm"
-          aria-expanded={expanded}
-          aria-controls={id}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Show less" : "Show more"}
-        </Button>
-      ) : null}
-    </div>
-  );
-}

@@ -31,11 +31,9 @@ import {
   Skeleton,
   toast,
 } from "@/components/ui/index";
-import { TurnHistoryModal } from "@/features/members/turn-history";
 import {
   BackendError,
   backend,
-  type UsageDetail,
   type UsageFilters,
   type UsageMetrics,
   type UsageQuery,
@@ -940,11 +938,9 @@ function QueryView({
 function DetailContent({
   recordId,
   revision,
-  onContext,
 }: {
   recordId: string;
   revision: number | null;
-  onContext: (detail: UsageDetail) => void;
 }) {
   const read = useCallback(() => backend.usageRead(recordId), [recordId]);
   const { resource, refresh, retry } = useSavedRead(read);
@@ -980,7 +976,6 @@ function DetailContent({
             >
               Copy JSON
             </Button>
-            <Button onClick={() => onContext(detail)}>View Turn context</Button>
             {detail.saved === false ? (
               <Chip tone="danger">Not saved</Chip>
             ) : null}
@@ -1031,13 +1026,11 @@ export function UsagePage({ entrySignal = 0 }: { entrySignal?: number }) {
   const [dimension, setDimension] = useState<Group["dimension"]>("model_key");
   const [group, setGroup] = useState<Group | null>(null);
   const [record, setRecord] = useState<UsageRecord | null>(null);
-  const [context, setContext] = useState<UsageDetail | null>(null);
   const [revision, setRevision] = useState<number | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
   useEffect(() => {
     setGroup(null);
     setRecord(null);
-    setContext(null);
     setRevision(null);
   }, [entrySignal]);
   const filters = {
@@ -1089,25 +1082,9 @@ export function UsagePage({ entrySignal = 0 }: { entrySignal?: number }) {
             key={record.record_id}
             recordId={record.record_id}
             revision={revision}
-            onContext={(detail) => {
-              setContext(detail);
-              setRecord(null);
-            }}
           />
         ) : null}
       </Modal>
-      {context ? (
-        <TurnHistoryModal
-          key={`${context.agent_id}:${context.sequence}:${context.ordinal}`}
-          agentId={context.agent_id}
-          sequence={context.sequence}
-          initialOrdinal={context.ordinal ?? undefined}
-          open
-          onOpenChange={(open) => {
-            if (!open) setContext(null);
-          }}
-        />
-      ) : null}
     </Page>
   );
 }

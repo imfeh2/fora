@@ -51,7 +51,6 @@ import {
 } from "@/features/discussions/thread-previews";
 import { GenerationIndicator } from "@/features/generation-state";
 import { CopyTextButton, MarkdownContent } from "@/features/markdown";
-import { TurnHistoryModal } from "@/features/members/turn-history";
 import {
   BackendError,
   backend,
@@ -1031,7 +1030,6 @@ export const MessageRow = memo(function MessageRow({
   fresh: boolean;
 }) {
   const { members } = useOrganization();
-  const [details, setDetails] = useState(false);
   const [copyOpen, setCopyOpen] = useState(false);
   const saved = preview?.data;
   useEffect(() => {
@@ -1104,7 +1102,6 @@ export const MessageRow = memo(function MessageRow({
               state={{
                 status,
                 reason: String(saved.metadata.error),
-                onOpenDetails: () => setDetails(true),
               }}
             />
           ) : null}
@@ -1154,15 +1151,6 @@ export const MessageRow = memo(function MessageRow({
             attachment={attachment}
           />
         ))}
-        {details && saved ? (
-          <TurnHistoryModal
-            agentId={saved.metadata.key.agent_id}
-            sequence={saved.metadata.key.sequence}
-            initialOrdinal={saved.metadata.key.ordinal}
-            open
-            onOpenChange={setDetails}
-          />
-        ) : null}
       </div>
     </div>
   );

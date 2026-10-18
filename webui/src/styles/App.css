@@ -64,15 +64,12 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .message-row .message-copy,
-  .history-text .message-copy {
+  .message-row .message-copy {
     opacity: 0;
   }
 
   .message-row:hover .message-copy,
-  .message-row:focus-within .message-copy,
-  .history-text:hover .message-copy,
-  .history-text:focus-within .message-copy {
+  .message-row:focus-within .message-copy {
     opacity: 1;
   }
 

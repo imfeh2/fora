@@ -6,7 +6,6 @@ export type GenerationState =
   | {
       status: "failed" | "interrupted";
       reason: string;
-      onOpenDetails: () => void;
     };
 
 export function GenerationIndicator({ state }: { state: GenerationState }) {
@@ -22,15 +21,13 @@ export function GenerationIndicator({ state }: { state: GenerationState }) {
   const name = `${state.status === "failed" ? "Not sent" : "Interrupted"}: ${state.reason}`;
   return (
     <Tooltip label={state.reason}>
-      <button
-        type="button"
-        className="inline-flex size-[18px] items-center justify-center rounded-xs text-danger hover:bg-red-500/10 cursor-pointer"
+      <span
+        role="img"
+        className="inline-flex size-[18px] items-center justify-center rounded-xs text-danger"
         aria-label={name}
-        aria-haspopup="dialog"
-        onClick={state.onOpenDetails}
       >
         <CircleAlert size={14} aria-hidden="true" />
-      </button>
+      </span>
     </Tooltip>
   );
 }
