@@ -15,7 +15,6 @@ import remarkMath from "remark-math";
 import {
   CodeBlock,
   type Components,
-  defaultRehypePlugins,
   defaultRemarkPlugins,
   defaultUrlTransform,
   Streamdown,
@@ -31,7 +30,6 @@ import { copyText } from "@/lib/copy";
 const plugins = {
   code: createCodePlugin({ themes: ["github-dark", "github-dark"] }),
 };
-const rehypePlugins = [defaultRehypePlugins.harden];
 const noMentions: MessageMention[] = [];
 
 export function CopyTextButton({
@@ -100,7 +98,7 @@ export function CopyTextButton({
 }
 
 export function libraryPathFromHref(href: string): string | null {
-  if (!href.startsWith("/") && !href.startsWith("./")) return null;
+  if (href.startsWith("#") || href.startsWith("//")) return null;
   if (/%(?![0-9A-Fa-f]{2})/.test(href)) return null;
   let decoded: string;
   try {
@@ -108,11 +106,24 @@ export function libraryPathFromHref(href: string): string | null {
   } catch {
     return null;
   }
-  const rest = decoded.startsWith("/") ? decoded.slice(1) : decoded.slice(2);
+  if (decoded.startsWith("//")) return null;
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(decoded)) return null;
+  const rest = decoded.replace(/^\.?\//, "");
   const segments = rest.split("/");
   if (segments.some((segment) => segment === "..")) return null;
   const path = segments.filter((segment) => segment.length > 0).join("/");
   return path.length > 0 ? path : null;
+}
+
+function keepsHref(href: string): boolean {
+  try {
+    const protocol = new URL(href, "http://localhost/").protocol;
+    return (
+      protocol === "http:" || protocol === "https:" || protocol === "mailto:"
+    );
+  } catch {
+    return false;
+  }
 }
 
 const components: Components = {
@@ -137,7 +148,7 @@ const components: Components = {
   a: ({ children, href, node: _node }) => {
     const path = href ? libraryPathFromHref(href) : null;
     if (path !== null) return <LibraryLink path={path}>{children}</LibraryLink>;
-    return href ? (
+    return href && keepsHref(href) ? (
       <a
         href={href}
         target="_blank"
@@ -155,18 +166,18 @@ const components: Components = {
       typeof src === "string" && node
         ? defaultUrlTransform(src, "src", node)
         : undefined;
-    return href ? (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="markdown-link"
-      >
-        {alt || src}
-      </a>
-    ) : (
-      <span>{alt}</span>
-    );
+    if (href && keepsHref(href))
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="markdown-link"
+        >
+          {alt || src}
+        </a>
+      );
+    return alt ? <span>{alt}</span> : null;
   },
 };
 
@@ -212,7 +223,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         plugins={plugins}
         components={components}
         remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
+        rehypePlugins={[]}
         urlTransform={defaultUrlTransform}
         controls={false}
         lineNumbers={false}
