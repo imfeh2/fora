@@ -168,7 +168,9 @@ export function AgentForm({
                     hint={
                       key in drafts && !agentField(key, drafts[key] ?? "").valid
                         ? "Enter a valid whole number before saving."
-                        : undefined
+                        : key === "context_window_ratio_percent"
+                          ? "A Turn stops before a request would take the context past this share of the context window."
+                          : undefined
                     }
                   >
                     <Input
