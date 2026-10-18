@@ -440,6 +440,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   const video = useRef<HTMLVideoElement>(null);
   const [visible, setVisible] = useState(false);
   const [entrySize, setEntrySize] = useState<number | null>(null);
+  const [entryReady, setEntryReady] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -448,11 +449,16 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
 
   useEffect(() => {
     const abort = new AbortController();
+    setEntryReady(false);
     void libraryEntry(path).then(
       (entry) => {
-        if (!abort.signal.aborted) setEntrySize(entry?.size ?? null);
+        if (abort.signal.aborted) return;
+        setEntrySize(entry?.size ?? null);
+        setEntryReady(true);
       },
-      () => undefined,
+      () => {
+        if (!abort.signal.aborted) setEntryReady(true);
+      },
     );
     return () => abort.abort();
   }, [path]);
@@ -528,7 +534,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
     <div ref={root} className="inline-media inline-media-video">
       {url === null ? (
         <div className="inline-media-placeholder">
-          {visible ? (
+          {visible && entryReady ? (
             <button
               type="button"
               className="inline-media-play"

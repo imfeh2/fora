@@ -245,6 +245,7 @@ function inlineComponents(
       );
       if (content.length === 0) return <p>{children}</p>;
       const entries = content.map(resolveMedia);
+      if (entries.every((entry) => entry === null)) return <p>{children}</p>;
       const images = entries.filter(
         (entry): entry is InlineMediaEntry => entry?.kind === "image",
       );

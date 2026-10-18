@@ -74,6 +74,20 @@ describe("inline media scope", () => {
     expect(libraryFile).not.toHaveBeenCalled();
   });
 
+  it("keeps plain paragraphs as paragraphs", () => {
+    pending();
+    const { container } = renderMessage("一段只有文字的正文。");
+    expect(container.querySelectorAll("p").length).toBe(1);
+    expect(container.querySelector(".inline-media")).toBeNull();
+  });
+
+  it("uses a block wrapper only when text and media are mixed", () => {
+    pending();
+    const { container } = renderMessage("文字 ![图](/tasks/a.png) 收尾。");
+    expect(container.querySelectorAll("p").length).toBe(0);
+    expect(container.querySelectorAll(".inline-media").length).toBe(1);
+  });
+
   it("reports a failed image with its alt text and a retry", async () => {
     vi.spyOn(backend, "libraryFile").mockRejectedValue(new Error("missing"));
     const { container } = renderMessage("![构建日志](/tasks/a.png)");
