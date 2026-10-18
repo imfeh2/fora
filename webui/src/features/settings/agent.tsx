@@ -1,4 +1,4 @@
-import { Save } from "lucide-react";
+import { CircleHelp, Save } from "lucide-react";
 import {
   type Ref,
   useCallback,
@@ -16,6 +16,7 @@ import {
   LoadingSkeleton,
   Spinner,
 } from "@/components/ui/index";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   reportLoadFailure,
   useReportSettingsSave,
@@ -101,16 +102,35 @@ export function AgentForm({
                 {group.fields.map(({ key, label }) => (
                   <Field
                     key={key}
-                    label={label}
+                    label={
+                      key === "request_limit" || key === "token_limit" ? (
+                        <span className="inline-flex items-center gap-1">
+                          {label}
+                          <Tooltip
+                            label={
+                              key === "request_limit"
+                                ? "0 means unlimited."
+                                : "0 means no ceiling."
+                            }
+                          >
+                            <button
+                              type="button"
+                              aria-label={`About ${label}`}
+                              className="inline-flex cursor-help"
+                            >
+                              <CircleHelp size={14} />
+                            </button>
+                          </Tooltip>
+                        </span>
+                      ) : (
+                        label
+                      )
+                    }
                     htmlFor={`${id}-${key}`}
                     hint={
                       key in drafts && agentInteger(key, drafts[key]) === null
                         ? "Enter a valid whole number before saving."
-                        : key === "request_limit"
-                          ? "0 means unlimited. Changes apply to new Turns."
-                          : key === "token_limit"
-                            ? "0 means no ceiling."
-                            : undefined
+                        : undefined
                     }
                   >
                     <Input

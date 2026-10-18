@@ -177,13 +177,6 @@ export function ModelSelection({
           ))}
         </Select>
       </Field>
-      {selected ? null : (
-        <p className="text-sm text-fg-muted">
-          {inherit
-            ? "No model selected. Configure a provider and model before this Agent runs."
-            : "No default model selected. Configure a provider and model to set the organization default."}
-        </p>
-      )}
     </div>
   );
 }
@@ -1520,6 +1513,11 @@ function ProviderForm({
                 provider={provider}
                 models={models}
                 disabled={busy || unavailable || connectionDirty}
+                hint={
+                  connectionDirty
+                    ? "Save provider connection before reading its model list or testing."
+                    : undefined
+                }
               />
             ) : null}
           </div>
@@ -1573,11 +1571,12 @@ function ProviderForm({
                 setBodyError(null);
               }}
             />
-            <p id={`${id}-body-hint`} className="text-xs text-fg-muted">
-              {apiType === "google"
-                ? "This API does not support a custom request body. Clear it before saving."
-                : "Optional JSON object · 16 KiB maximum · applies to the next Turn."}
-            </p>
+            {apiType === "google" ? (
+              <p id={`${id}-body-hint`} className="text-xs text-fg-muted">
+                This API does not support a custom request body. Clear it before
+                saving.
+              </p>
+            ) : null}
             {error ? (
               <p
                 id={`${id}-body-error`}
@@ -1588,11 +1587,6 @@ function ProviderForm({
               </p>
             ) : null}
           </Field>
-        ) : null}
-        {connectionDirty && provider ? (
-          <p className="text-sm text-fg-muted">
-            Save provider connection before reading its model list or testing.
-          </p>
         ) : null}
         {provider?.api_key_set ? (
           <label
@@ -1619,19 +1613,27 @@ function ProviderForm({
           </Button>
           <Button onClick={editOpen ? cancel : onCancel}>Cancel</Button>
           {provider ? (
-            <Button
-              disabled={unavailable || modelCount > 0}
-              onClick={() => setConfirmDelete(true)}
-            >
-              {onDraft ? "Delete" : "Delete provider"}
-            </Button>
+            <span className="inline-flex items-center gap-1">
+              <Button
+                disabled={unavailable || modelCount > 0}
+                onClick={() => setConfirmDelete(true)}
+              >
+                {onDraft ? "Delete" : "Delete provider"}
+              </Button>
+              {modelCount > 0 ? (
+                <Tooltip label="Remove this provider's models first.">
+                  <button
+                    type="button"
+                    aria-label="About deleting this provider"
+                    className="inline-flex cursor-help"
+                  >
+                    <CircleHelp size={14} />
+                  </button>
+                </Tooltip>
+              ) : null}
+            </span>
           ) : null}
         </div>
-        {modelCount > 0 ? (
-          <p className="text-sm text-fg-muted">
-            Remove this provider's models first.
-          </p>
-        ) : null}
       </fieldset>
       <ConfirmDialog
         open={confirmDelete}
@@ -1765,10 +1767,12 @@ function ProviderTest({
   provider,
   models,
   disabled,
+  hint,
 }: {
   provider: ProviderConfig;
   models: RegisteredModel[];
   disabled: boolean;
+  hint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState("");
@@ -1781,9 +1785,22 @@ function ProviderTest({
   );
   return (
     <>
-      <Button disabled={disabled} onClick={() => setOpen(true)}>
-        Test
-      </Button>
+      <span className="inline-flex items-center gap-1">
+        <Button disabled={disabled} onClick={() => setOpen(true)}>
+          Test
+        </Button>
+        {hint ? (
+          <Tooltip label={hint}>
+            <button
+              type="button"
+              aria-label="About testing this provider"
+              className="inline-flex cursor-help"
+            >
+              <CircleHelp size={14} />
+            </button>
+          </Tooltip>
+        ) : null}
+      </span>
       <Modal
         open={open}
         variant="form"
