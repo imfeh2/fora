@@ -1546,7 +1546,7 @@ function ProviderForm({
                   <button
                     type="button"
                     aria-label="About custom request body"
-                    className="inline-flex cursor-help"
+                    className="inline-flex cursor-help p-1.5 -m-1.5"
                   >
                     <CircleHelp size={14} />
                   </button>
