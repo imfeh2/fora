@@ -215,7 +215,7 @@
 @container message (max-width: 559px) {
   .inline-media-single,
   .inline-media-pending {
-    width: min(100%, var(--inline-single-narrow-width, 320px));
+    width: min(100%, var(--inline-single-narrow-width, 100%));
   }
 
   .inline-media-single img {

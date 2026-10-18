@@ -18,7 +18,6 @@ const IMAGE_SIZE_LIMIT = 512;
 const IMAGE_LIST_LIMIT = 9;
 const SINGLE_WIDTH = 640;
 const SINGLE_HEIGHT = 400;
-const SINGLE_NARROW_WIDTH = 320;
 const SINGLE_NARROW_HEIGHT = 320;
 const PLACEHOLDER_HEIGHT = 360;
 
@@ -210,10 +209,7 @@ function singleBox(size: { width: number; height: number } | null) {
     SINGLE_WIDTH,
     Math.round((SINGLE_HEIGHT * size.width) / size.height),
   );
-  const narrow = Math.min(
-    SINGLE_NARROW_WIDTH,
-    Math.round((SINGLE_NARROW_HEIGHT * size.width) / size.height),
-  );
+  const narrow = Math.round((SINGLE_NARROW_HEIGHT * size.width) / size.height);
   return {
     "--inline-single-width": `${wide}px`,
     "--inline-single-narrow-width": `${narrow}px`,

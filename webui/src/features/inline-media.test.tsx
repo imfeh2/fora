@@ -391,9 +391,11 @@ describe("single image", () => {
     rememberImageSize("tasks/portrait.png", { width: 480, height: 640 });
     rememberImageSize("tasks/square.png", { width: 1200, height: 1200 });
     rememberImageSize("tasks/landscape.png", { width: 1600, height: 533 });
+    rememberImageSize("tasks/wide.png", { width: 800, height: 500 });
     const portrait = renderMessage("![竖图](/tasks/portrait.png)");
     const square = renderMessage("![方图](/tasks/square.png)");
     const landscape = renderMessage("![横图](/tasks/landscape.png)");
+    const wide = renderMessage("![宽图](/tasks/wide.png)");
     const frame = (element: HTMLElement) =>
       element.querySelector(".inline-media-single") as HTMLElement;
     const width = (element: HTMLElement, name: string) =>
@@ -409,8 +411,10 @@ describe("single image", () => {
     );
     expect(width(landscape.container, "--inline-single-width")).toBe("640px");
     expect(width(landscape.container, "--inline-single-narrow-width")).toBe(
-      "320px",
+      "961px",
     );
+    expect(width(wide.container, "--inline-single-width")).toBe("640px");
+    expect(width(wide.container, "--inline-single-narrow-width")).toBe("512px");
   });
 
   it("shows the failure card when the image bytes cannot be decoded", async () => {
