@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from weakref import WeakValueDictionary
 
+from fora.core.context_budget import threshold_tokens
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import AgentParameters, agent_parameters
@@ -559,7 +560,14 @@ class Scheduler:
         ).since_sequence or run.status not in ("completed", "failed"):
             return False
         tokens = json.loads(run.usage_json or "{}").get("last_input_tokens")
-        return type(tokens) is int and tokens >= self.parameters().context_window_tokens
+        window = json.loads(run.usage_json or "{}").get("context_window")
+        parameters = self.parameters()
+        threshold = threshold_tokens(
+            window if type(window) is int else None,
+            parameters.context_window_ratio_percent,
+            parameters.context_window_tokens,
+        )
+        return type(tokens) is int and tokens >= threshold
 
     def pending_keys(self, agent_id: int) -> frozenset[tuple[int, int]]:
         return frozenset(
@@ -799,6 +807,7 @@ class Scheduler:
         error: str | None = None
         usage_json: str | None = None
         context_exceeded = False
+        context_limit_reached = False
         overflow_context = None
         messages = persisted_history
         run_failure: Exception | None = None
@@ -824,6 +833,7 @@ class Scheduler:
             )
             usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
+            context_limit_reached = outcome.context_limit_reached
             overflow_context = outcome.overflow_context
             messages = outcome.messages_json
             if outcome.error:
@@ -920,7 +930,14 @@ class Scheduler:
                             )
                         ):
                             reason = "overflow"
-                        elif status == "completed" and reminder is None:
+                        elif status == "completed" and (
+                            reminder is None
+                            or (
+                                context_limit_reached
+                                and run.sequence
+                                != self.history.window(agent_id).since_sequence
+                            )
+                        ):
                             reason = "prepared"
                         if reason is not None:
                             window = self.history.reset_window(

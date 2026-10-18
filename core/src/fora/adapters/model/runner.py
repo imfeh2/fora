@@ -115,6 +115,11 @@ from fora.adapters.model.observability import (
 )
 from fora.adapters.model.prompt import SYSTEM_PROMPT
 from fora.core.attachment import ViewedAttachment, ViewedImage
+from fora.core.context_budget import (
+    estimate_image_tokens,
+    estimate_text_tokens,
+    threshold_tokens,
+)
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
@@ -145,6 +150,10 @@ CONTEXT_EXCEEDED_MESSAGES = (
     r"\b(?:your )?(?:input|prompt) exceeds (?:the )?(?:model )?(?:context window|maximum context length)\b",
     r"\b(?:the )?(?:context window|maximum context length) (?:was )?(?:exceeded|reached)\b",
 )
+
+
+class ContextWindowReached(Exception):
+    pass
 
 
 def is_context_exceeded(error: BaseException) -> bool:
@@ -453,6 +462,35 @@ def build_observability(config: ObservabilityConfig) -> Observability:
     return LangfuseObservability(config)
 
 
+def _content_tokens(value: object) -> int:
+    if isinstance(value, str):
+        return estimate_text_tokens(value)
+    if isinstance(value, BinaryContent):
+        return estimate_image_tokens(1)
+    if isinstance(value, dict):
+        return estimate_text_tokens(json.dumps(value, ensure_ascii=False, default=str))
+    if isinstance(value, list | tuple):
+        return sum(_content_tokens(item) for item in value)
+    return 0
+
+
+def message_tokens(messages: Sequence[ModelMessage]) -> int:
+    total = 0
+    for message in messages:
+        for part in message.parts:
+            total += _content_tokens(getattr(part, "content", None))
+            total += _content_tokens(getattr(part, "args", None))
+            name = getattr(part, "tool_name", None)
+            if isinstance(name, str):
+                total += estimate_text_tokens(name)
+    return total
+
+
+def _declared_window(model: Model) -> int | None:
+    value = model.profile.get("context_window")
+    return value if type(value) is int and value > 0 else None
+
+
 class LiveModel(WrapperModel):
     def __init__(
         self,
@@ -464,6 +502,8 @@ class LiveModel(WrapperModel):
         model_snapshot: dict[str, Any] | None = None,
         live_observer: LiveTurnObserver | None = None,
         context_sources: ContextSources | None = None,
+        context_ratio_percent: int = 80,
+        context_window_override: int | None = None,
     ) -> None:
         self._resolve = resolve
         self._ephemeral = ephemeral
@@ -487,6 +527,13 @@ class LiveModel(WrapperModel):
         self.tool_response: tuple[ModelResponse, ModelRequestHandle | None] | None = (
             None
         )
+        self.context_reached = False
+        self.window_tokens = _declared_window(resolve())
+        self.context_limit = threshold_tokens(
+            self.window_tokens, context_ratio_percent, context_window_override
+        )
+        self._last_input_tokens: int | None = None
+        self._last_message_count = 0
         super().__init__(resolve())
 
     @property
@@ -796,6 +843,7 @@ class LiveModel(WrapperModel):
         self, handle: ModelRequestHandle | None, response: ModelResponse
     ) -> None:
         self.current_response = response
+        self._last_input_tokens = response.usage.input_tokens
         if any(isinstance(part, ToolCallPart) for part in response.parts):
             self.tool_response = (response, handle)
         provided_cost = response.usage.cost is not None
@@ -907,17 +955,31 @@ class LiveModel(WrapperModel):
                 "Could not save the model request completion"
             ) from failure
 
+    def _check_budget(self, messages: list[ModelMessage]) -> None:
+        if self._last_input_tokens is None:
+            estimate = message_tokens(messages)
+        else:
+            added = messages[self._last_message_count :]
+            estimate = self._last_input_tokens + message_tokens(added)
+        if estimate >= self.context_limit:
+            self.context_reached = True
+            raise ContextWindowReached(
+                f"Estimated {estimate} tokens reached the limit {self.context_limit}"
+            )
+
     async def request(
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
+        self._check_budget(messages)
         wrapped = self.wrapped
         outgoing, parameters = self._request_content(
             wrapped, messages, model_request_parameters
         )
         settings = self._caching(wrapped, model_settings)
+        self._last_message_count = len(outgoing)
         handle = self._start_request(wrapped, outgoing, settings, parameters, False)
         self.current_request_handle = handle
         self._response_version = None
@@ -939,11 +1001,13 @@ class LiveModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[Any] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
+        self._check_budget(messages)
         wrapped = self.wrapped
         outgoing, parameters = self._request_content(
             wrapped, messages, model_request_parameters
         )
         settings = self._caching(wrapped, model_settings)
+        self._last_message_count = len(outgoing)
         handle = self._start_request(wrapped, outgoing, settings, parameters, True)
         self.current_request_handle = handle
         self._response_version = None
@@ -1629,6 +1693,8 @@ class PydanticModelRunner:
                     },
                     request.live_observer,
                     context_sources,
+                    context_ratio_percent=parameters.context_window_ratio_percent,
+                    context_window_override=parameters.context_window_tokens,
                 )
                 live_model = wrapper
 
@@ -1654,6 +1720,7 @@ class PydanticModelRunner:
         history_length = len(history)
         error = None
         context_exceeded = False
+        context_limit_reached = False
         overflow_context = None
         snapshot = (
             _persist_history(request, history, context_sources)
@@ -1666,13 +1733,15 @@ class PydanticModelRunner:
             except HistoryPersistenceError:
                 raise
             except Exception as failure:
-                logging.getLogger("fora.model").exception(
-                    "Model failure agent=%s turn=%s type=%s",
-                    request.agent_id,
-                    request.sequence,
-                    type(failure).__name__,
-                    exc_info=False,
-                )
+                reached = isinstance(failure, ContextWindowReached)
+                if not reached:
+                    logging.getLogger("fora.model").exception(
+                        "Model failure agent=%s turn=%s type=%s",
+                        request.agent_id,
+                        request.sequence,
+                        type(failure).__name__,
+                        exc_info=False,
+                    )
                 messages = snapshot
                 if captured:
                     final_messages = _settle_tool_calls(captured)
@@ -1683,24 +1752,29 @@ class PydanticModelRunner:
                     )
                 new_messages = captured[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
-                error = f"{type(failure).__name__}: {failure}"
-                context_exceeded = is_context_exceeded(failure)
-                if context_exceeded or (
-                    request.reminder is None
-                    and live_model is not None
-                    and live_model.model_failure is not None
-                    and live_model.model_failure[1] is failure
-                ):
-                    overflow_context = _overflow_context(
-                        request.sequence,
-                        captured if captured else history,
-                        history_length,
-                        error,
-                        live_model.current_request_handle
-                        if live_model is not None
-                        else None,
-                        live_model.tool_response if live_model is not None else None,
-                    )
+                if reached:
+                    context_limit_reached = True
+                else:
+                    error = f"{type(failure).__name__}: {failure}"
+                    context_exceeded = is_context_exceeded(failure)
+                    if context_exceeded or (
+                        request.reminder is None
+                        and live_model is not None
+                        and live_model.model_failure is not None
+                        and live_model.model_failure[1] is failure
+                    ):
+                        overflow_context = _overflow_context(
+                            request.sequence,
+                            captured if captured else history,
+                            history_length,
+                            error,
+                            live_model.current_request_handle
+                            if live_model is not None
+                            else None,
+                            live_model.tool_response
+                            if live_model is not None
+                            else None,
+                        )
             else:
                 final_messages = _settle_tool_calls(result.all_messages())
                 assert live_model is not None
@@ -1724,6 +1798,10 @@ class PydanticModelRunner:
                     for part in message.parts
                 ),
                 "last_input_tokens": input_tokens,
+                "context_window": live_model.window_tokens
+                if live_model is not None
+                else None,
+                "context_limit_reached": context_limit_reached,
             }
         )
         return TurnOutcome(
@@ -1732,6 +1810,7 @@ class PydanticModelRunner:
             error=error,
             input_tokens=input_tokens,
             context_exceeded=context_exceeded,
+            context_limit_reached=context_limit_reached,
             overflow_context=overflow_context,
         )
 

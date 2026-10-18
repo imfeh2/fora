@@ -230,6 +230,7 @@ class TurnOutcome:
     error: str | None = None
     input_tokens: int | None = None
     context_exceeded: bool = False
+    context_limit_reached: bool = False
     overflow_context: str | None = None
 
 

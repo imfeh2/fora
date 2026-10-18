@@ -41,25 +41,32 @@ const GROUPS = [
   { title: "Reminders and pausing", fields: FIELDS.slice(2, 5) },
 ];
 
-function agentInteger(key: string, draft: string): number | null {
-  const value = draft.trim();
-  if (!/^\d+$/.test(value)) return null;
-  const number = Number(value);
-  return Number.isSafeInteger(number) &&
-    number >= (key === "token_limit" || key === "request_limit" ? 0 : 1)
-    ? number
-    : null;
+const OPTIONAL_FIELDS = new Set(["context_window_tokens"]);
+
+function agentField(
+  key: string,
+  draft: string,
+): { valid: boolean; value: number | null } {
+  const text = draft.trim();
+  if (text === "") return { valid: OPTIONAL_FIELDS.has(key), value: null };
+  if (!/^\d+$/.test(text)) return { valid: false, value: null };
+  const number = Number(text);
+  const minimum = key === "token_limit" || key === "request_limit" ? 0 : 1;
+  return {
+    valid: Number.isSafeInteger(number) && number >= minimum,
+    value: number,
+  };
 }
 
 export function agentUpdate(
   drafts: Record<string, string>,
-): Record<string, number> | null {
+): Record<string, number | null> | null {
   if (Object.keys(drafts).length !== FIELDS.length) return null;
-  const update: Record<string, number> = {};
+  const update: Record<string, number | null> = {};
   for (const { key } of FIELDS) {
-    const value = agentInteger(key, drafts[key] ?? "");
-    if (value === null) return null;
-    update[key] = value;
+    const field = agentField(key, drafts[key] ?? "");
+    if (!field.valid) return null;
+    update[key] = field.value;
   }
   return update;
 }
@@ -77,7 +84,7 @@ export function AgentForm({
   saving?: boolean;
   first?: Ref<HTMLInputElement>;
   onChange: (drafts: Record<string, string>) => void;
-  onSave: (values: Record<string, number>) => void;
+  onSave: (values: Record<string, number | null>) => void;
 }) {
   const id = useId();
   const update = agentUpdate(drafts);
@@ -124,7 +131,7 @@ export function AgentForm({
                     }
                     htmlFor={`${id}-${key}`}
                     hint={
-                      key in drafts && agentInteger(key, drafts[key]) === null
+                      key in drafts && !agentField(key, drafts[key] ?? "").valid
                         ? "Enter a valid whole number before saving."
                         : undefined
                     }
@@ -139,9 +146,10 @@ export function AgentForm({
                       }
                       step={1}
                       max={Number.MAX_SAFE_INTEGER}
-                      required
+                      required={!OPTIONAL_FIELDS.has(key)}
                       aria-invalid={
-                        key in drafts && agentInteger(key, drafts[key]) === null
+                        key in drafts &&
+                        !agentField(key, drafts[key] ?? "").valid
                       }
                       value={drafts[key] ?? ""}
                       onChange={(event) =>
