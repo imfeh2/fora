@@ -136,8 +136,21 @@ from fora.tools import AgentTools
 
 pydantic_ai.BANNER_ENABLED = False
 
+TOKEN_LIMIT_PREFIX = "Model token limit ("
+TOKEN_LIMIT_SUFFIX = "exceeded before any response was generated"
+CONTEXT_EXCEEDED_MESSAGES = (
+    r"\bprompt is too long\b",
+    r"\binput token count(?: \(\d+\))? exceeds the maximum number of tokens allowed\b",
+    r"\bmaximum context length is \d+ tokens\b",
+    r"\b(?:your )?(?:input|prompt) exceeds (?:the )?(?:model )?(?:context window|maximum context length)\b",
+    r"\b(?:the )?(?:context window|maximum context length) (?:was )?(?:exceeded|reached)\b",
+)
+
 
 def is_context_exceeded(error: BaseException) -> bool:
+    if isinstance(error, UnexpectedModelBehavior):
+        text = str(error)
+        return text.startswith(TOKEN_LIMIT_PREFIX) and TOKEN_LIMIT_SUFFIX in text
     if not isinstance(error, ModelHTTPError):
         return False
     body = error.body
@@ -158,17 +171,7 @@ def is_context_exceeded(error: BaseException) -> bool:
     if not isinstance(message, str):
         return False
     normalized = message.lower()
-    if "prompt is too long" in normalized:
-        return True
-    if "input token count exceeds the maximum number of tokens allowed" in normalized:
-        return True
-    return any(
-        re.search(pattern, normalized)
-        for pattern in (
-            r"\b(?:your )?(?:input|prompt) exceeds (?:the )?(?:model )?(?:context window|maximum context length)\b",
-            r"\b(?:the )?(?:context window|maximum context length) (?:was )?(?:exceeded|reached)\b",
-        )
-    )
+    return any(re.search(pattern, normalized) for pattern in CONTEXT_EXCEEDED_MESSAGES)
 
 
 def _overflow_context(
