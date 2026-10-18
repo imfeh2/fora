@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Protocol
 
 from fora.core.discussion import Message
@@ -121,28 +120,6 @@ class WindowEvent:
     overflow_context: str | None = None
 
 
-class HistoryWindowFilter(Enum):
-    ALL = "all"
-
-
-@dataclass(frozen=True)
-class AgentHistoryWindow:
-    number: int
-    since_sequence: int | None
-    started_at: str | None
-    start_reason: str | None
-    ended_at: str | None
-    end_reason: str | None
-    is_current: bool
-
-
-@dataclass(frozen=True)
-class AgentHistoryWindows:
-    current_window_number: int
-    windows: tuple[AgentHistoryWindow, ...]
-    has_unassigned: bool
-
-
 @dataclass(frozen=True)
 class AgentHistoryRun:
     sequence: int
@@ -187,45 +164,6 @@ class AgentModelRequest:
     parameters_json: str | None = None
     settings_json: str | None = None
     model_json: str | None = None
-
-
-@dataclass(frozen=True)
-class AgentWindowRequestPage:
-    window_number: int
-    total: int
-    start_index: int | None
-    requests: tuple[AgentModelRequestSummary, ...]
-    has_more: bool
-    next_before: tuple[int, int] | None
-
-
-@dataclass(frozen=True)
-class AgentWindowRequest:
-    request: AgentModelRequest
-    index: int
-    total: int
-
-
-@dataclass(frozen=True)
-class AgentWindowStats:
-    window_number: int
-    request_count: int
-    run_count: int
-    first_started_at: str | None
-    last_completed_at: str | None
-    since_sequence: int | None
-    started_at: str | None
-    start_reason: str | None
-    ended_at: str | None
-    end_reason: str | None
-    is_current: bool
-
-
-@dataclass(frozen=True)
-class AgentInputSource:
-    kind: str
-    text: str
-    message_position: int | None
 
 
 @dataclass(frozen=True)
@@ -438,15 +376,6 @@ class HistoryStore(Protocol):
         self, agent_id: int, reason: str, overflow_context: str | None = None
     ) -> WindowState: ...
 
-    def window_events(
-        self,
-        agent_id: int,
-        *,
-        after: int | None = None,
-        limit: int = 30,
-        include_context: bool = True,
-    ) -> tuple[WindowEvent, ...]: ...
-
     def start_run(
         self,
         agent_id: int,
@@ -530,53 +459,11 @@ class HistoryStore(Protocol):
 
     def latest_messages(self, agent_id: int) -> str: ...
 
-    def run_messages(self, agent_id: int, sequence: int) -> str | None: ...
-
     def history_run(self, agent_id: int, sequence: int) -> AgentHistoryRun | None: ...
-
-    def history_windows(
-        self,
-        agent_id: int,
-        *,
-        before: int | None = None,
-        limit: int = 30,
-    ) -> AgentHistoryWindows: ...
-
-    def history_runs(
-        self,
-        agent_id: int,
-        *,
-        before: int | None = None,
-        limit: int = 30,
-        window_number: int | None | HistoryWindowFilter = HistoryWindowFilter.ALL,
-    ) -> tuple[AgentHistoryRun, ...]: ...
-
-    def model_request_summaries(
-        self,
-        agent_id: int,
-        sequence: int,
-        *,
-        after: int | None = None,
-        limit: int = 30,
-    ) -> tuple[AgentModelRequestSummary, ...]: ...
 
     def model_request_summary(
         self, agent_id: int, sequence: int, ordinal: int
     ) -> AgentModelRequestSummary | None: ...
-
-    def model_request(
-        self, agent_id: int, sequence: int, ordinal: int
-    ) -> AgentModelRequest | None: ...
-
-    def model_request_field(
-        self,
-        agent_id: int,
-        sequence: int,
-        ordinal: int,
-        field: str,
-        offset: int,
-        limit: int,
-    ) -> AgentTextPage: ...
 
     def model_request_messages(
         self,
@@ -587,38 +474,6 @@ class HistoryStore(Protocol):
         offset: int,
         limit: int,
     ) -> AgentMessagePage: ...
-
-    def model_request_message(
-        self,
-        agent_id: int,
-        sequence: int,
-        ordinal: int,
-        channel: str,
-        position: int,
-    ) -> str | None: ...
-
-    def window_by_number(
-        self, agent_id: int, window: int
-    ) -> AgentHistoryWindow | None: ...
-
-    def window_stats(self, agent_id: int, window: int) -> AgentWindowStats | None: ...
-
-    def window_requests(
-        self,
-        agent_id: int,
-        window: int,
-        *,
-        before: tuple[int, int] | None = None,
-        limit: int = 50,
-    ) -> AgentWindowRequestPage: ...
-
-    def window_request(
-        self, agent_id: int, window: int, sequence: int, ordinal: int
-    ) -> AgentWindowRequest | None: ...
-
-    def input_sources(
-        self, agent_id: int, sequence: int, ordinal: int
-    ) -> tuple[AgentInputSource, ...]: ...
 
     def runs(self, agent_id: int, *, limit: int = 50) -> tuple[AgentRun, ...]: ...
 
