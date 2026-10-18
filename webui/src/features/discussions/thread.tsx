@@ -197,6 +197,7 @@ function ThreadSession({
   const keyboardOffsetRef = useRef(keyboardOffset);
   const [atBottom, setAtBottom] = useState(true);
   const activePositioningSequence = useRef<number | null>(null);
+  const activePositioningCount = useRef<number | null>(null);
   const positioningKind = useRef<PositioningKind>("none");
   const scrollButtonRef = useRef<HTMLButtonElement>(null);
   const buttonHeldFocus = useRef(false);
@@ -280,6 +281,7 @@ function ThreadSession({
         !thread.loading
       )
         void thread.markRead(Math.max(...visible)).catch(() => {});
+      if (positioning.current) return;
       if (
         previews.state.before &&
         !previews.state.loading &&
@@ -327,29 +329,21 @@ function ThreadSession({
     positioningKind.current = "none";
     monitoring.current = false;
     activePositioningSequence.current = null;
+    activePositioningCount.current = null;
     ready.current = true;
     initialReady.current = true;
     thread.positioned();
     setAtBottom(virtual.isAtEnd());
   }, [thread.positioned, virtual]);
 
-  const followToEnd = useCallback(
-    (landAtEnd: () => void) => {
-      cancelAnimationFrame(frame.current);
-      positioning.current = true;
-      positioningKind.current = "follow";
-      landAtEnd();
-      frame.current = requestAnimationFrame(() => {
-        if (positioningKind.current !== "follow") return;
-        endPositioning();
-      });
-    },
-    [endPositioning],
-  );
-
   const monitorSmoothScroll = useCallback(() => {
     const root = scroll.current;
-    if (!positioning.current || positioningKind.current !== "latest" || !root) {
+    if (
+      !positioning.current ||
+      (positioningKind.current !== "latest" &&
+        positioningKind.current !== "follow") ||
+      !root
+    ) {
       monitoring.current = false;
       return;
     }
@@ -359,7 +353,8 @@ function ThreadSession({
       monitorStaleFrames.current = 0;
       monitorLastTop.current = currentTop;
     }
-    if (virtual.isAtEnd()) {
+    if (virtual.isAtEnd(0)) {
+      terminateOwnedTarget();
       endPositioning();
       sampleRef.current();
       return;
@@ -380,6 +375,18 @@ function ThreadSession({
     monitorLastTop.current = scroll.current?.scrollTop ?? -1;
     monitorFrame.current = requestAnimationFrame(monitorSmoothScroll);
   }, [monitorSmoothScroll]);
+
+  const followToEnd = useCallback(
+    (landAtEnd: () => void) => {
+      cancelAnimationFrame(frame.current);
+      positioning.current = true;
+      positioningKind.current = "follow";
+      activePositioningCount.current = virtual.options.count;
+      landAtEnd();
+      startMonitoring();
+    },
+    [startMonitoring, virtual],
+  );
 
   useEffect(
     () => () => {
@@ -465,6 +472,7 @@ function ThreadSession({
         cancelAnimationFrame(monitorFrame.current);
         monitoring.current = false;
         activePositioningSequence.current = position.sequence;
+        activePositioningCount.current = units.length;
         positioningKind.current = "latest";
         ready.current = false;
         positioning.current = true;
@@ -576,6 +584,21 @@ function ThreadSession({
     composerSize,
     keyboardOffset,
   ]);
+
+  useLayoutEffect(() => {
+    if (
+      !positioning.current ||
+      (positioningKind.current !== "latest" &&
+        positioningKind.current !== "follow") ||
+      activePositioningCount.current === units.length
+    )
+      return;
+    activePositioningCount.current = units.length;
+    const smooth =
+      positioningKind.current === "latest" &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    virtual.scrollToEnd({ behavior: smooth ? "smooth" : "auto" });
+  }, [units.length, virtual]);
 
   useEffect(() => {
     const tick = requestAnimationFrame(() => sample());
