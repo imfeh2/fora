@@ -21,8 +21,18 @@ const PLACEHOLDER_HEIGHT = 360;
 
 const imageSizes = new Map<string, { width: number; height: number }>();
 const videoObjects = new Map<string, string>();
-const videoPlaying = new Set<string>();
-const videoRequests = new Map<string, Promise<string>>();
+const videoHolders = new Map<string, number>();
+const videoRequests = new Map<string, VideoRequest>();
+
+type VideoRequest = {
+  controller: AbortController;
+  promise: Promise<string>;
+};
+
+export type VideoHold = {
+  promise: Promise<string>;
+  release: () => void;
+};
 
 export type InlineMediaKind = "image" | "video";
 
@@ -87,43 +97,70 @@ function mediaOffset(node: unknown): number | null {
 
 export { mediaOffset };
 
-function evictVideoObjects(keep: string) {
+function trimVideoObjects() {
+  let unheld = 0;
+  for (const path of videoObjects.keys())
+    if ((videoHolders.get(path) ?? 0) === 0) unheld += 1;
   for (const [path, url] of [...videoObjects]) {
-    if (videoObjects.size <= VIDEO_CACHE_LIMIT) return;
-    if (path === keep || videoPlaying.has(path)) continue;
+    if (unheld <= VIDEO_CACHE_LIMIT) return;
+    if ((videoHolders.get(path) ?? 0) > 0) continue;
     URL.revokeObjectURL(url);
     videoObjects.delete(path);
+    unheld -= 1;
   }
 }
 
-function releaseVideoUrl(path: string) {
-  if (videoPlaying.has(path)) return;
+function touchVideo(path: string) {
   const url = videoObjects.get(path);
   if (url === undefined) return;
-  URL.revokeObjectURL(url);
   videoObjects.delete(path);
+  videoObjects.set(path, url);
 }
 
-function requestVideoUrl(path: string): Promise<string> {
+function dropVideoHold(path: string) {
+  const holders = (videoHolders.get(path) ?? 0) - 1;
+  if (holders > 0) {
+    videoHolders.set(path, holders);
+    return;
+  }
+  videoHolders.delete(path);
+  const pending = videoRequests.get(path);
+  if (pending !== undefined) pending.controller.abort();
+  trimVideoObjects();
+}
+
+function acquireVideoUrl(path: string): VideoHold {
+  videoHolders.set(path, (videoHolders.get(path) ?? 0) + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    dropVideoHold(path);
+  };
   const cached = videoObjects.get(path);
   if (cached !== undefined) {
-    videoObjects.delete(path);
-    videoObjects.set(path, cached);
-    return Promise.resolve(cached);
+    touchVideo(path);
+    return { promise: Promise.resolve(cached), release };
   }
   const pending = videoRequests.get(path);
-  if (pending !== undefined) return pending;
-  const request = backend
-    .libraryFile(path, new AbortController().signal)
+  if (pending !== undefined) return { promise: pending.promise, release };
+  const controller = new AbortController();
+  const request: VideoRequest = { controller, promise: Promise.resolve("") };
+  request.promise = backend
+    .libraryFile(path, controller.signal)
     .then((blob) => {
+      if (controller.signal.aborted || (videoHolders.get(path) ?? 0) === 0)
+        throw new DOMException("Video request cancelled", "AbortError");
       const url = URL.createObjectURL(blob);
       videoObjects.set(path, url);
-      evictVideoObjects(path);
+      trimVideoObjects();
       return url;
     })
-    .finally(() => videoRequests.delete(path));
+    .finally(() => {
+      if (videoRequests.get(path) === request) videoRequests.delete(path);
+    });
   videoRequests.set(path, request);
-  return request;
+  return { promise: request.promise, release };
 }
 
 async function rememberSize(
@@ -438,6 +475,7 @@ export function InlineMediaImage({
 export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   const root = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
+  const hold = useRef<VideoHold | null>(null);
   const [visible, setVisible] = useState(false);
   const [entrySize, setEntrySize] = useState<number | null>(null);
   const [entryReady, setEntryReady] = useState(false);
@@ -474,25 +512,33 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   useEffect(() => {
     if (visible || playing || url === null) return;
     setUrl(null);
-    releaseVideoUrl(path);
-  }, [visible, playing, url, path]);
+    hold.current?.release();
+    hold.current = null;
+  }, [visible, playing, url]);
 
   useEffect(
     () => () => {
-      videoPlaying.delete(path);
-      releaseVideoUrl(path);
+      hold.current?.release();
+      hold.current = null;
     },
-    [path],
+    [],
   );
 
   const start = async () => {
     setBusy(true);
     setFailed(false);
+    hold.current?.release();
+    const next = acquireVideoUrl(path);
+    hold.current = next;
     try {
-      const next = await requestVideoUrl(path);
-      setUrl(next);
+      const objectUrl = await next.promise;
+      if (hold.current === next) setUrl(objectUrl);
     } catch {
-      setFailed(true);
+      if (hold.current === next) {
+        hold.current = null;
+        next.release();
+        setFailed(true);
+      }
     } finally {
       setBusy(false);
     }
@@ -556,27 +602,25 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
           playsInline
           preload="none"
           aria-label={name}
-          onPlay={() => {
-            videoPlaying.add(path);
-            setPlaying(true);
-          }}
+          onPlay={() => setPlaying(true)}
           onPause={() => {
-            videoPlaying.delete(path);
             setPlaying(false);
             if (!visible) {
               setUrl(null);
-              releaseVideoUrl(path);
+              hold.current?.release();
+              hold.current = null;
             }
+            trimVideoObjects();
           }}
           onEnded={() => {
-            videoPlaying.delete(path);
             setPlaying(false);
+            trimVideoObjects();
           }}
           onError={() => {
-            videoPlaying.delete(path);
             setPlaying(false);
             setUrl(null);
-            releaseVideoUrl(path);
+            hold.current?.release();
+            hold.current = null;
             setFailed(true);
           }}
         />
