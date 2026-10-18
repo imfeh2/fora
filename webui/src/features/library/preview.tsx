@@ -117,6 +117,10 @@ async function lookupEntry(path: string): Promise<LibraryEntry | null> {
   return find(await loadEntries());
 }
 
+export function libraryEntry(path: string): Promise<LibraryEntry | null> {
+  return lookupEntry(path);
+}
+
 function remember(path: string, data: PreviewData) {
   cache.set(path, data);
   if (cache.size <= CACHE_LIMIT) return;

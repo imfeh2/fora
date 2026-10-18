@@ -50,6 +50,7 @@ import {
   useDiscussionPreviews,
 } from "@/features/discussions/thread-previews";
 import { GenerationIndicator } from "@/features/generation-state";
+import { estimateInlineMediaSize } from "@/features/inline-media";
 import { CopyTextButton, MarkdownContent } from "@/features/markdown";
 import {
   BackendError,
@@ -215,6 +216,7 @@ function ThreadSession({
   const monitorStaleFrames = useRef(0);
   const monitorLastTop = useRef(-1);
   const unitCache = useRef(new Map<string, ThreadUnit>());
+  const unitHeights = useRef(new WeakMap<ThreadUnit, number>());
   const units = useMemo(
     () =>
       combineThreadUnits(
@@ -227,7 +229,16 @@ function ThreadSession({
   const virtual = useVirtualizer({
     count: units.length,
     getScrollElement: () => scroll.current,
-    estimateSize: () => 96,
+    estimateSize: (index: number) => {
+      const unit = units[index];
+      if (unit === undefined) return 96;
+      const cached = unitHeights.current.get(unit);
+      if (cached !== undefined) return cached;
+      const body = unit.message?.body ?? unit.preview?.data?.text.value ?? "";
+      const size = 96 + estimateInlineMediaSize(body);
+      unitHeights.current.set(unit, size);
+      return size;
+    },
     getItemKey: useCallback((index: number) => units[index].key, [units]),
     overscan: 5,
     anchorTo: "end",
@@ -1135,6 +1146,7 @@ export const MessageRow = memo(function MessageRow({
           revision={saved?.text.revision}
           generating={generating}
           mentions={message?.mentions}
+          inlineMedia
         />
         {generating ? <GenerationIndicator state={{ status }} /> : null}
         {preview?.error ? (

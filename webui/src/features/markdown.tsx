@@ -1,7 +1,16 @@
 import { createCodePlugin } from "@streamdown/code";
 import { clsx } from "clsx";
 import { Check, Copy } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Children,
+  isValidElement,
+  memo,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import remarkBreaks from "remark-breaks";
 import remarkMath from "remark-math";
 import {
@@ -13,10 +22,23 @@ import {
   type StreamdownProps,
 } from "streamdown";
 import { toast } from "@/components/ui/toast";
+import {
+  type InlineMediaEntry,
+  InlineMediaImage,
+  InlineMediaVideo,
+  MediaGrid,
+  mediaOffset,
+  scanInlineMedia,
+  VIDEO_LIMIT,
+  videoOrdinal,
+} from "@/features/inline-media";
+import { mediaKind } from "@/features/library/media";
+import { libraryPathFromHref } from "@/features/library/path";
 import { LibraryLink } from "@/features/library/preview";
 import { remarkLiteralHtml, remarkMentions } from "@/features/markdown-plugins";
 import type { MessageMention } from "@/lib/backend";
 import { copyText } from "@/lib/copy";
+import { documentName } from "@/lib/format";
 
 const plugins = {
   code: createCodePlugin({ themes: ["github-dark", "github-dark"] }),
@@ -88,23 +110,7 @@ export function CopyTextButton({
   );
 }
 
-export function libraryPathFromHref(href: string): string | null {
-  if (href.startsWith("#") || href.startsWith("//")) return null;
-  if (/%(?![0-9A-Fa-f]{2})/.test(href)) return null;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(href);
-  } catch {
-    return null;
-  }
-  if (decoded.startsWith("//")) return null;
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(decoded)) return null;
-  const rest = decoded.replace(/^\.?\//, "");
-  const segments = rest.split("/");
-  if (segments.some((segment) => segment === "..")) return null;
-  const path = segments.filter((segment) => segment.length > 0).join("/");
-  return path.length > 0 ? path : null;
-}
+export { libraryPathFromHref };
 
 function keepsHref(href: string): boolean {
   try {
@@ -117,7 +123,32 @@ function keepsHref(href: string): boolean {
   }
 }
 
-const components: Components = {
+type ImageProps = {
+  src?: string;
+  alt?: string;
+  node?: { position?: { start?: { offset?: number } } };
+};
+
+function imageElement({ src, alt, node }: ImageProps) {
+  const href =
+    typeof src === "string" && node
+      ? defaultUrlTransform(src, "src", node as never)
+      : undefined;
+  if (href && keepsHref(href))
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="markdown-link"
+      >
+        {alt || src}
+      </a>
+    );
+  return alt ? <span>{alt}</span> : null;
+}
+
+const baseComponents: Components = {
   code: ({ children, className, node: _node, ...props }) => {
     if (!("data-block" in props))
       return (
@@ -152,25 +183,86 @@ const components: Components = {
       <span>{children}</span>
     );
   },
-  img: ({ src, alt, node }) => {
+  img: imageElement,
+};
+
+function inlineComponents(
+  media: InlineMediaEntry[],
+  gallery: InlineMediaEntry[],
+): Components {
+  const resolveProps = ({
+    src,
+    alt,
+    node,
+  }: ImageProps): InlineMediaEntry | null => {
     const href =
       typeof src === "string" && node
-        ? defaultUrlTransform(src, "src", node)
+        ? defaultUrlTransform(src, "src", node as never)
         : undefined;
-    if (href && keepsHref(href))
+    const path = href ? libraryPathFromHref(href) : null;
+    const kind = path === null ? null : mediaKind(path);
+    if (path === null || (kind !== "image" && kind !== "video")) return null;
+    return { path, alt: alt ?? "", kind, offset: mediaOffset(node) ?? 0 };
+  };
+
+  const resolveMedia = (child: ReactNode): InlineMediaEntry | null => {
+    if (!isValidElement(child) || child.type !== Image) return null;
+    return resolveProps(child.props as ImageProps);
+  };
+
+  function Image({ src, alt, node }: ImageProps) {
+    const entry = resolveProps({ src, alt, node });
+    if (entry === null) return imageElement({ src, alt, node });
+    if (entry.kind === "image")
       return (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="markdown-link"
-        >
-          {alt || src}
-        </a>
+        <InlineMediaImage
+          path={entry.path}
+          alt={entry.alt}
+          gallery={gallery}
+          offset={mediaOffset(node)}
+        />
       );
-    return alt ? <span>{alt}</span> : null;
-  },
-};
+    if (videoOrdinal(media, mediaOffset(node)) < VIDEO_LIMIT)
+      return <InlineMediaVideo path={entry.path} alt={entry.alt} />;
+    return (
+      <LibraryLink path={entry.path}>
+        {entry.alt || documentName(entry.path)}
+      </LibraryLink>
+    );
+  }
+
+  return {
+    ...baseComponents,
+    img: Image,
+    p: ({ children }) => {
+      const items = Children.toArray(children);
+      const content = items.filter(
+        (child) =>
+          !(
+            (typeof child === "string" && child.trim() === "") ||
+            (isValidElement(child) && child.type === "br")
+          ),
+      );
+      if (content.length === 0) return <p>{children}</p>;
+      const entries = content.map(resolveMedia);
+      const images = entries.filter(
+        (entry): entry is InlineMediaEntry => entry?.kind === "image",
+      );
+      if (images.length !== entries.length) return <div>{children}</div>;
+      if (images.length === 1) return <>{children}</>;
+      return (
+        <MediaGrid
+          items={images.map((entry) => ({
+            path: entry.path,
+            alt: entry.alt,
+            offset: entry.offset,
+          }))}
+          gallery={gallery}
+        />
+      );
+    },
+  };
+}
 
 export const MarkdownContent = memo(function MarkdownContent({
   source,
@@ -178,16 +270,29 @@ export const MarkdownContent = memo(function MarkdownContent({
   revision = 0,
   generating = false,
   mentions = noMentions,
+  inlineMedia = false,
 }: {
   source: string;
   identity: string;
   revision?: number;
   generating?: boolean;
   mentions?: MessageMention[];
+  inlineMedia?: boolean;
 }) {
   const mentionKey = JSON.stringify(
     mentions.map(({ position, length }) => [position, length]),
   );
+  const media = useMemo(
+    () => (inlineMedia ? scanInlineMedia(source) : []),
+    [inlineMedia, source],
+  );
+  const components = useMemo(() => {
+    if (!inlineMedia) return baseComponents;
+    return inlineComponents(
+      media,
+      media.filter((entry) => entry.kind === "image"),
+    );
+  }, [inlineMedia, media]);
   const remarkPlugins = useMemo<NonNullable<StreamdownProps["remarkPlugins"]>>(
     () => [
       ...Object.values(defaultRemarkPlugins),
@@ -203,7 +308,10 @@ export const MarkdownContent = memo(function MarkdownContent({
   );
   return (
     <div
-      className="markdown-content min-w-0 max-w-full font-sans text-fg wrap-anywhere"
+      className={clsx(
+        "markdown-content min-w-0 max-w-full font-sans text-fg wrap-anywhere",
+        inlineMedia && "markdown-inline-media",
+      )}
       data-content-id={identity}
       data-revision={revision}
     >

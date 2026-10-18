@@ -37,7 +37,10 @@
       }
     },
     {
-      "includes": ["webui/src/features/library/document.tsx"],
+      "includes": [
+        "webui/src/features/library/document.tsx",
+        "webui/src/features/inline-media.tsx"
+      ],
       "linter": {
         "rules": {
           "a11y": {
