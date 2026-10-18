@@ -107,10 +107,7 @@ export function ModelSelection({
           <span className="flex items-center gap-2">
             Model
             {selected ? (
-              <span
-                title={`Changes apply to the next Turn. Provider: ${catalog.providers.find((provider) => provider.id === selected.provider_id)?.name ?? "unknown"}.`}
-                className="rounded-full border border-line px-1.5 text-[10px] font-medium text-fg-muted"
-              >
+              <span className="rounded-full border border-line px-1.5 text-[10px] font-medium text-fg-muted">
                 {selected.name}
               </span>
             ) : null}
