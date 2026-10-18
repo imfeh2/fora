@@ -719,9 +719,7 @@ def create_agent(context: _Context, params: dict[str, Any]) -> Any:
 
 def organization_set_model(context: _Context, params: dict[str, Any]) -> Any:
     agent_id = _required_integer(params, "agent_id")
-    result = context.api._human().set_agent_model(
-        agent_id, params.get("model_config")
-    )
+    result = context.api._human().set_agent_model(agent_id, params.get("model_config"))
     context.api._dispatcher.emit("settings.updated", {"section": "model"})
     return result
 
