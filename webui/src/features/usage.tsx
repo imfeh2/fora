@@ -43,6 +43,7 @@ import {
   type UsageResult,
 } from "@/lib/backend";
 
+import { copyText } from "@/lib/copy";
 import { formatInteger } from "@/lib/format";
 
 export { formatInteger } from "@/lib/format";
@@ -954,7 +955,7 @@ function DetailContent({
   const copy = async () => {
     if (!detail) return;
     try {
-      await navigator.clipboard.writeText(detail.usage_json);
+      await copyText(detail.usage_json);
       toast({ tone: "success", title: "Copied usage JSON" });
     } catch (error) {
       toast({

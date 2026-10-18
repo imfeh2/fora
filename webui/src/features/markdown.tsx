@@ -26,6 +26,7 @@ import { toast } from "@/components/ui/toast";
 import { LibraryLink } from "@/features/library/preview";
 import { remarkLiteralHtml, remarkMentions } from "@/features/markdown-plugins";
 import type { MessageMention } from "@/lib/backend";
+import { copyText } from "@/lib/copy";
 
 const plugins = {
   code: createCodePlugin({ themes: ["github-dark", "github-dark"] }),
@@ -58,7 +59,7 @@ export function CopyTextButton({
     const current = generation.current;
     setBusy(true);
     try {
-      await navigator.clipboard.writeText(source);
+      await copyText(source);
       if (current !== generation.current) return;
       setCopied(true);
       clearTimeout(timer.current);
