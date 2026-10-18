@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,7 +20,12 @@ from pydantic_ai.usage import RunUsage
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
-from fora.adapters.model.runner import ContextWindowReached, LiveModel, message_tokens
+from fora.adapters.model.runner import (
+    ContextWindowReached,
+    LiveModel,
+    PydanticModelRunner,
+    message_tokens,
+)
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.context_budget import (
@@ -27,7 +33,7 @@ from fora.core.context_budget import (
     IMAGE_TOKENS,
     estimate_text_tokens,
 )
-from fora.runtime.reminder import TurnOutcome
+from fora.runtime.reminder import TurnOutcome, TurnRequest
 from fora.runtime.scheduler import Scheduler
 from fora.tools import Dependencies
 
@@ -66,7 +72,6 @@ def test_stops_before_the_next_request_when_the_limit_is_reached() -> None:
                 ModelRequestParameters(),
             )
         )
-    assert model.context_reached is True
 
 
 def test_unknown_window_falls_back_and_keeps_normal_turns_running() -> None:
@@ -81,8 +86,6 @@ def test_unknown_window_falls_back_and_keeps_normal_turns_running() -> None:
         )
     )
 
-    assert model.context_reached is False
-
 
 def test_images_count_by_quota_instead_of_bytes() -> None:
     blob = BinaryContent(data=b"x" * 5_000_000, media_type="image/png")
@@ -92,8 +95,15 @@ def test_images_count_by_quota_instead_of_bytes() -> None:
 
 
 class ScriptedRunner:
-    def __init__(self, *reached: bool) -> None:
+    def __init__(
+        self,
+        *reached: bool,
+        window: int = 1_000,
+        tokens: list[int] | int = 10,
+    ) -> None:
         self.script = list(reached)
+        self.window = window
+        self.tokens = list(tokens) if isinstance(tokens, list) else [tokens]
         self.calls = 0
         self.reminders: list[bool] = []
 
@@ -110,13 +120,14 @@ class ScriptedRunner:
         self.calls += 1
         self.reminders.append(request.reminder is None)
         reached = self.script.pop(0) if self.script else False
+        tokens = self.tokens.pop(0) if len(self.tokens) > 1 else self.tokens[0]
         usage = json.dumps(
             {
                 "input_tokens": 10,
                 "requests": 1,
                 "tool_calls": 0,
-                "last_input_tokens": 10,
-                "context_window": 1_000,
+                "last_input_tokens": tokens,
+                "context_window": self.window,
                 "context_limit_reached": reached,
             }
         )
@@ -124,7 +135,6 @@ class ScriptedRunner:
             messages_json=request.history_json,
             usage_json=usage,
             input_tokens=10,
-            context_limit_reached=reached,
         )
 
 
@@ -167,11 +177,13 @@ def fora(tmp_path: Path) -> Iterator[Fora]:
         database.close()
 
 
-def prepare(fora: Fora, *flags: bool) -> tuple[Scheduler, ScriptedRunner, int, int]:
+def prepare(
+    fora: Fora, *flags: bool, tokens: list[int] | int = 10
+) -> tuple[Scheduler, ScriptedRunner, int, int]:
     human = fora.database.create_member("human", "You")
     agent = fora.database.create_member("agent", "Stub")
     discussion = fora.database.create_discussion("Topic", [human.id, agent.id])
-    runner = ScriptedRunner(*flags)
+    runner = ScriptedRunner(*flags, tokens=tokens)
     return Scheduler(fora.deps, runner), runner, agent.id, discussion.id
 
 
@@ -214,3 +226,59 @@ def test_a_normal_turn_does_not_reset_the_window(fora: Fora) -> None:
     window = fora.settings.window(agent)
     assert window.number == 1
     assert window.reason is None
+
+
+def test_the_recorded_window_is_declared_and_the_scheduler_recomputes(
+    fora: Fora,
+) -> None:
+    def respond(messages, info):
+        return ModelResponse(parts=[TextPart("ok")])
+
+    declared = FunctionModel(respond, profile={"context_window": 1_000})
+
+    @asynccontextmanager
+    async def build_model(config):
+        yield declared
+
+    fora.settings.set_settings(
+        "model",
+        {
+            "model": "stub-model",
+            "api_type": "openai-chat",
+            "base_url": "http://127.0.0.1:1/v1",
+            "api_key": "stub",
+        },
+    )
+    fora.settings.set_settings(
+        "agent", {"context_window_tokens": 1_500, "context_window_ratio_percent": 80}
+    )
+    runner = PydanticModelRunner(fora.settings, build_model=build_model)
+    request = TurnRequest(
+        agent_id=1,
+        sequence=1,
+        agent_name="Stub",
+        prompt="hello",
+        reminder=None,
+        history_json="[]",
+        resident="MEMORY",
+        environment=lambda: None,
+        ephemeral=lambda: "",
+        persist=lambda messages: None,
+    )
+
+    outcome = runner.run(request, None)
+
+    payload = json.loads(outcome.usage_json or "{}")
+    assert payload["context_window"] == 1_000
+    assert payload["context_limit_reached"] is False
+
+    scheduler, _runner, agent, discussion = prepare(
+        fora, False, False, tokens=[1_199, 1_200]
+    )
+    fora.database.append_message(discussion, 1, "@Stub first")
+    assert scheduler.run_turn(agent) is not None
+    assert scheduler.preparation_due(agent) is False
+
+    fora.database.append_message(discussion, 1, "@Stub second")
+    assert scheduler.run_turn(agent) is not None
+    assert scheduler.preparation_due(agent) is True

@@ -527,7 +527,6 @@ class LiveModel(WrapperModel):
         self.tool_response: tuple[ModelResponse, ModelRequestHandle | None] | None = (
             None
         )
-        self.context_reached = False
         self.window_tokens = _declared_window(resolve())
         self.context_limit = threshold_tokens(
             self.window_tokens, context_ratio_percent, context_window_override
@@ -963,7 +962,6 @@ class LiveModel(WrapperModel):
             added = messages[self._last_message_count :]
             estimate = self._last_input_tokens + message_tokens(added)
         if estimate >= self.context_limit:
-            self.context_reached = True
             raise ContextWindowReached(
                 f"Estimated {estimate} tokens reached the limit {self.context_limit}"
             )
@@ -1811,7 +1809,6 @@ class PydanticModelRunner:
             error=error,
             input_tokens=input_tokens,
             context_exceeded=context_exceeded,
-            context_limit_reached=context_limit_reached,
             overflow_context=overflow_context,
         )
 
