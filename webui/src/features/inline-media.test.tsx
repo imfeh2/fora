@@ -3,6 +3,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RouterProvider } from "@/app/router";
 import {
   estimateInlineMediaSize,
+  imageSizeOf,
+  rememberImageSize,
   scanInlineMedia,
 } from "@/features/inline-media";
 import { MarkdownContent } from "@/features/markdown";
@@ -327,7 +329,11 @@ describe("video lifecycle", () => {
       expect(players[2].container.querySelector("video")).toBeNull(),
     );
     await waitFor(() => expect(revoked).toHaveBeenCalled());
-    expect(created.length - revoked.mock.calls.length).toBeLessThanOrEqual(2);
+    const revokedUrls = revoked.mock.calls.map(([url]) => url as string);
+    const cached = created.filter((url) => !revokedUrls.includes(url));
+    expect(cached).toEqual(["blob:hold-2", "blob:hold-3"]);
+    expect(revokedUrls).not.toContain("blob:hold-2");
+    expect(revokedUrls).not.toContain("blob:hold-3");
   });
 
   it("keeps the object url across a pause and trims nothing it holds", async () => {
@@ -358,6 +364,24 @@ describe("video lifecycle", () => {
       ),
     );
     expect(created).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("image size cache", () => {
+  it("keeps the most recent sizes and drops the oldest beyond the limit", () => {
+    for (let index = 0; index < 512; index += 1)
+      rememberImageSize(`tasks/size-${index}.png`, {
+        width: index + 1,
+        height: index + 2,
+      });
+    expect(imageSizeOf("tasks/size-0.png")).toEqual({ width: 1, height: 2 });
+    rememberImageSize("tasks/size-extra.png", { width: 7, height: 9 });
+    expect(imageSizeOf("tasks/size-0.png")).toEqual({ width: 1, height: 2 });
+    expect(imageSizeOf("tasks/size-1.png")).toBeNull();
+    expect(imageSizeOf("tasks/size-extra.png")).toEqual({
+      width: 7,
+      height: 9,
+    });
   });
 });
 

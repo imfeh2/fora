@@ -14,6 +14,7 @@ const SYNTAX = /!\[([^\]\n]*)\]\(\s*([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g;
 export const VIDEO_LIMIT = 2;
 const VIDEO_BYTES_LIMIT = 20 * 1024 * 1024;
 const VIDEO_CACHE_LIMIT = 2;
+const IMAGE_SIZE_LIMIT = 512;
 const IMAGE_LIST_LIMIT = 9;
 const SINGLE_WIDTH = 640;
 const SINGLE_HEIGHT = 400;
@@ -23,6 +24,25 @@ const imageSizes = new Map<string, { width: number; height: number }>();
 const videoObjects = new Map<string, string>();
 const videoHolders = new Map<string, number>();
 const videoRequests = new Map<string, VideoRequest>();
+
+export function rememberImageSize(
+  path: string,
+  size: { width: number; height: number },
+) {
+  imageSizes.delete(path);
+  imageSizes.set(path, size);
+  if (imageSizes.size <= IMAGE_SIZE_LIMIT) return;
+  const oldest = imageSizes.keys().next().value;
+  if (oldest !== undefined) imageSizes.delete(oldest);
+}
+
+export function imageSizeOf(path: string) {
+  const size = imageSizes.get(path);
+  if (size === undefined) return null;
+  imageSizes.delete(path);
+  imageSizes.set(path, size);
+  return size;
+}
 
 type VideoRequest = {
   controller: AbortController;
@@ -178,7 +198,7 @@ async function rememberSize(
   }
   if (probe.naturalWidth <= 0 || probe.naturalHeight <= 0) return null;
   const size = { width: probe.naturalWidth, height: probe.naturalHeight };
-  imageSizes.set(path, size);
+  rememberImageSize(path, size);
   return size;
 }
 
@@ -397,7 +417,7 @@ export function InlineMediaImage({
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [size, setSize] = useState(() => imageSizes.get(path) ?? null);
+  const [size, setSize] = useState(() => imageSizeOf(path));
   const [open, setOpen] = useState<number | null>(null);
 
   useEffect(() => {
