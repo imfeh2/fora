@@ -26,6 +26,10 @@ import { type BackendError, backend } from "@/lib/backend";
 
 const FIELDS = [
   { key: "context_window_tokens", label: "Context window (tokens)" },
+  {
+    key: "context_window_ratio_percent",
+    label: "Context window ratio (percent)",
+  },
   { key: "memory_index_bytes", label: "MEMORY.md in context (bytes)" },
   { key: "exchange_nudge_after", label: "Nudge after (messages)" },
   { key: "idle_streak_after", label: "Idle after (Turns)" },
@@ -36,9 +40,32 @@ const FIELDS = [
 ];
 
 const GROUPS = [
-  { title: "Context", fields: FIELDS.slice(0, 2) },
-  { title: "Run limits", fields: FIELDS.slice(5) },
-  { title: "Reminders and pausing", fields: FIELDS.slice(2, 5) },
+  {
+    title: "Context",
+    fields: FIELDS.filter(({ key }) =>
+      [
+        "context_window_tokens",
+        "context_window_ratio_percent",
+        "memory_index_bytes",
+      ].includes(key),
+    ),
+  },
+  {
+    title: "Run limits",
+    fields: FIELDS.filter(({ key }) =>
+      ["max_concurrent_turns", "token_limit", "request_limit"].includes(key),
+    ),
+  },
+  {
+    title: "Reminders and pausing",
+    fields: FIELDS.filter(({ key }) =>
+      [
+        "exchange_nudge_after",
+        "idle_streak_after",
+        "no_tool_turns_before_pause",
+      ].includes(key),
+    ),
+  },
 ];
 
 const OPTIONAL_FIELDS = new Set(["context_window_tokens"]);
@@ -51,9 +78,17 @@ function agentField(
   if (text === "") return { valid: OPTIONAL_FIELDS.has(key), value: null };
   if (!/^\d+$/.test(text)) return { valid: false, value: null };
   const number = Number(text);
-  const minimum = key === "token_limit" || key === "request_limit" ? 0 : 1;
+  const minimum =
+    key === "token_limit" || key === "request_limit"
+      ? 0
+      : key === "context_window_ratio_percent"
+        ? 50
+        : 1;
+  const maximum =
+    key === "context_window_ratio_percent" ? 95 : Number.MAX_SAFE_INTEGER;
   return {
-    valid: Number.isSafeInteger(number) && number >= minimum,
+    valid:
+      Number.isSafeInteger(number) && number >= minimum && number <= maximum,
     value: number,
   };
 }
@@ -142,10 +177,18 @@ export function AgentForm({
                       type="number"
                       inputMode="numeric"
                       min={
-                        key === "token_limit" || key === "request_limit" ? 0 : 1
+                        key === "token_limit" || key === "request_limit"
+                          ? 0
+                          : key === "context_window_ratio_percent"
+                            ? 50
+                            : 1
                       }
                       step={1}
-                      max={Number.MAX_SAFE_INTEGER}
+                      max={
+                        key === "context_window_ratio_percent"
+                          ? 95
+                          : Number.MAX_SAFE_INTEGER
+                      }
                       required={!OPTIONAL_FIELDS.has(key)}
                       aria-invalid={
                         key in drafts &&
