@@ -288,7 +288,7 @@ function ThreadSession({
         !previews.state.error &&
         root.clientHeight > 0 &&
         (virtual.getTotalSize() <= root.clientHeight ||
-          (paginate && root.scrollTop < root.clientHeight))
+          (paginate && root.scrollTop <= 200))
       )
         void previews.earlier();
       if (!thread.failed && !thread.loading) {
@@ -296,7 +296,7 @@ function ThreadSession({
           current.hasBefore &&
           root.clientHeight > 0 &&
           (virtual.getTotalSize() <= root.clientHeight ||
-            (paginate && root.scrollTop < root.clientHeight))
+            (paginate && root.scrollTop <= 200))
         )
           void thread.request("before");
         else if (
