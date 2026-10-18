@@ -28,7 +28,7 @@ const FIELDS = [
   { key: "context_window_tokens", label: "Context window (tokens)" },
   {
     key: "context_window_ratio_percent",
-    label: "Context window ratio (percent)",
+    label: "Context window stop threshold (percent)",
   },
   { key: "memory_index_bytes", label: "MEMORY.md in context (bytes)" },
   { key: "exchange_nudge_after", label: "Nudge after (messages)" },
