@@ -102,29 +102,25 @@ export function AgentForm({
                 {group.fields.map(({ key, label }) => (
                   <Field
                     key={key}
-                    label={
+                    label={label}
+                    action={
                       key === "request_limit" || key === "token_limit" ? (
-                        <span className="inline-flex items-center gap-1">
-                          {label}
-                          <Tooltip
-                            label={
-                              key === "request_limit"
-                                ? "0 means unlimited."
-                                : "0 means no ceiling."
-                            }
+                        <Tooltip
+                          label={
+                            key === "request_limit"
+                              ? "0 means unlimited."
+                              : "0 means no ceiling."
+                          }
+                        >
+                          <button
+                            type="button"
+                            aria-label={`About ${label}`}
+                            className="inline-flex cursor-help p-1.5 -m-1.5"
                           >
-                            <button
-                              type="button"
-                              aria-label={`About ${label}`}
-                              className="inline-flex cursor-help"
-                            >
-                              <CircleHelp size={14} />
-                            </button>
-                          </Tooltip>
-                        </span>
-                      ) : (
-                        label
-                      )
+                            <CircleHelp size={14} />
+                          </button>
+                        </Tooltip>
+                      ) : undefined
                     }
                     htmlFor={`${id}-${key}`}
                     hint={

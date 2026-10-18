@@ -337,22 +337,30 @@ export function Field({
   label,
   htmlFor,
   hint,
+  action,
   children,
 }: {
   label: ReactNode;
   htmlFor?: string;
   hint?: ReactNode;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2">
-      {htmlFor === undefined ? (
-        <span className="text-xs font-medium text-fg-muted">{label}</span>
-      ) : (
-        <label className="text-xs font-medium text-fg-muted" htmlFor={htmlFor}>
-          {label}
-        </label>
-      )}
+      <span className="flex items-center gap-1">
+        {htmlFor === undefined ? (
+          <span className="text-xs font-medium text-fg-muted">{label}</span>
+        ) : (
+          <label
+            className="text-xs font-medium text-fg-muted"
+            htmlFor={htmlFor}
+          >
+            {label}
+          </label>
+        )}
+        {action}
+      </span>
       {children}
       {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
     </div>

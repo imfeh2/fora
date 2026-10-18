@@ -103,15 +103,14 @@ export function ModelSelection({
   return (
     <div className="flex flex-col gap-4">
       <Field
-        label={
-          <span className="flex items-center gap-2">
-            Model
-            {selected ? (
-              <span className="rounded-full border border-line px-1.5 text-[10px] font-medium text-fg-muted">
-                {selected.name}
-              </span>
-            ) : null}
-          </span>
+        label="Model"
+        action={
+          value.model_id === null && inherit && selected ? (
+            <span className="rounded-full border border-line px-1.5 text-[10px] font-medium text-fg-muted">
+              <span className="sr-only">Effective model </span>
+              {selected.name}
+            </span>
+          ) : undefined
         }
         htmlFor={`${id}-model`}
       >
@@ -1622,7 +1621,7 @@ function ProviderForm({
                   <button
                     type="button"
                     aria-label="About deleting this provider"
-                    className="inline-flex cursor-help"
+                    className="inline-flex cursor-help p-1.5 -m-1.5"
                   >
                     <CircleHelp size={14} />
                   </button>
@@ -1791,7 +1790,7 @@ function ProviderTest({
             <button
               type="button"
               aria-label="About testing this provider"
-              className="inline-flex cursor-help"
+              className="inline-flex cursor-help p-1.5 -m-1.5"
             >
               <CircleHelp size={14} />
             </button>
