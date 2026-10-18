@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { ChevronLeft, ChevronRight, FileVideo, Play } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { documentPath, useNavigate } from "@/app/router";
 import { Modal } from "@/components/ui/dialog";
 import { Button, IconButton, Spinner } from "@/components/ui/index";
@@ -18,6 +18,8 @@ const IMAGE_SIZE_LIMIT = 512;
 const IMAGE_LIST_LIMIT = 9;
 const SINGLE_WIDTH = 640;
 const SINGLE_HEIGHT = 400;
+const SINGLE_NARROW_WIDTH = 320;
+const SINGLE_NARROW_HEIGHT = 320;
 const PLACEHOLDER_HEIGHT = 360;
 
 const imageSizes = new Map<string, { width: number; height: number }>();
@@ -204,14 +206,19 @@ async function rememberSize(
 
 function singleBox(size: { width: number; height: number } | null) {
   if (size === null) return undefined;
-  const width = Math.min(
+  const wide = Math.min(
     SINGLE_WIDTH,
     Math.round((SINGLE_HEIGHT * size.width) / size.height),
   );
+  const narrow = Math.min(
+    SINGLE_NARROW_WIDTH,
+    Math.round((SINGLE_NARROW_HEIGHT * size.width) / size.height),
+  );
   return {
-    width: `min(100%, ${width}px)`,
+    "--inline-single-width": `${wide}px`,
+    "--inline-single-narrow-width": `${narrow}px`,
     aspectRatio: `${size.width} / ${size.height}`,
-  };
+  } as CSSProperties;
 }
 
 function MediaFailure({
@@ -476,7 +483,12 @@ export function InlineMediaImage({
             aria-label={`View ${label}`}
             onClick={() => setOpen(openIndex(gallery, offset))}
           >
-            <img src={url} alt={alt} title={alt || undefined} />
+            <img
+              src={url}
+              alt={alt}
+              title={alt || undefined}
+              onError={() => setFailed(true)}
+            />
           </button>
         </div>
       )}

@@ -77,7 +77,7 @@
 }
 
 .inline-media-single {
-  width: fit-content;
+  width: min(100%, var(--inline-single-width, 640px));
 }
 
 .inline-media-single img {
@@ -99,7 +99,7 @@
 }
 
 .inline-media-pending {
-  width: min(100%, 640px);
+  width: min(100%, var(--inline-single-width, 640px));
 }
 
 .inline-media-placeholder {
@@ -213,6 +213,11 @@
 }
 
 @container message (max-width: 559px) {
+  .inline-media-single,
+  .inline-media-pending {
+    width: min(100%, var(--inline-single-narrow-width, 320px));
+  }
+
   .inline-media-single img {
     max-height: 320px;
   }

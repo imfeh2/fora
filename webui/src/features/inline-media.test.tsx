@@ -385,6 +385,62 @@ describe("image size cache", () => {
   });
 });
 
+describe("single image", () => {
+  it("sizes the frame from the image ratio in both tiers", () => {
+    pending();
+    rememberImageSize("tasks/portrait.png", { width: 480, height: 640 });
+    rememberImageSize("tasks/square.png", { width: 1200, height: 1200 });
+    rememberImageSize("tasks/landscape.png", { width: 1600, height: 533 });
+    const portrait = renderMessage("![竖图](/tasks/portrait.png)");
+    const square = renderMessage("![方图](/tasks/square.png)");
+    const landscape = renderMessage("![横图](/tasks/landscape.png)");
+    const frame = (element: HTMLElement) =>
+      element.querySelector(".inline-media-single") as HTMLElement;
+    const width = (element: HTMLElement, name: string) =>
+      frame(element).style.getPropertyValue(name);
+    expect(width(portrait.container, "--inline-single-width")).toBe("300px");
+    expect(width(portrait.container, "--inline-single-narrow-width")).toBe(
+      "240px",
+    );
+    expect(frame(portrait.container).style.aspectRatio).toBe("480 / 640");
+    expect(width(square.container, "--inline-single-width")).toBe("400px");
+    expect(width(square.container, "--inline-single-narrow-width")).toBe(
+      "320px",
+    );
+    expect(width(landscape.container, "--inline-single-width")).toBe("640px");
+    expect(width(landscape.container, "--inline-single-narrow-width")).toBe(
+      "320px",
+    );
+  });
+
+  it("shows the failure card when the image bytes cannot be decoded", async () => {
+    const libraryFile = vi
+      .spyOn(backend, "libraryFile")
+      .mockResolvedValue(new Blob(["broken"]));
+    URL.createObjectURL = vi.fn(() => "blob:broken");
+    const { container } = renderMessage("![坏图](/tasks/broken.png)");
+    const image = await waitFor(() => {
+      const element = container.querySelector("img");
+      if (element === null) throw new Error("image is missing");
+      return element;
+    });
+    fireEvent.error(image);
+    await waitFor(() =>
+      expect(container.textContent).toContain("Image could not be loaded."),
+    );
+    expect(container.querySelector("img")).toBeNull();
+    const retry = await waitFor(() => {
+      const button = [...container.querySelectorAll("button")].find(
+        (node) => node.textContent === "Retry",
+      );
+      if (button === undefined) throw new Error("retry is missing");
+      return button;
+    });
+    fireEvent.click(retry);
+    await waitFor(() => expect(libraryFile).toHaveBeenCalledTimes(2));
+  });
+});
+
 describe("scanning", () => {
   it("keeps only library images and videos in source order", () => {
     const entries = scanInlineMedia(
