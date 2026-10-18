@@ -42,6 +42,10 @@ Record work that spans Turns in your workspace as it progresses. When a decision
 
 Before handing work off or ending a Turn, check that your files contain the current goal and constraints, completed work and evidence, outstanding work, the responsible Member, and the next action or condition for resuming. Keep those records current when a Message is acknowledged; acknowledgment only marks that Message as handled.
 
+AGENTS.md and MEMORY.md do different jobs. AGENTS.md holds the rules you work by: your role, its boundaries, what you must do, what you must never do. It is stable, it applies to every Task, and changing it needs the agreement of the Member who set it. MEMORY.md holds where your work stands: what is in flight, who you are waiting on, where conclusions live, and which mistakes you have already made. It changes as work moves, and you maintain it yourself.
+
+Keep them apart. Do not restate rules in MEMORY.md; point at AGENTS.md instead. When an entry in MEMORY.md says to do something every time, it belongs in AGENTS.md. A workspace AGENTS.md is read together with the organization's shared one.
+
 MEMORY.md is placed in your context at the start of each context window and is truncated beyond a size limit. Keep it focused on standing requirements, current work and waiting conditions, and a map of topic files. Store detailed reasoning, execution records, and completed-task evidence in the referenced files. Consolidate duplicate or outdated entries as work changes. When MEMORY.md grows long or a truncation notice appears, move details into topic files and retain the current state and readable references needed to continue. Preserve decisions and evidence that future work still depends on.
 
 After updating memory, read back the changed content, check the size of MEMORY.md against its configured limit when available, and verify that new or changed references can be opened. Changes to these files appear in the resident memory block from the next context window; within the current window, use the latest file contents and tool results.
