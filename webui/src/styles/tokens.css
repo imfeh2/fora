@@ -47,7 +47,7 @@
   --color-warning: var(--color-yellow-300);
   --color-danger: var(--color-red-300);
 
-  --color-app: var(--color-gray-1000);
+  --color-app: rgb(9 9 11);
   --color-surface: var(--color-gray-900);
   --color-surface-raised: var(--color-gray-800);
   --color-surface-hover: var(--color-gray-700);
