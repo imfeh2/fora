@@ -639,10 +639,6 @@ function GroupTable({
           No saved usage in this time range.
         </p>
       ) : null}
-      <p className="border-t border-line px-4 py-3 text-xs text-fg-muted">
-        Totals include usage already received for requests still running and
-        earlier saved usage; a running request can add more before it finishes.
-      </p>
     </section>
   );
 }

@@ -102,7 +102,22 @@ export function ModelSelection({
   const options = selected?.thinking_options ?? THINKING_OPTIONS;
   return (
     <div className="flex flex-col gap-4">
-      <Field label="Model" htmlFor={`${id}-model`}>
+      <Field
+        label={
+          <span className="flex items-center gap-2">
+            Model
+            {selected ? (
+              <span
+                title={`Changes apply to the next Turn. Provider: ${catalog.providers.find((provider) => provider.id === selected.provider_id)?.name ?? "unknown"}.`}
+                className="rounded-full border border-line px-1.5 text-[10px] font-medium text-fg-muted"
+              >
+                {selected.name}
+              </span>
+            ) : null}
+          </span>
+        }
+        htmlFor={`${id}-model`}
+      >
         <Select
           id={`${id}-model`}
           value={value.model_id ?? ""}
@@ -162,13 +177,13 @@ export function ModelSelection({
           ))}
         </Select>
       </Field>
-      <p className="text-sm text-fg-muted">
-        {selected
-          ? `Effective model: ${catalog.providers.find((provider) => provider.id === selected.provider_id)?.name} / ${selected.name}. Changes apply to the next Turn.`
-          : inherit
+      {selected ? null : (
+        <p className="text-sm text-fg-muted">
+          {inherit
             ? "No model selected. Configure a provider and model before this Agent runs."
             : "No default model selected. Configure a provider and model to set the organization default."}
-      </p>
+        </p>
+      )}
     </div>
   );
 }
