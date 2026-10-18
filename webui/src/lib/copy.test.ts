@@ -3,52 +3,58 @@ import { copyText } from "@/lib/copy";
 
 const writeText = vi.fn();
 
-beforeEach(() => {
-  writeText.mockReset();
+function secureContext(value: boolean) {
+  Object.defineProperty(window, "isSecureContext", {
+    configurable: true,
+    value,
+  });
+}
+
+function clipboard(value: { writeText: typeof writeText } | undefined) {
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
-    value: { writeText },
+    value,
   });
+}
+
+function execCommand(value: (command: string) => boolean) {
   Object.defineProperty(document, "execCommand", {
     configurable: true,
-    value: vi.fn(() => true),
+    value,
   });
+}
+
+beforeEach(() => {
+  writeText.mockReset();
+  secureContext(true);
+  clipboard({ writeText });
+  execCommand(() => true);
 });
 
 afterEach(() => {
-  Object.defineProperty(navigator, "clipboard", {
-    configurable: true,
-    value: undefined,
-  });
+  clipboard(undefined);
+  secureContext(false);
 });
 
 describe("copyText", () => {
-  it("writes through the clipboard when it is available", async () => {
+  it("writes through the clipboard API in a secure context", async () => {
     writeText.mockResolvedValue(undefined);
     await copyText("hello");
     expect(writeText).toHaveBeenCalledWith("hello");
   });
 
-  it("falls back to a textarea when the clipboard is missing", async () => {
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: undefined,
-    });
+  it("copies in an insecure context without the clipboard API", async () => {
+    secureContext(false);
+    clipboard(undefined);
     const exec = vi.fn(() => true);
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: exec,
-    });
-    await copyText("fallback");
+    execCommand(exec);
+    await copyText("insecure");
     expect(exec).toHaveBeenCalledWith("copy");
   });
 
-  it("throws when the clipboard rejects and the fallback fails", async () => {
+  it("throws when neither the clipboard nor the fallback copies", async () => {
     writeText.mockRejectedValue(new Error("denied"));
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: vi.fn(() => false),
-    });
+    execCommand(() => false);
     await expect(copyText("nope")).rejects.toThrow(
       "Copy is not available in this browser",
     );
