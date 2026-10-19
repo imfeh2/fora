@@ -1081,7 +1081,7 @@ export const MessageRow = memo(function MessageRow({
   compact: boolean;
   fresh: boolean;
 }) {
-  const { members } = useOrganization();
+  const { members, humanId } = useOrganization();
   const insertMention = useContext(MentionInsert);
   const [copyOpen, setCopyOpen] = useState(false);
   const saved = preview?.data;
@@ -1096,7 +1096,6 @@ export const MessageRow = memo(function MessageRow({
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [copyOpen]);
-  const { humanId } = useOrganization();
   if (!message && !saved)
     throw new Error("Message reading unit has no content");
   const senderId = message?.sender_id ?? saved?.metadata.key.agent_id;
