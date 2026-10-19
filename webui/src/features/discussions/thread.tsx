@@ -49,11 +49,8 @@ import {
 } from "@/features/discussions/thread-position";
 import {
   combineThreadUnits,
-  type PreviewState,
   type ThreadUnit,
-  useDiscussionPreviews,
-} from "@/features/discussions/thread-previews";
-import { GenerationIndicator } from "@/features/generation-state";
+} from "@/features/discussions/thread-units";
 import { estimateInlineMediaSize } from "@/features/inline-media";
 import { CopyTextButton, MarkdownContent } from "@/features/markdown";
 import {
@@ -192,7 +189,6 @@ function ThreadSession({
 }) {
   const { discussions, refresh } = useOrganization();
   const navigate = useNavigate();
-  const previews = useDiscussionPreviews(id);
   const thread = useThreadData(id, humanId);
   const { data: detail, missing, failed: loadFailed } = thread;
   const [busy, setBusy] = useState(false);
@@ -244,7 +240,7 @@ function ThreadSession({
       if (unit === undefined) return 96;
       const cached = unitHeights.current.get(unit);
       if (cached !== undefined) return cached;
-      const body = unit.message?.body ?? unit.preview?.data?.text.value ?? "";
+      const body = unit.message.body;
       const size = 96 + estimateInlineMediaSize(body);
       unitHeights.current.set(unit, size);
       return size;
@@ -303,15 +299,6 @@ function ThreadSession({
       )
         void thread.markRead(Math.max(...visible)).catch(() => {});
       if (positioning.current) return;
-      if (
-        previews.state.before &&
-        !previews.state.loading &&
-        !previews.state.error &&
-        root.clientHeight > 0 &&
-        (virtual.getTotalSize() <= root.clientHeight ||
-          (paginate && root.scrollTop <= 200))
-      )
-        void previews.earlier();
       if (!thread.failed && !thread.loading) {
         if (
           current.hasBefore &&
@@ -329,7 +316,7 @@ function ThreadSession({
           void thread.request("after");
       }
     },
-    [composerSize, keyboardOffset, previews, thread, virtual],
+    [composerSize, keyboardOffset, thread, virtual],
   );
 
   const sampleRef = useRef(sample);
@@ -690,15 +677,6 @@ function ThreadSession({
     }
   };
 
-  const handleMore = useCallback(
-    (previewId: string) => void previews.more(previewId),
-    [previews.more],
-  );
-  const handleRetry = useCallback(
-    (previewId: string) => void previews.retry(previewId),
-    [previews.retry],
-  );
-
   const archive = async (archived: boolean) => {
     if (archiveBusy) return;
     setArchiveBusy(true);
@@ -828,7 +806,6 @@ function ThreadSession({
               {!detail && !loadFailed && !missing ? <ThreadSkeleton /> : null}
               {detail &&
               units.length === 0 &&
-              !previews.state.loading &&
               !thread.loading &&
               !loadFailed ? (
                 <div
@@ -854,40 +831,6 @@ function ThreadSession({
                   />
                 </div>
               ) : null}
-              {previews.state.error ? (
-                <div role="alert" className="py-3 text-sm text-danger">
-                  <p>{previews.state.error.message}</p>
-                  <Button size="sm" onClick={() => void previews.refresh()}>
-                    Retry
-                  </Button>
-                </div>
-              ) : null}
-              {Object.entries(previews.state.resources).map(
-                ([previewId, state]) =>
-                  !state.data &&
-                  state.error &&
-                  ![
-                    "not_found",
-                    "not_a_member",
-                    "not_permitted",
-                    "permission_denied",
-                  ].includes(state.error.code) ? (
-                    <div
-                      key={previewId}
-                      role="alert"
-                      className="py-3 text-sm text-danger"
-                    >
-                      <p>{state.error.message}</p>
-                      <Button
-                        size="sm"
-                        disabled={state.loading}
-                        onClick={() => void previews.retry(previewId)}
-                      >
-                        Retry
-                      </Button>
-                    </div>
-                  ) : null,
-              )}
               <ol
                 className="relative transition-none"
                 hidden={units.length === 0}
@@ -924,12 +867,9 @@ function ThreadSession({
                       <MessageRow
                         discussionId={id}
                         message={message}
-                        preview={unit.preview}
                         identity={unit.key}
                         compact={compact}
                         fresh={false}
-                        onMore={handleMore}
-                        onRetry={handleRetry}
                       />
                     </li>
                   );
@@ -1060,26 +1000,19 @@ export function ScrollToBottomButton({
 export const MessageRow = memo(function MessageRow({
   discussionId,
   message,
-  preview,
   identity,
-  onMore,
-  onRetry,
   compact,
   fresh,
 }: {
   discussionId: number;
-  message?: Message;
-  preview?: PreviewState;
+  message: Message;
   identity?: string;
-  onMore?: (previewId: string) => void;
-  onRetry?: (previewId: string) => void;
   compact: boolean;
   fresh: boolean;
 }) {
   const { members, humanId } = useOrganization();
   const insertMention = useContext(MentionInsert);
   const [copyOpen, setCopyOpen] = useState(false);
-  const saved = preview?.data;
   useEffect(() => {
     if (!copyOpen) return;
     const away = (event: Event) => {
@@ -1091,27 +1024,15 @@ export const MessageRow = memo(function MessageRow({
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [copyOpen]);
-  if (!message && !saved)
-    throw new Error("Message reading unit has no content");
-  const senderId = message?.sender_id ?? saved?.metadata.key.agent_id;
-  if (senderId === undefined) throw new Error("Message sender is missing");
-  const source = message?.body ?? saved?.text.value;
-  const timestamp = message?.created_at ?? saved?.metadata.created_at;
-  if (source === undefined || timestamp === undefined)
-    throw new Error("Message text or timestamp is missing");
+  const senderId = message.sender_id;
+  const source = message.body;
+  const timestamp = message.created_at;
   const name =
-    message?.sender_name ??
+    message.sender_name ??
     members?.find((member) => member.id === senderId)?.name;
-  const status = saved?.metadata.status;
-  const failed = status === "failed" || status === "interrupted";
-  if (!message && failed && !saved?.metadata.error)
-    throw new Error("Generation failure reason is missing");
-  const generating =
-    !message && (status === "generating" || status === "sending");
   return (
     <div
-      data-message-id={message?.id}
-      data-preview-id={!message ? saved?.metadata.preview_id : undefined}
+      data-message-id={message.id}
       data-copy-open={copyOpen ? "true" : undefined}
       className={clsx(
         "message-row flex scroll-m-6 items-start gap-3",
@@ -1164,54 +1085,14 @@ export const MessageRow = memo(function MessageRow({
               </Tooltip>
             </>
           )}
-          {!message && failed && saved ? (
-            <GenerationIndicator
-              state={{
-                status,
-                reason: String(saved.metadata.error),
-              }}
-            />
-          ) : null}
         </div>
         <MarkdownContent
           source={source}
-          identity={identity ?? `message:${discussionId}:${message?.id}`}
-          revision={saved?.text.revision}
-          generating={generating}
-          mentions={message?.mentions}
+          identity={identity ?? `message:${discussionId}:${message.id}`}
+          mentions={message.mentions}
           inlineMedia
         />
-        {generating ? <GenerationIndicator state={{ status }} /> : null}
-        {preview?.error ? (
-          <div role="alert" className="mt-2 text-sm text-danger">
-            <p>{preview.error.message}</p>
-            <Button
-              size="sm"
-              disabled={preview.loading}
-              onClick={() =>
-                preview.data && onRetry?.(preview.data.metadata.preview_id)
-              }
-            >
-              Retry
-            </Button>
-          </div>
-        ) : !message && saved?.text.has_more ? (
-          <Button
-            size="sm"
-            disabled={preview?.loading}
-            aria-label="Load more text"
-            aria-busy={preview?.loading}
-            onClick={() =>
-              preview?.data && onMore?.(preview.data.metadata.preview_id)
-            }
-          >
-            {preview?.loading ? (
-              <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-            ) : null}
-            Load more text
-          </Button>
-        ) : null}
-        {message?.attachments.map((attachment) => (
+        {message.attachments.map((attachment) => (
           <MessageAttachment
             key={attachment.id}
             discussionId={discussionId}

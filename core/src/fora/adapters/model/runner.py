@@ -64,9 +64,6 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    PartDeltaEvent,
-    PartEndEvent,
-    PartStartEvent,
     RetryPromptPart,
     SystemPromptPart,
     ToolCallPart,
@@ -106,7 +103,6 @@ from fora.adapters.model.config import (
     model_settings,
 )
 from fora.adapters.model.context_sources import ContextSources
-from fora.adapters.model.generation import GenerationStream
 from fora.adapters.model.observability import (
     Observability,
     ObservabilityConfig,
@@ -125,7 +121,6 @@ from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, bounded_text
 from fora.ports.agent import (
-    GenerationKey,
     ModelRequestHandle,
     ModelRequestRecorder,
     SettingsStore,
@@ -329,9 +324,6 @@ _EXECUTION_ERRORS = {
     "execution_protocol",
 }
 _tool_call: ContextVar[tuple[int, int, ToolCallPart]] = ContextVar("fora_tool_call")
-_tool_generation: ContextVar[GenerationKey | None] = ContextVar(
-    "fora_tool_generation", default=None
-)
 
 
 @contextmanager
@@ -515,7 +507,6 @@ class LiveModel(WrapperModel):
         self._tools: dict[int, LiveTool] = {}
         self._response_version: str | None = None
         self._context_sources = context_sources
-        self._generation: GenerationStream | None = None
         self._last_request_handle: ModelRequestHandle | None = None
         self._last_response: ModelResponse | None = None
         self.current_request_handle: ModelRequestHandle | None = None
@@ -714,20 +705,6 @@ class LiveModel(WrapperModel):
         if self._live_observer is not None and self.current_request_handle is not None:
             self._live_observer.tool(self.current_request_handle, tool)
 
-    def generation_event(
-        self, event: PartStartEvent | PartDeltaEvent | PartEndEvent
-    ) -> None:
-        if self._generation is not None:
-            self._generation.event(event)
-
-    def generation_key(self, call: ToolCallPart) -> GenerationKey | None:
-        if self._request_recorder is None or self.current_request_handle is None:
-            return None
-        response = self.current_response
-        assert response is not None
-        index = next(index for index, part in enumerate(response.parts) if part is call)
-        return self._request_recorder.generation_key(self.current_request_handle, index)
-
     def tool_started(self, call: ToolCallPart) -> None:
         response = self.current_response
         if response is None or self.current_request_handle is None:
@@ -758,20 +735,6 @@ class LiveModel(WrapperModel):
             if isinstance(part, ToolReturnPart) and part.outcome == "interrupted"
             else "completed"
         )
-        if self._generation is not None:
-            self._generation.tool_result(
-                tool.part_index,
-                "failed"
-                if status == "failed"
-                else "interrupted"
-                if status == "cancelled"
-                else "completed",
-                part.model_response()
-                if isinstance(part, RetryPromptPart)
-                else part.model_response_str()
-                if status in ("failed", "cancelled")
-                else None,
-            )
         result_parts: list[ToolReturnPart | RetryPromptPart | UserPromptPart] = [part]
         if event.content is not None:
             result_parts.append(UserPromptPart(event.content))
@@ -825,7 +788,6 @@ class LiveModel(WrapperModel):
                 model_json,
                 streaming,
             )
-            self._generation = GenerationStream(self._request_recorder, handle)
             if self._live_observer is not None:
                 self._live_observer.started(
                     handle, datetime.now(UTC).isoformat(), model_json
@@ -872,8 +834,6 @@ class LiveModel(WrapperModel):
                 "request_ordinal": handle.ordinal,
             },
         }
-        if self._generation is not None:
-            self._generation.response(list(response.parts))
         self.observe_response(response)
         response_json = _encode_history([response])
         response_version = _response_version(response)
@@ -1263,7 +1223,6 @@ class PydanticModelRunner:
                     lambda: tools.send_message(
                         _required(discussion_id, "discussion_id", action),
                         _required(body, "body", action),
-                        generation_key=_tool_generation.get(),
                     )
                 )
             if action in ("ack", "revoke_ack"):
@@ -1484,15 +1443,11 @@ class PydanticModelRunner:
             handler: WrapToolExecuteHandler,
         ) -> Any:
             token = _tool_call.set((request.agent_id, request.sequence, call))
-            generation_token = _tool_generation.set(
-                live_model.generation_key(call) if live_model is not None else None
-            )
             try:
                 if live_model is not None:
                     live_model.tool_started(call)
                 return await handler(args)
             finally:
-                _tool_generation.reset(generation_token)
                 _tool_call.reset(token)
 
         @hooks.on.before_model_request
@@ -1661,18 +1616,12 @@ class PydanticModelRunner:
         ) -> None:
             assert live_model is not None
             async for event in events:
-                if isinstance(event, PartStartEvent | PartDeltaEvent | PartEndEvent):
-                    live_model.generation_event(event)
-                elif isinstance(event, FunctionToolResultEvent):
+                if isinstance(event, FunctionToolResultEvent):
                     live_model.tool_result(event)
 
         async def once() -> Any:
             nonlocal live_model
             async with AsyncExitStack() as resources:
-                if request.request_recorder is not None:
-                    await resources.enter_async_context(
-                        request.request_recorder.generation_session()
-                    )
                 model = await resources.enter_async_context(self._build_model(config))
                 wrapper = LiveModel(
                     lambda: model,

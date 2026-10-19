@@ -27,7 +27,6 @@ from fora.core.errors import DomainError
 from fora.core.member import AgentState, Member, MemberType, name_key
 from fora.core.mention import Mention, build_mentions
 from fora.locking import LockLevel, OrderedRLock
-from fora.ports.agent import GenerationKey
 from fora.ports.store import (
     DiscussionPage,
     ReadSummary,
@@ -1101,7 +1100,6 @@ class SqliteStore:
         attachment_ids: Sequence[str] = (),
         client_message_id: str | None = None,
         mark_read: bool = False,
-        generation_key: GenerationKey | None = None,
     ) -> tuple[Message, tuple[Mention, ...], bool]:
         validate_body(body, has_attachments=bool(attachment_ids))
         if client_message_id is not None:
@@ -1114,10 +1112,6 @@ class SqliteStore:
             identifier(upload_id)
         with self._write() as db:
             discussion = self._member_discussion(discussion_id, sender_id)
-            if generation_key is not None and generation_key.agent_id != sender_id:
-                raise DomainError(
-                    ErrorCode.INVALID_GENERATION, "Generation sender differs"
-                )
             if client_message_id is not None:
                 state, previous = self.send_outcome(
                     discussion_id, sender_id, client_message_id

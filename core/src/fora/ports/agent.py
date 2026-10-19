@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from fora.core.discussion import Message
 from fora.ports.usage import UsageCache, UsageObservation
 
 
@@ -38,77 +37,6 @@ class RunSummary:
 class ModelRequestHandle:
     ordinal: int
     request_id: str
-
-
-@dataclass(frozen=True)
-class GenerationKey:
-    agent_id: int
-    sequence: int
-    ordinal: int
-    part_index: int
-    request_id: str
-    run_id: str
-
-
-@dataclass(frozen=True)
-class SendPreviewCandidate:
-    discussion_id: int
-    body: str
-
-
-@dataclass(frozen=True)
-class GenerationUpdate:
-    part_kind: str
-    content_json: str
-    status: str = "generating"
-    error: str | None = None
-    preview: SendPreviewCandidate | None = None
-    preview_error: str | None = None
-    history_reference: str | None = None
-    replace_part: bool = False
-
-
-@dataclass(frozen=True)
-class GenerationPart:
-    key: GenerationKey
-    part_kind: str
-    revision: int
-    status: str
-    error: str | None
-    created_at: str
-    updated_at: str
-    tool_name: str | None = None
-    tool_call_id: str | None = None
-
-
-@dataclass(frozen=True)
-class DiscussionPreview:
-    preview_id: str
-    key: GenerationKey
-    discussion_id: int | None
-    revision: int
-    status: str
-    error: str | None
-    message_id: int | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class GenerationMutation:
-    part: GenerationPart
-    preview: DiscussionPreview | None
-    previous_discussion_id: int | None = None
-
-
-@dataclass(frozen=True)
-class GenerationTextPage:
-    revision: int
-    offset: int
-    next_offset: int
-    total_bytes: int
-    value: str
-    has_more: bool
 
 
 @dataclass(frozen=True)
@@ -222,16 +150,6 @@ class AgentLifecycle:
 
 
 class ModelRequestRecorder(Protocol):
-    def generation_session(self) -> AbstractAsyncContextManager[None]: ...
-
-    def generation_key(
-        self, handle: ModelRequestHandle, part_index: int
-    ) -> GenerationKey: ...
-
-    def generation(
-        self, handle: ModelRequestHandle, part_index: int, update: GenerationUpdate
-    ) -> None: ...
-
     def start(
         self,
         messages_json: Sequence[str],
@@ -252,70 +170,6 @@ class ModelRequestRecorder(Protocol):
     def error(self, handle: ModelRequestHandle, error: str) -> None: ...
 
     def success(self, handle: ModelRequestHandle) -> None: ...
-
-
-class GenerationStore(Protocol):
-    def save(
-        self, key: GenerationKey, update: GenerationUpdate
-    ) -> GenerationMutation: ...
-
-    def part(self, key: GenerationKey) -> GenerationPart: ...
-
-    def parts(
-        self,
-        agent_id: int,
-        sequence: int,
-        ordinal: int,
-        *,
-        after: int = -1,
-        limit: int = 100,
-    ) -> tuple[GenerationPart, ...]: ...
-
-    def preview(self, key: GenerationKey) -> DiscussionPreview | None: ...
-
-    def previews(
-        self,
-        discussion_id: int,
-        member_id: int,
-        *,
-        before: tuple[str, str] | None = None,
-        limit: int = 30,
-        include_sent: bool = False,
-    ) -> tuple[DiscussionPreview, ...]: ...
-
-    def visible_preview(
-        self, preview_id: str, discussion_id: int, member_id: int
-    ) -> DiscussionPreview: ...
-
-    def part_text(
-        self,
-        key: GenerationKey,
-        revision: int,
-        offset: int = 0,
-        limit: int = 16384,
-        *,
-        field: str = "json",
-    ) -> GenerationTextPage: ...
-
-    def preview_text(
-        self,
-        preview_id: str,
-        discussion_id: int,
-        member_id: int,
-        revision: int,
-        offset: int = 0,
-        limit: int = 16384,
-    ) -> GenerationTextPage: ...
-
-    def link(self, key: GenerationKey, message: Message) -> DiscussionPreview: ...
-
-    def interrupt(
-        self,
-        *,
-        agent_id: int | None = None,
-        sequence: int | None = None,
-        error: str = "Generation interrupted",
-    ) -> int: ...
 
 
 class HistoryStore(Protocol):
@@ -344,9 +198,6 @@ class HistoryStore(Protocol):
     def usage_read(
         self, record_id: str, observation: UsageObservation | None = None
     ) -> dict[str, Any]: ...
-
-    @property
-    def generation(self) -> GenerationStore: ...
 
     def transaction(self) -> AbstractContextManager[object]: ...
 

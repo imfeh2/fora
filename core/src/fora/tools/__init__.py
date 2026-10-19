@@ -17,7 +17,7 @@ from fora.core.discussion import Discussion, Message, validate_body, validate_to
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import validate_name
-from fora.ports.agent import GenerationKey, HistoryStore, SettingsStore
+from fora.ports.agent import HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
 from fora.ports.files import FileTree
 from fora.ports.store import OrganizationStore, UnreadCounts
@@ -609,20 +609,9 @@ class AgentTools:
         mark_read: bool = True,
         attachment_ids: Sequence[str] = (),
         client_message_id: str | None = None,
-        generation_key: GenerationKey | None = None,
     ) -> dict[str, Any]:
         self._check("discussion.send", discussion_id)
         self._require_membership(discussion_id)
-        if generation_key is not None and (
-            not self._actor.is_agent
-            or self._turn is None
-            or generation_key.agent_id != self._actor.member_id
-            or generation_key.agent_id != self._turn.agent_id
-            or generation_key.sequence != self._turn.sequence
-        ):
-            raise DomainError(
-                ErrorCode.INVALID_GENERATION, "Generation does not belong to this Turn"
-            )
         if type(mark_read) is not bool or (self._actor.is_agent and not mark_read):
             raise DomainError(
                 ErrorCode.NOT_PERMITTED,
@@ -665,8 +654,6 @@ class AgentTools:
             "client_message_id": client_message_id,
             "mark_read": mark_read,
         }
-        if generation_key is not None:
-            options["generation_key"] = generation_key
         message, mentions, created = self._deps.store.submit_message(
             discussion_id, self._actor.member_id, validated, **options
         )

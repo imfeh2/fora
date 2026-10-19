@@ -15,7 +15,6 @@ from fora.adapters.model.config import (
     ModelCatalog,
     thinking_options,
 )
-from fora.adapters.sqlite.generation import SqliteGenerationStore, initialize_generation
 from fora.adapters.sqlite.store import (
     LockedConnection,
     create_member,
@@ -174,8 +173,10 @@ class SqliteAgentStore:
     def __init__(self, db: LockedConnection) -> None:
         self._db = db
         self._db.executescript(SCHEMA)
-        initialize_generation(db)
-        self.generation = SqliteGenerationStore(db)
+        with self._db:
+            self._db.execute("DROP INDEX IF EXISTS discussion_previews_page")
+            self._db.execute("DROP TABLE IF EXISTS discussion_previews")
+            self._db.execute("DROP TABLE IF EXISTS agent_generation_parts")
         request_columns = {
             row["name"]
             for row in self._db.execute("PRAGMA table_info(agent_model_requests)")
@@ -1238,7 +1239,6 @@ class SqliteAgentStore:
                 )
             for row in turns:
                 self._usage.sync_turn(row["agent_id"], row["sequence"])
-            self.generation.interrupt()
         return cursor.rowcount
 
     def mark_session_start(self) -> int:

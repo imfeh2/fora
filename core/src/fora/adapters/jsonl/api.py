@@ -13,7 +13,7 @@ from fora.adapters.voice.config import VoiceConfig
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
-from fora.ports.agent import GenerationKey, SettingsStore
+from fora.ports.agent import SettingsStore
 from fora.ports.usage import UsageCache
 from fora.runtime.scheduler import Scheduler
 from fora.runtime_info import RuntimeInfo
@@ -66,18 +66,6 @@ def _required_string(params: dict[str, Any], name: str) -> str:
             ErrorCode.INVALID_PARAMS, f"{name} must be a non-empty string"
         )
     return value
-
-
-def _generation_bounds(params: dict[str, Any]) -> tuple[int, int, int]:
-    revision = _required_integer(params, "revision")
-    offset = _integer_param(params, "offset", default=0, maximum=2**63 - 1)
-    limit = _integer_param(params, "limit", default=16384, maximum=65536)
-    assert offset is not None and limit is not None
-    if revision == 0 or limit == 0:
-        raise DomainError(
-            ErrorCode.INVALID_PARAMS, "revision and limit must be positive"
-        )
-    return revision, offset, limit
 
 
 def _list_models(values: dict[str, Any], stored: dict[str, Any] | None) -> Any:
@@ -261,24 +249,6 @@ class Api:
         )
 
         register(
-            "discussion.previews",
-            partial(discussion_previews, context),
-            scope=partial(discussion_query, context),
-        )
-
-        register(
-            "discussion.preview",
-            partial(discussion_preview, context),
-            scope=partial(discussion_query, context),
-        )
-
-        register(
-            "discussion.preview.text",
-            partial(discussion_preview_text, context),
-            scope=partial(discussion_query, context),
-        )
-
-        register(
             "discussion.mark_read",
             partial(discussion_mark_read, context),
             scope=partial(discussion_change, context),
@@ -418,18 +388,6 @@ class Api:
             scope=lambda params: RequestScope(
                 reads=(context.member_set,), writes=(Resource("history"),)
             ),
-        )
-
-        register(
-            "agent.generation.parts",
-            partial(agent_generation_parts, context),
-            scope=partial(agent_query, context),
-        )
-
-        register(
-            "agent.generation.text",
-            partial(agent_generation_text, context),
-            scope=partial(agent_query, context),
         )
 
         register(
@@ -582,122 +540,6 @@ def discussion_page(context: _Context, params: dict[str, Any]) -> Any:
         after=params.get("after"),
         metadata=params.get("metadata", False),
     )
-
-
-def discussion_previews(context: _Context, params: dict[str, Any]) -> Any:
-    discussion_id = _required_integer(params, "discussion_id")
-    limit = _integer_param(params, "limit", default=30, maximum=50)
-    assert limit is not None
-    if limit == 0:
-        raise DomainError(ErrorCode.INVALID_PARAMS, "limit must be positive")
-    before = params.get("before")
-    if before is not None and (
-        not isinstance(before, list)
-        or len(before) != 2
-        or any(not isinstance(item, str) or not item for item in before)
-    ):
-        raise DomainError(ErrorCode.INVALID_PARAMS, "before must be a sort key")
-    with context.api._reading():
-        page = context.api._scheduler.history.generation.previews(
-            discussion_id,
-            HUMAN_ID,
-            before=(before[0], before[1]) if before is not None else None,
-            limit=limit + 1,
-            include_sent=True,
-        )
-    previews = page[:limit]
-    has_more = len(page) > limit
-    return {
-        "discussion_id": discussion_id,
-        "previews": [asdict(item) for item in previews],
-        "has_more": has_more,
-        "next_before": [previews[-1].created_at, previews[-1].preview_id]
-        if previews and has_more
-        else None,
-    }
-
-
-def discussion_preview(context: _Context, params: dict[str, Any]) -> Any:
-    discussion_id = _required_integer(params, "discussion_id")
-    preview_id = _required_string(params, "preview_id")
-    with context.api._reading():
-        preview = context.api._scheduler.history.generation.visible_preview(
-            preview_id, discussion_id, HUMAN_ID
-        )
-        body = context.api._scheduler.history.generation.preview_text(
-            preview_id, discussion_id, HUMAN_ID, preview.revision
-        )
-    return {"preview": asdict(preview), "body": asdict(body)}
-
-
-def discussion_preview_text(context: _Context, params: dict[str, Any]) -> Any:
-    discussion_id = _required_integer(params, "discussion_id")
-    preview_id = _required_string(params, "preview_id")
-    revision, offset, limit = _generation_bounds(params)
-    with context.api._reading():
-        page = context.api._scheduler.history.generation.preview_text(
-            preview_id, discussion_id, HUMAN_ID, revision, offset, limit
-        )
-    return asdict(page)
-
-
-def agent_generation_parts(context: _Context, params: dict[str, Any]) -> Any:
-    agent_id = _required_integer(params, "agent_id")
-    sequence = _required_integer(params, "sequence")
-    ordinal = _required_integer(params, "ordinal")
-    after = _integer_param(params, "after", maximum=2**63 - 1)
-    limit = _integer_param(params, "limit", default=30, maximum=50)
-    assert limit is not None
-    if limit == 0:
-        raise DomainError(ErrorCode.INVALID_PARAMS, "limit must be positive")
-    with context.api._reading():
-        context.api._human().authorize_agent_history(agent_id)
-        page = context.api._scheduler.history.generation.parts(
-            agent_id,
-            sequence,
-            ordinal,
-            after=after if after is not None else -1,
-            limit=limit + 1,
-        )
-    parts = page[:limit]
-    has_more = len(page) > limit
-    return {
-        "agent_id": agent_id,
-        "sequence": sequence,
-        "ordinal": ordinal,
-        "parts": [asdict(item) for item in parts],
-        "has_more": has_more,
-        "next_after": parts[-1].key.part_index if parts and has_more else None,
-    }
-
-
-def agent_generation_text(context: _Context, params: dict[str, Any]) -> Any:
-    agent_id = _required_integer(params, "agent_id")
-    sequence = _required_integer(params, "sequence")
-    ordinal = _required_integer(params, "ordinal")
-    part_index = _required_integer(params, "part_index")
-    request_id = _required_string(params, "request_id")
-    field = params.get("field", "json")
-    revision, offset, limit = _generation_bounds(params)
-    with context.api._reading():
-        context.api._human().authorize_agent_history(agent_id)
-        summary = context.api._scheduler.history.model_request_summary(
-            agent_id, sequence, ordinal
-        )
-        if summary is None:
-            raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
-        key = GenerationKey(
-            agent_id,
-            sequence,
-            ordinal,
-            part_index,
-            request_id,
-            summary.run_id,
-        )
-        page = context.api._scheduler.history.generation.part_text(
-            key, revision, offset, limit, field=field
-        )
-    return {"key": asdict(key), "field": field, **asdict(page)}
 
 
 def discussion_mark_read(context: _Context, params: dict[str, Any]) -> Any:
