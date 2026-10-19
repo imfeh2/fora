@@ -1096,6 +1096,7 @@ export const MessageRow = memo(function MessageRow({
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [copyOpen]);
+  const { humanId } = useOrganization();
   if (!message && !saved)
     throw new Error("Message reading unit has no content");
   const senderId = message?.sender_id ?? saved?.metadata.key.agent_id;
@@ -1124,7 +1125,7 @@ export const MessageRow = memo(function MessageRow({
       )}
     >
       <div className="w-[26px] flex-none">
-        {compact ? null : name === undefined ? (
+        {compact ? null : name === undefined || senderId === humanId ? (
           <Avatar memberId={senderId} />
         ) : (
           <ContextMenuArea

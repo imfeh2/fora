@@ -36,15 +36,20 @@ export function ContextMenuArea({
           {actions.map((action) => (
             <ContextMenuPrimitive.Item
               key={action.id}
-              className="flex items-center gap-2 h-7 narrow:min-h-11 touch:min-h-11 py-0 px-2 rounded-xs whitespace-nowrap text-left cursor-default outline-none select-none data-[highlighted]:bg-surface-hover"
+              className="flex items-center gap-2 min-w-0 h-7 narrow:min-h-11 touch:min-h-11 py-0 px-2 rounded-xs text-left cursor-default outline-none select-none data-[highlighted]:bg-surface-hover"
               onSelect={() => action.onSelect()}
             >
               {action.icon ? (
-                <span className="flex text-fg-muted" aria-hidden="true">
+                <span
+                  className="flex shrink-0 text-fg-muted"
+                  aria-hidden="true"
+                >
                   {action.icon}
                 </span>
               ) : null}
-              {action.label}
+              <span className="truncate" title={action.label}>
+                {action.label}
+              </span>
             </ContextMenuPrimitive.Item>
           ))}
         </ContextMenuPrimitive.Content>
