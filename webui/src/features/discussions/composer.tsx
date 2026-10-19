@@ -15,8 +15,6 @@ import {
   autoGrowHeight,
   dismissToast,
   Spinner,
-  StateDot,
-  StatusText,
   Textarea,
   toast,
 } from "@/components/ui/index";
@@ -25,7 +23,6 @@ import {
   type SendComposer,
   useComposer,
 } from "@/features/discussions/composer-state";
-import { agentStateLabel } from "@/features/members/state";
 import {
   candidatesFor,
   completeMention,
@@ -780,9 +777,6 @@ export function Composer({
   };
   const pending = view.draft.pending;
   const failure = pending ? null : view.error;
-  const running = members
-    .filter((member) => member.state === "running")
-    .sort((left, right) => left.id - right.id)[0];
 
   return (
     <div
@@ -792,23 +786,6 @@ export function Composer({
       }}
       className="pointer-events-none absolute inset-x-4 flex justify-center pb-4 narrow:inset-x-2 narrow:pb-[calc(8px+env(safe-area-inset-bottom,0px))]"
     >
-      {running ? (
-        <div
-          role="status"
-          className="pointer-events-none absolute bottom-full left-1/2 mb-2 flex w-full -translate-x-1/2 items-center gap-2 pl-4 pr-16 text-xs text-fg-muted @[601px]:w-3/4"
-        >
-          <span className="font-medium">{running.name}</span>
-          <StatusText
-            dot={
-              <span aria-hidden="true">
-                <StateDot state="running" ping />
-              </span>
-            }
-          >
-            {agentStateLabel(running)}
-          </StatusText>
-        </div>
-      ) : null}
       <div
         ref={compactContainer}
         className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
