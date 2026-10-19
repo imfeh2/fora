@@ -599,13 +599,6 @@ def discussion_send_scope(context: _Context, params: dict[str, Any]) -> RequestS
     return scope
 
 
-def agent_query(context: _Context, params: dict[str, Any]) -> RequestScope:
-    identity = _required_integer(params, "agent_id")
-    return RequestScope(
-        reads=(Resource("member", identity), Resource("history", identity))
-    )
-
-
 def agent_change(context: _Context, params: dict[str, Any]) -> RequestScope:
     return RequestScope(writes=(Resource("member", int(params["agent_id"])),))
 
