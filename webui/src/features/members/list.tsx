@@ -166,11 +166,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
           <StatePanel
             icons={noAgents ? [User, Bot, Users] : [User, Search, Users]}
             title={noAgents ? "No Agents yet" : "No Members match"}
-            description={
-              noAgents
-                ? "Create an Agent to join your organization."
-                : "Try a different name or clear the filters to see all Members."
-            }
+            description={noAgents ? undefined : "Try a different name."}
             action={
               noAgents
                 ? {
@@ -321,7 +317,7 @@ export function MemberCard({
       </div>
 
       <div className="flex items-center justify-between gap-3 pt-1 border-t border-line/50 text-xs">
-        <div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {agent ? (
             <StatusText
               dot={
@@ -332,13 +328,13 @@ export function MemberCard({
               }
             >
               {agentStateLabel(member)}
-              {member.pause_requested && member.state === "running"
-                ? " · Pause requested"
-                : ""}
             </StatusText>
           ) : (
             <span className="text-fg-muted">—</span>
           )}
+          {agent && member.pause_requested && member.state === "running" ? (
+            <span className="text-warning wrap-anywhere">Pause requested</span>
+          ) : null}
         </div>
 
         {agent ? (
@@ -441,9 +437,7 @@ export function MemberRow({
             </StatusText>
           ) : null}
           {agent && member.pause_requested && member.state === "running" ? (
-            <span className="text-warning wrap-anywhere">
-              Pause requested · Current activity will finish
-            </span>
+            <span className="text-warning wrap-anywhere">Pause requested</span>
           ) : null}
           {agent ? (
             <span className="text-fg-muted tabular-nums wrap-anywhere">

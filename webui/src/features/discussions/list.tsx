@@ -300,7 +300,7 @@ export function DiscussionsPage({
             <StatePanel
               icons={[MessageCircle, Search, MessagesSquare]}
               title="No messages match"
-              description="Try a different search or clear it to see your Discussions."
+              description="Try a different search."
               action={{
                 label: "Clear search",
                 icon: <X size={16} />,
@@ -434,7 +434,6 @@ export function DiscussionsPage({
           <StatePanel
             icons={[MessageCircle, MessagesSquare, MessageSquare]}
             title="No Discussions yet"
-            description="Create a Discussion to bring Members together."
             action={
               members !== null && humanId !== null && !backend.disconnected
                 ? {

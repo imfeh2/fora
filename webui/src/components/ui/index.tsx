@@ -389,7 +389,7 @@ export function Badge({
   return <span className={className}>{children}</span>;
 }
 
-export function UnreadDot({ label = "有未读消息" }: { label?: string }) {
+export function UnreadDot({ label = "Unread messages" }: { label?: string }) {
   return (
     <span
       role="img"
@@ -410,7 +410,7 @@ export function UnreadMark({
 }) {
   if (mentions !== null && mentions > 0)
     return (
-      <Badge tone="unread" label={`${mentions} 条提到你`}>
+      <Badge tone="unread" label={`${mentions} mentions you`}>
         {mentions}
       </Badge>
     );

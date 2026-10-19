@@ -895,10 +895,9 @@ function QueryView({
               aria-label="Usage initialization progress"
               className="text-sm text-fg-muted font-mono tabular-nums"
             >
-              Initializing saved usage ·{" "}
-              {formatInteger(String(data.index.processed_requests))} requests
-              processed · {formatInteger(String(data.index.processed_turns))}{" "}
-              activities processed
+              Initializing saved usage:{" "}
+              {formatInteger(String(data.index.processed_requests))} requests,{" "}
+              {formatInteger(String(data.index.processed_turns))} activities
             </p>
           ) : null}
           {!resource.error ? (

@@ -75,7 +75,7 @@ function supportsTokenBudget(apiType: string): boolean {
 }
 
 function thinkingLabel(option: Thinking, budget?: number | null): string {
-  return option === "budget" ? `budget · ${budget} tokens` : option;
+  return option === "budget" ? `budget (${budget} tokens)` : option;
 }
 
 export function modelTestDescription(latency: number, reply: string): string {
@@ -163,7 +163,7 @@ export function ModelSelection({
           ) : null}
           {value.thinking && !options.includes(value.thinking) ? (
             <option value={value.thinking} disabled>
-              {value.thinking} · unavailable for this model
+              {value.thinking} (unavailable for this model)
             </option>
           ) : null}
           {options.map((option) => (
@@ -1014,14 +1014,7 @@ export function ModelPanel({
                       {content}
                     </>
                   ) : (
-                    <EmptyState
-                      title="Select a provider"
-                      action={
-                        <p>
-                          Select a provider to edit its connection and models.
-                        </p>
-                      }
-                    />
+                    <EmptyState title="Select a provider" />
                   )}
                 </div>
               </div>
@@ -1031,7 +1024,7 @@ export function ModelPanel({
                   if (!next) setDeleteProvider(null);
                 }}
                 title={`Delete ${deleteProvider?.name}?`}
-                description="This provider will be removed. Remove its models first."
+                description="This provider will be removed."
                 confirmLabel="Delete"
                 onConfirm={async () => {
                   if (
@@ -1214,7 +1207,7 @@ function ProviderModelEditor({
         open={deleting}
         onOpenChange={setDeleting}
         title={`Delete ${model?.name}?`}
-        description="This model will be removed. Referenced models cannot be deleted."
+        description="This model will be removed if nothing uses it."
         confirmLabel="Delete"
         onConfirm={async () => {
           if (model && !unavailable) await save("delete_model", model.id);

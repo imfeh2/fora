@@ -64,7 +64,7 @@ export async function createLibraryEntry(
   const existing = entries.find((entry) => entry.path === destination);
   if (existing)
     throw new Error(
-      `A ${existing.kind === "directory" ? "folder" : "file"} with this name already exists at this location. Choose another name.`,
+      `A ${existing.kind === "directory" ? "folder" : "file"} with this name already exists.`,
     );
   if (creation.kind === "directory") {
     await backend.mkdirLibrary(destination);
@@ -76,9 +76,7 @@ export async function createLibraryEntry(
         failure instanceof BackendError &&
         failure.code === "expected_hash_required"
       )
-        throw new Error(
-          "A file with this name already exists at this location. Choose another name.",
-        );
+        throw new Error("A file with this name already exists.");
       throw failure;
     }
   }
@@ -427,7 +425,6 @@ export function LibraryPage({ path = "" }: { path?: string }) {
                 <StatePanel
                   icons={[FolderPlus, FileText, File]}
                   title="This folder no longer exists"
-                  description="Go back to the Library root and pick another folder."
                   action={{
                     label: "Back to Library",
                     icon: <X size={16} />,
@@ -450,10 +447,10 @@ export function LibraryPage({ path = "" }: { path?: string }) {
                   }
                   description={
                     needle
-                      ? "Try a different name or clear the search to see the Library."
+                      ? "Try a different name."
                       : empty
-                        ? "Create a document or folder to share information with Members."
-                        : "Create a document here, or open a folder from the tree."
+                        ? undefined
+                        : "Open a folder from the tree."
                   }
                   action={
                     needle

@@ -146,7 +146,7 @@ function ToastView({ item }: { item: ToastItem }) {
         <ToastPrimitive.Title className="m-0 font-medium leading-body">
           {item.title}
         </ToastPrimitive.Title>
-        {item.description ? (
+        {item.description && item.description !== item.title ? (
           <ToastPrimitive.Description className="m-0 text-fg-muted text-xs leading-4 wrap-anywhere">
             {item.description}
           </ToastPrimitive.Description>

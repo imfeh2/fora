@@ -814,7 +814,6 @@ function ThreadSession({
                   <StatePanel
                     icons={[MessageCircle, MessagesSquare, Send]}
                     title="No messages yet"
-                    description="Write the first message to start this Discussion."
                     action={{
                       label: "Write a message",
                       icon: <Send size={16} />,

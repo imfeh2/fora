@@ -1089,14 +1089,14 @@ export function Composer({
             recordingActive
               ? "Stop recording"
               : canSend
-                ? "Send · Enter"
+                ? "Send (Enter)"
                 : "Start voice input"
           }
           title={
             recordingActive
               ? "Stop recording"
               : canSend
-                ? "Send · Enter"
+                ? "Send (Enter)"
                 : "Start voice input"
           }
           disabled={

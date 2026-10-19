@@ -482,7 +482,7 @@ const DIAGNOSIS_TIMEOUT = 5_000;
 export async function diagnoseConnection(url: string): Promise<BackendError> {
   const failure = new BackendError(
     "connection_failed",
-    "Check that Fora is running, then reconnect.",
+    "Check that Fora is running.",
     true,
   );
   const endpoint = new URL(url);
@@ -757,11 +757,7 @@ export class Backend {
         });
         if (opened) {
           this.#disconnect(
-            new BackendError(
-              "disconnected",
-              "Connection lost. Reconnect to continue.",
-              true,
-            ),
+            new BackendError("disconnected", "Connection lost.", true),
           );
           return;
         }
@@ -785,11 +781,7 @@ export class Backend {
     this.#ready = ready;
     const timer = setTimeout(() => {
       this.#disconnect(
-        new BackendError(
-          "connection_timeout",
-          "Connection timed out. Reconnect to try again.",
-          true,
-        ),
+        new BackendError("connection_timeout", "Connection timed out.", true),
       );
     }, REQUEST_TIMEOUT);
     this.#rejectConnection = (error) => {
@@ -914,12 +906,7 @@ export class Backend {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         const error = READ_METHODS.has(method)
-          ? new BackendError(
-              "timeout",
-              "Request timed out. Try reading again.",
-              true,
-              method,
-            )
+          ? new BackendError("timeout", "Request timed out.", true, method)
           : unconfirmed(method);
         const pending = this.#pending.get(id);
         if (!pending) return;

@@ -671,7 +671,7 @@ export default function App() {
         <div className="flex h-full min-h-0 flex-col bg-app">
           <ErrorFace
             title="Something went wrong"
-            description="Fora could not display this window. Reload to start again."
+            description="Fora could not display this window."
             action={{ label: "Reload", run: () => window.location.reload() }}
           />
         </div>
