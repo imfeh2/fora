@@ -199,6 +199,7 @@ export function Composer({
   focusOnReady = false,
   onFocused,
   keyboardOffset = 0,
+  mentionRequest = null,
 }: {
   discussionId: number;
   members: Member[];
@@ -212,11 +213,32 @@ export function Composer({
   focusOnReady?: boolean;
   onFocused?: () => void;
   keyboardOffset?: number;
+  mentionRequest?: { name: string; nonce: number } | null;
 }) {
   const { controller, view } = useComposer(discussionId);
   const body = view.draft.body;
   const files = view.draft.files;
   const setBody = (value: string) => controller.setBody(value);
+  const insertedMention = useRef(0);
+  useEffect(() => {
+    if (
+      mentionRequest === null ||
+      mentionRequest.nonce === insertedMention.current
+    )
+      return;
+    insertedMention.current = mentionRequest.nonce;
+    const element = input.current;
+    const text = `@${mentionRequest.name} `;
+    const value = element?.value ?? body;
+    const start = element?.selectionStart ?? value.length;
+    const end = element?.selectionEnd ?? value.length;
+    setBody(value.slice(0, start) + text + value.slice(end));
+    setCaret(start + text.length);
+    requestAnimationFrame(() => {
+      element?.focus();
+      element?.setSelectionRange(start + text.length, start + text.length);
+    });
+  }, [mentionRequest, body, setBody]);
   const sending = busy || view.busy;
   const canSend =
     !view.draft.pending?.cancelRequested &&

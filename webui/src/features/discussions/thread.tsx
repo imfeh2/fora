@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import {
   Archive,
   ArchiveRestore,
+  AtSign,
   ChevronDown,
   Loader2,
   MessageCircle,
@@ -11,8 +12,10 @@ import {
   Users,
 } from "lucide-react";
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -22,6 +25,7 @@ import {
 import { useOrganization } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader } from "@/components/layout/shell";
+import { ContextMenuArea } from "@/components/ui/context-menu";
 import {
   Avatar,
   AvatarStack,
@@ -59,6 +63,8 @@ import {
   type Message,
 } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
+
+const MentionInsert = createContext<((name: string) => void) | null>(null);
 
 type PositioningKind = "none" | "entry" | "latest" | "follow";
 
@@ -217,6 +223,15 @@ function ThreadSession({
   const monitorLastTop = useRef(-1);
   const unitCache = useRef(new Map<string, ThreadUnit>());
   const unitHeights = useRef(new WeakMap<ThreadUnit, number>());
+  const [mention, setMention] = useState<{
+    name: string;
+    nonce: number;
+  } | null>(null);
+  const mentionNonce = useRef(0);
+  const insertMention = useCallback((name: string) => {
+    mentionNonce.current += 1;
+    setMention({ name, nonce: mentionNonce.current });
+  }, []);
   const units = useMemo(
     () =>
       combineThreadUnits(
@@ -738,253 +753,256 @@ function ThreadSession({
   }, [showScrollButton, returnFocusToStableTarget]);
 
   return (
-    <Page>
-      <PageHeader
-        title={
-          missing
-            ? "Discussion not found"
-            : topic ||
-              (loadFailed ? (
-                "Unavailable"
-              ) : (
-                <Skeleton className="h-6 w-44 max-w-full" />
-              ))
-        }
-        status={detail?.archived ? <Chip>Archived</Chip> : undefined}
-        actions={
-          missing ? (
-            <Button onClick={() => navigate({ name: "discussions" })}>
-              Back to Discussions
-            </Button>
-          ) : detail ? (
-            <>
-              <Tooltip label={names.join("\n")}>
-                <Button
-                  variant="ghost"
-                  aria-label="Members"
-                  onClick={() => setEditingMembers(true)}
-                >
-                  <AvatarStack members={detail.members} />
-                </Button>
-              </Tooltip>
-              <OverflowMenu
-                label="Discussion actions"
-                actions={[
-                  {
-                    id: "members",
-                    label: "Members",
-                    icon: <Users size={15} />,
-                    onSelect: () => setEditingMembers(true),
-                  },
-                  detail.archived
-                    ? {
-                        id: "unarchive",
-                        label: "Unarchive",
-                        icon: <ArchiveRestore size={15} />,
-                        disabled: archiveBusy,
-                        onSelect: () => void archive(false),
-                      }
-                    : {
-                        id: "archive",
-                        label: "Archive",
-                        icon: <Archive size={15} />,
-                        disabled: archiveBusy,
-                        onSelect: () => void archive(true),
-                      },
-                ]}
-              />
-            </>
-          ) : undefined
-        }
-      />
-
-      <PageBody variant="flush">
-        <div className="@container relative flex min-h-0 flex-1 flex-col">
-          <div
-            ref={scroll}
-            className="min-h-0 min-w-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 narrow:px-3 [overflow-anchor:none]"
-            onScroll={() => {
-              shouldFollowBottom.current = false;
-              if (positioningInterrupted.current && scroll.current)
-                virtual.scrollToOffset(scroll.current.scrollTop);
-              sample(true);
-            }}
-            onWheel={stopPositioning}
-            onTouchStart={stopPositioning}
-            onPointerDown={stopPositioning}
-            aria-busy={thread.loading}
-          >
-            {!detail && !loadFailed && !missing ? <ThreadSkeleton /> : null}
-            {detail &&
-            units.length === 0 &&
-            !previews.state.loading &&
-            !thread.loading &&
-            !loadFailed ? (
-              <div
-                className="flex min-h-full flex-col"
-                style={{ paddingBottom: composerSize + keyboardOffset + 24 }}
-              >
-                <StatePanel
-                  icons={[MessageCircle, MessagesSquare, Send]}
-                  title="No messages yet"
-                  description="Write the first message to start this Discussion."
-                  action={{
-                    label: "Write a message",
-                    icon: <Send size={16} />,
-                    onClick: () => {
-                      const input =
-                        scroll.current?.parentElement?.querySelector<HTMLTextAreaElement>(
-                          'textarea[aria-label="Message"]',
-                        );
-                      if (!input) throw new Error("Message input is missing");
-                      input.focus();
+    <MentionInsert.Provider value={insertMention}>
+      <Page>
+        <PageHeader
+          title={
+            missing
+              ? "Discussion not found"
+              : topic ||
+                (loadFailed ? (
+                  "Unavailable"
+                ) : (
+                  <Skeleton className="h-6 w-44 max-w-full" />
+                ))
+          }
+          status={detail?.archived ? <Chip>Archived</Chip> : undefined}
+          actions={
+            missing ? (
+              <Button onClick={() => navigate({ name: "discussions" })}>
+                Back to Discussions
+              </Button>
+            ) : detail ? (
+              <>
+                <Tooltip label={names.join("\n")}>
+                  <Button
+                    variant="ghost"
+                    aria-label="Members"
+                    onClick={() => setEditingMembers(true)}
+                  >
+                    <AvatarStack members={detail.members} />
+                  </Button>
+                </Tooltip>
+                <OverflowMenu
+                  label="Discussion actions"
+                  actions={[
+                    {
+                      id: "members",
+                      label: "Members",
+                      icon: <Users size={15} />,
+                      onSelect: () => setEditingMembers(true),
                     },
+                    detail.archived
+                      ? {
+                          id: "unarchive",
+                          label: "Unarchive",
+                          icon: <ArchiveRestore size={15} />,
+                          disabled: archiveBusy,
+                          onSelect: () => void archive(false),
+                        }
+                      : {
+                          id: "archive",
+                          label: "Archive",
+                          icon: <Archive size={15} />,
+                          disabled: archiveBusy,
+                          onSelect: () => void archive(true),
+                        },
+                  ]}
+                />
+              </>
+            ) : undefined
+          }
+        />
+
+        <PageBody variant="flush">
+          <div className="@container relative flex min-h-0 flex-1 flex-col">
+            <div
+              ref={scroll}
+              className="min-h-0 min-w-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 narrow:px-3 [overflow-anchor:none]"
+              onScroll={() => {
+                shouldFollowBottom.current = false;
+                if (positioningInterrupted.current && scroll.current)
+                  virtual.scrollToOffset(scroll.current.scrollTop);
+                sample(true);
+              }}
+              onWheel={stopPositioning}
+              onTouchStart={stopPositioning}
+              onPointerDown={stopPositioning}
+              aria-busy={thread.loading}
+            >
+              {!detail && !loadFailed && !missing ? <ThreadSkeleton /> : null}
+              {detail &&
+              units.length === 0 &&
+              !previews.state.loading &&
+              !thread.loading &&
+              !loadFailed ? (
+                <div
+                  className="flex min-h-full flex-col"
+                  style={{ paddingBottom: composerSize + keyboardOffset + 24 }}
+                >
+                  <StatePanel
+                    icons={[MessageCircle, MessagesSquare, Send]}
+                    title="No messages yet"
+                    description="Write the first message to start this Discussion."
+                    action={{
+                      label: "Write a message",
+                      icon: <Send size={16} />,
+                      onClick: () => {
+                        const input =
+                          scroll.current?.parentElement?.querySelector<HTMLTextAreaElement>(
+                            'textarea[aria-label="Message"]',
+                          );
+                        if (!input) throw new Error("Message input is missing");
+                        input.focus();
+                      },
+                    }}
+                  />
+                </div>
+              ) : null}
+              {previews.state.error ? (
+                <div role="alert" className="py-3 text-sm text-danger">
+                  <p>{previews.state.error.message}</p>
+                  <Button size="sm" onClick={() => void previews.refresh()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : null}
+              {Object.entries(previews.state.resources).map(
+                ([previewId, state]) =>
+                  !state.data &&
+                  state.error &&
+                  ![
+                    "not_found",
+                    "not_a_member",
+                    "not_permitted",
+                    "permission_denied",
+                  ].includes(state.error.code) ? (
+                    <div
+                      key={previewId}
+                      role="alert"
+                      className="py-3 text-sm text-danger"
+                    >
+                      <p>{state.error.message}</p>
+                      <Button
+                        size="sm"
+                        disabled={state.loading}
+                        onClick={() => void previews.retry(previewId)}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  ) : null,
+              )}
+              <ol
+                className="relative transition-none"
+                hidden={units.length === 0}
+                style={{ height: virtual.getTotalSize() }}
+              >
+                {items.map((item) => {
+                  const unit = units[item.index];
+                  const message = unit.message;
+                  const previousSender =
+                    item.index === 0
+                      ? detail?.previousSender
+                      : units[item.index - 1].senderId;
+                  const divider = message?.id === detail?.divider;
+                  const compact = !divider && previousSender === unit.senderId;
+                  return (
+                    <li
+                      key={item.key}
+                      ref={virtual.measureElement}
+                      data-index={item.index}
+                      className="absolute top-0 left-0 w-full"
+                      style={{
+                        transform: `translateY(${item.start}px)`,
+                        paddingTop: compact ? 4 : 16,
+                      }}
+                    >
+                      {divider ? (
+                        <div
+                          data-new-divider
+                          className="mb-4 flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40"
+                        >
+                          <span>New</span>
+                        </div>
+                      ) : null}
+                      <MessageRow
+                        discussionId={id}
+                        message={message}
+                        preview={unit.preview}
+                        identity={unit.key}
+                        compact={compact}
+                        fresh={false}
+                        onMore={handleMore}
+                        onRetry={handleRetry}
+                      />
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+            {showScrollButton ? (
+              <div
+                className="absolute right-8 narrow:right-3 z-10"
+                style={{ bottom: composerSize + keyboardOffset + 8 }}
+              >
+                <ScrollToBottomButton
+                  buttonRef={scrollButtonRef}
+                  unreadCount={unreadCount}
+                  loading={thread.loading}
+                  onClick={handleScrollToBottom}
+                  onFocus={() => {
+                    buttonHeldFocus.current = true;
+                  }}
+                  onBlur={(event) => {
+                    if (
+                      event.relatedTarget &&
+                      event.relatedTarget !== document.body
+                    ) {
+                      buttonHeldFocus.current = false;
+                    }
                   }}
                 />
               </div>
             ) : null}
-            {previews.state.error ? (
-              <div role="alert" className="py-3 text-sm text-danger">
-                <p>{previews.state.error.message}</p>
-                <Button size="sm" onClick={() => void previews.refresh()}>
-                  Retry
-                </Button>
-              </div>
-            ) : null}
-            {Object.entries(previews.state.resources).map(
-              ([previewId, state]) =>
-                !state.data &&
-                state.error &&
-                ![
-                  "not_found",
-                  "not_a_member",
-                  "not_permitted",
-                  "permission_denied",
-                ].includes(state.error.code) ? (
-                  <div
-                    key={previewId}
-                    role="alert"
-                    className="py-3 text-sm text-danger"
-                  >
-                    <p>{state.error.message}</p>
-                    <Button
-                      size="sm"
-                      disabled={state.loading}
-                      onClick={() => void previews.retry(previewId)}
-                    >
-                      Retry
-                    </Button>
-                  </div>
-                ) : null,
-            )}
-            <ol
-              className="relative transition-none"
-              hidden={units.length === 0}
-              style={{ height: virtual.getTotalSize() }}
-            >
-              {items.map((item) => {
-                const unit = units[item.index];
-                const message = unit.message;
-                const previousSender =
-                  item.index === 0
-                    ? detail?.previousSender
-                    : units[item.index - 1].senderId;
-                const divider = message?.id === detail?.divider;
-                const compact = !divider && previousSender === unit.senderId;
-                return (
-                  <li
-                    key={item.key}
-                    ref={virtual.measureElement}
-                    data-index={item.index}
-                    className="absolute top-0 left-0 w-full"
-                    style={{
-                      transform: `translateY(${item.start}px)`,
-                      paddingTop: compact ? 4 : 16,
-                    }}
-                  >
-                    {divider ? (
-                      <div
-                        data-new-divider
-                        className="mb-4 flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40"
-                      >
-                        <span>New</span>
-                      </div>
-                    ) : null}
-                    <MessageRow
-                      discussionId={id}
-                      message={message}
-                      preview={unit.preview}
-                      identity={unit.key}
-                      compact={compact}
-                      fresh={false}
-                      onMore={handleMore}
-                      onRetry={handleRetry}
-                    />
-                  </li>
-                );
-              })}
-            </ol>
+
+            <Composer
+              discussionId={id}
+              members={members}
+              memberIds={memberIds}
+              busy={busy}
+              disabled={
+                !detail || !memberIds.has(humanId) || backend.disconnected
+              }
+              placeholder={topic ? `Message ${topic}` : "Message"}
+              onSend={send}
+              onHeightChange={resizeComposer}
+              focusOnReady={focusComposer}
+              onFocused={onComposerFocused}
+              keyboardOffset={keyboardOffset}
+              mentionRequest={mention}
+              onOpenVoiceSettings={() =>
+                navigate({ name: "settings", section: "voice" })
+              }
+            />
           </div>
-          {showScrollButton ? (
-            <div
-              className="absolute right-8 narrow:right-3 z-10"
-              style={{ bottom: composerSize + keyboardOffset + 8 }}
-            >
-              <ScrollToBottomButton
-                buttonRef={scrollButtonRef}
-                unreadCount={unreadCount}
-                loading={thread.loading}
-                onClick={handleScrollToBottom}
-                onFocus={() => {
-                  buttonHeldFocus.current = true;
-                }}
-                onBlur={(event) => {
-                  if (
-                    event.relatedTarget &&
-                    event.relatedTarget !== document.body
-                  ) {
-                    buttonHeldFocus.current = false;
-                  }
-                }}
-              />
-            </div>
-          ) : null}
+        </PageBody>
 
-          <Composer
+        {editingMembers && detail ? (
+          <DiscussionMembersDialog
             discussionId={id}
-            members={members}
-            memberIds={memberIds}
-            busy={busy}
-            disabled={
-              !detail || !memberIds.has(humanId) || backend.disconnected
-            }
-            placeholder={topic ? `Message ${topic}` : "Message"}
-            onSend={send}
-            onHeightChange={resizeComposer}
-            focusOnReady={focusComposer}
-            onFocused={onComposerFocused}
-            keyboardOffset={keyboardOffset}
-            onOpenVoiceSettings={() =>
-              navigate({ name: "settings", section: "voice" })
-            }
+            memberIds={detail.members.map((member) => member.id)}
+            onClose={() => setEditingMembers(false)}
+            onSaved={async (ids) => {
+              await refresh();
+              if (!thread.live.current) return;
+              if (ids.includes(humanId)) await load();
+              else navigate({ name: "discussions" });
+            }}
           />
-        </div>
-      </PageBody>
-
-      {editingMembers && detail ? (
-        <DiscussionMembersDialog
-          discussionId={id}
-          memberIds={detail.members.map((member) => member.id)}
-          onClose={() => setEditingMembers(false)}
-          onSaved={async (ids) => {
-            await refresh();
-            if (!thread.live.current) return;
-            if (ids.includes(humanId)) await load();
-            else navigate({ name: "discussions" });
-          }}
-        />
-      ) : null}
-    </Page>
+        ) : null}
+      </Page>
+    </MentionInsert.Provider>
   );
 }
 
@@ -1064,6 +1082,7 @@ export const MessageRow = memo(function MessageRow({
   fresh: boolean;
 }) {
   const { members } = useOrganization();
+  const insertMention = useContext(MentionInsert);
   const [copyOpen, setCopyOpen] = useState(false);
   const saved = preview?.data;
   useEffect(() => {
@@ -1105,7 +1124,26 @@ export const MessageRow = memo(function MessageRow({
       )}
     >
       <div className="w-[26px] flex-none">
-        {compact ? null : <Avatar memberId={senderId} />}
+        {compact ? null : name === undefined ? (
+          <Avatar memberId={senderId} />
+        ) : (
+          <ContextMenuArea
+            asChild
+            label={`Actions for ${name}`}
+            actions={[
+              {
+                id: "mention",
+                label: `@${name}`,
+                icon: <AtSign size={15} />,
+                onSelect: () => insertMention?.(name),
+              },
+            ]}
+          >
+            <span>
+              <Avatar memberId={senderId} />
+            </span>
+          </ContextMenuArea>
+        )}
       </div>
       <div
         className="relative -ml-3 min-w-0 flex-1 border-l-2 border-l-transparent pl-3"

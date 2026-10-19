@@ -1,7 +1,14 @@
 import { clsx } from "clsx";
-import { ChevronLeft, ChevronRight, FileVideo, Play } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileVideo,
+  FolderOpen,
+  Play,
+} from "lucide-react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { documentPath, useNavigate } from "@/app/router";
+import { ContextMenuArea } from "@/components/ui/context-menu";
 import { Modal } from "@/components/ui/dialog";
 import { Button, IconButton, Spinner } from "@/components/ui/index";
 import { mediaKind } from "@/features/library/media";
@@ -422,6 +429,7 @@ export function InlineMediaImage({
   const [attempt, setAttempt] = useState(0);
   const [size, setSize] = useState(() => imageSizeOf(path));
   const [open, setOpen] = useState<number | null>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const abort = new AbortController();
@@ -469,24 +477,37 @@ export function InlineMediaImage({
           </div>
         </div>
       ) : (
-        <div
-          className="inline-media inline-media-single"
-          style={singleBox(size)}
+        <ContextMenuArea
+          asChild
+          label={`Actions for ${label}`}
+          actions={[
+            {
+              id: "library",
+              label: "Open in Library",
+              icon: <FolderOpen size={15} />,
+              onSelect: () => navigate({ name: "library", path }),
+            },
+          ]}
         >
-          <button
-            type="button"
-            className="inline-media-open"
-            aria-label={`View ${label}`}
-            onClick={() => setOpen(openIndex(gallery, offset))}
+          <div
+            className="inline-media inline-media-single"
+            style={singleBox(size)}
           >
-            <img
-              src={url}
-              alt={alt}
-              title={alt || undefined}
-              onError={() => setFailed(true)}
-            />
-          </button>
-        </div>
+            <button
+              type="button"
+              className="inline-media-open"
+              aria-label={`View ${label}`}
+              onClick={() => setOpen(openIndex(gallery, offset))}
+            >
+              <img
+                src={url}
+                alt={alt}
+                title={alt || undefined}
+                onError={() => setFailed(true)}
+              />
+            </button>
+          </div>
+        </ContextMenuArea>
       )}
       {open === null ? null : (
         <ImageViewer
@@ -576,23 +597,38 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
 
   if (entrySize !== null && entrySize > VIDEO_BYTES_LIMIT)
     return (
-      <a
-        href={documentPath(path)}
-        className="inline-media-file"
-        onClick={(event) => {
-          event.preventDefault();
-          navigate({ name: "library", path });
-        }}
+      <ContextMenuArea
+        asChild
+        label={`Actions for ${name}`}
+        actions={[
+          {
+            id: "library",
+            label: "Open in Library",
+            icon: <FolderOpen size={15} />,
+            onSelect: () => navigate({ name: "library", path }),
+          },
+        ]}
       >
-        <FileVideo size={20} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm" title={name}>
-            {name}
+        <a
+          href={documentPath(path)}
+          className="inline-media-file"
+          onClick={(event) => {
+            event.preventDefault();
+            navigate({ name: "library", path });
+          }}
+        >
+          <FileVideo size={20} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm" title={name}>
+              {name}
+            </div>
+            <div className="text-xs text-fg-muted">
+              {formatBytes(entrySize)}
+            </div>
           </div>
-          <div className="text-xs text-fg-muted">{formatBytes(entrySize)}</div>
-        </div>
-        <Play size={14} />
-      </a>
+          <Play size={14} />
+        </a>
+      </ContextMenuArea>
     );
 
   if (failed)
@@ -609,49 +645,75 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
       {url === null ? (
         <div className="inline-media-placeholder">
           {visible && entryReady ? (
-            <button
-              type="button"
-              className="inline-media-play"
-              aria-label={`Play ${name}`}
-              disabled={busy}
-              onClick={() => void start()}
+            <ContextMenuArea
+              asChild
+              label={`Actions for ${name}`}
+              actions={[
+                {
+                  id: "library",
+                  label: "Open in Library",
+                  icon: <FolderOpen size={15} />,
+                  onSelect: () => navigate({ name: "library", path }),
+                },
+              ]}
             >
-              {busy ? <Spinner label="Loading video" /> : <Play size={22} />}
-            </button>
+              <button
+                type="button"
+                className="inline-media-play"
+                aria-label={`Play ${name}`}
+                disabled={busy}
+                onClick={() => void start()}
+              >
+                {busy ? <Spinner label="Loading video" /> : <Play size={22} />}
+              </button>
+            </ContextMenuArea>
           ) : null}
         </div>
       ) : (
-        <video
-          ref={video}
-          className="inline-media-player"
-          src={url}
-          controls
-          autoPlay
-          playsInline
-          preload="none"
-          aria-label={name}
-          onPlay={() => setPlaying(true)}
-          onPause={() => {
-            setPlaying(false);
-            if (!visible) {
+        <ContextMenuArea
+          asChild
+          label={`Actions for ${name}`}
+          actions={[
+            {
+              id: "library",
+              label: "Open in Library",
+              icon: <FolderOpen size={15} />,
+              onSelect: () => navigate({ name: "library", path }),
+            },
+          ]}
+        >
+          <video
+            ref={video}
+            className="inline-media-player"
+            src={url}
+            controls
+            autoPlay
+            playsInline
+            preload="none"
+            aria-label={name}
+            onPlay={() => setPlaying(true)}
+            onPause={() => {
+              setPlaying(false);
+              if (!visible) {
+                setUrl(null);
+                hold.current?.release();
+                hold.current = null;
+              }
+              trimVideoObjects();
+            }}
+            onEnded={() => {
+              setPlaying(false);
+              trimVideoObjects();
+            }}
+            onError={() => {
+              setPlaying(false);
               setUrl(null);
               hold.current?.release();
               hold.current = null;
-            }
-            trimVideoObjects();
-          }}
-          onEnded={() => {
-            setPlaying(false);
-            trimVideoObjects();
-          }}
-          onError={() => {
-            setPlaying(false);
-            setUrl(null);
-            hold.current?.release();
-            hold.current = null;
-            setFailed(true);
-          }}
-        />
+              setFailed(true);
+            }}
+          />
+        </ContextMenuArea>
       )}
     </div>
   );
@@ -667,6 +729,7 @@ export function MediaGrid({
   gallery: InlineMediaEntry[];
 }) {
   const [open, setOpen] = useState<number | null>(null);
+  const navigate = useNavigate();
   const total = items.length;
   const shown =
     total > IMAGE_LIST_LIMIT ? items.slice(0, IMAGE_LIST_LIMIT) : items;
@@ -690,25 +753,39 @@ export function MediaGrid({
               const more =
                 total > IMAGE_LIST_LIMIT && index === IMAGE_LIST_LIMIT - 1;
               return (
-                <button
-                  type="button"
+                <ContextMenuArea
+                  asChild
                   key={`${item.path}:${index}`}
-                  className={clsx(
-                    "inline-media-cell inline-media-open",
-                    more && "inline-media-more",
-                  )}
-                  aria-label={
-                    more ? `View all ${total} images` : `View ${label(item)}`
-                  }
-                  onClick={() => setOpen(openIndex(gallery, item.offset))}
+                  label={`Actions for ${label(item)}`}
+                  actions={[
+                    {
+                      id: "library",
+                      label: "Open in Library",
+                      icon: <FolderOpen size={15} />,
+                      onSelect: () =>
+                        navigate({ name: "library", path: item.path }),
+                    },
+                  ]}
                 >
-                  <ImageCell path={item.path} alt={item.alt} />
-                  {more ? (
-                    <span className="inline-media-more-label">
-                      +{total - IMAGE_LIST_LIMIT + 1}
-                    </span>
-                  ) : null}
-                </button>
+                  <button
+                    type="button"
+                    className={clsx(
+                      "inline-media-cell inline-media-open",
+                      more && "inline-media-more",
+                    )}
+                    aria-label={
+                      more ? `View all ${total} images` : `View ${label(item)}`
+                    }
+                    onClick={() => setOpen(openIndex(gallery, item.offset))}
+                  >
+                    <ImageCell path={item.path} alt={item.alt} />
+                    {more ? (
+                      <span className="inline-media-more-label">
+                        +{total - IMAGE_LIST_LIMIT + 1}
+                      </span>
+                    ) : null}
+                  </button>
+                </ContextMenuArea>
               );
             })}
           </div>
