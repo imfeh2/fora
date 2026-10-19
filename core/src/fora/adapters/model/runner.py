@@ -1061,12 +1061,18 @@ class PydanticModelRunner:
             sequential=True,
             description=(
                 "Manage organization Members and Agent model settings. "
+                "list_members returns every active Member with id, type, name and state. "
                 "list_models returns public model IDs, thinking options, budgets, and defaults. "
                 "get_model returns an Agent's saved model_config and effective selection. "
                 "set_model sets an Agent's model_config; an empty object follows the global default. "
                 "create_agent accepts model_config with optional model_id and thinking fields; "
                 "omitting the object or either field inherits the matching global setting, "
-                "while thinking=default keeps the model's default thinking behavior."
+                "while thinking=default keeps the model's default thinking behavior. "
+                "rename takes member_id and name and changes that Member's name. "
+                "pause, resume and delete take member_id and act on one Agent: "
+                "pause lets the current Turn finish and then stops the Agent, "
+                "resume returns a paused Agent to idle, "
+                "delete removes the Agent and its model selection permanently and cannot be undone."
             ),
         )
         def organization(
@@ -1099,24 +1105,24 @@ class PydanticModelRunner:
                         _required(member_id, "member_id", action), model_config
                     )
                 )
-            if action == "rename_member":
+            if action in ("rename", "rename_member"):
                 return _guard(
                     lambda: tools.rename_member(
                         _required(member_id, "member_id", action),
                         _required(name, "name", action),
                     )
                 )
-            if action == "pause_agent":
+            if action in ("pause", "pause_agent"):
                 return _guard(
                     lambda: tools.pause_agent(_required(member_id, "member_id", action))
                 )
-            if action == "resume_agent":
+            if action in ("resume", "resume_agent"):
                 return _guard(
                     lambda: tools.resume_agent(
                         _required(member_id, "member_id", action)
                     )
                 )
-            if action == "delete_agent":
+            if action in ("delete", "delete_agent"):
                 return _guard(
                     lambda: tools.delete_agent(
                         _required(member_id, "member_id", action)
