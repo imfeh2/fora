@@ -410,7 +410,7 @@ export function UnreadMark({
 }) {
   if (mentions !== null && mentions > 0)
     return (
-      <Badge tone="unread" label={`${mentions} mentions you`}>
+      <Badge tone="unread" label={`Mentions of you: ${mentions}`}>
         {mentions}
       </Badge>
     );
