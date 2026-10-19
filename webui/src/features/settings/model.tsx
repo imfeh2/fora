@@ -75,7 +75,9 @@ function supportsTokenBudget(apiType: string): boolean {
 }
 
 function thinkingLabel(option: Thinking, budget?: number | null): string {
-  return option === "budget" ? `budget (${budget} tokens)` : option;
+  const value =
+    typeof budget === "number" ? budget.toLocaleString("en-US") : budget;
+  return option === "budget" ? `budget (${value} tokens)` : option;
 }
 
 export function modelTestDescription(latency: number, reply: string): string {
