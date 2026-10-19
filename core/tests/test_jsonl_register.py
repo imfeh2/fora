@@ -197,3 +197,13 @@ def test_handler_bodies_are_unchanged() -> None:
         nodes = found[name]
         assert len(nodes) == 1
         assert _body(nodes[0]) == expected
+
+
+def test_every_public_function_is_locked() -> None:
+    tree = ast.parse(SOURCE.read_text())
+    public = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+    }
+    assert public == set(BODIES)
