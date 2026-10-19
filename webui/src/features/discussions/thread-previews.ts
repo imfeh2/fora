@@ -32,60 +32,21 @@ export type ThreadUnit = {
 
 export function combineThreadUnits(
   messages: ThreadMessage[],
-  directory: PreviewDirectory,
   cache?: Map<string, ThreadUnit>,
 ): ThreadUnit[] {
-  const present = new Set<number>();
-  const aliases = new Set(
-    messages.map((message) => directory.aliases[message.id]),
-  );
-  const units: ThreadUnit[] = messages.map((message) => {
-    present.add(message.id);
-    const alias = directory.aliases[message.id];
-    const preview = alias ? directory.metadata[alias] : undefined;
-    const key = alias ? `preview:${alias}` : `message:${message.id}`;
+  return messages.map((message) => {
+    const key = `message:${message.id}`;
     const cached = cache?.get(key);
-    if (cached && cached.message === message && cached.preview === preview)
-      return cached;
+    if (cached && cached.message === message) return cached;
     const unit = {
       key,
-      timestamp: preview?.created_at ?? message.created_at,
+      timestamp: message.created_at,
       senderId: message.sender_id,
       message,
     };
     cache?.set(key, unit);
     return unit;
   });
-  for (const [id, resource] of Object.entries(directory.resources)) {
-    const preview = resource.data?.metadata;
-    if (
-      !preview ||
-      aliases.has(id) ||
-      (preview.message_id !== null && present.has(preview.message_id))
-    )
-      continue;
-    const key = `preview:${id}`;
-    const cached = cache?.get(key);
-    if (cached && cached.preview === resource) {
-      units.push(cached);
-      continue;
-    }
-    const unit = {
-      key,
-      senderId: preview.key.agent_id,
-      timestamp: preview.created_at,
-      preview: resource,
-    };
-    cache?.set(key, unit);
-    units.push(unit);
-  }
-  return units.sort(
-    (left, right) =>
-      left.timestamp.localeCompare(right.timestamp) ||
-      (left.message && right.message
-        ? left.message.id - right.message.id
-        : left.key.localeCompare(right.key)),
-  );
 }
 
 export class DiscussionPreviewReader {

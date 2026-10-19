@@ -85,7 +85,7 @@ class _TurnRequestRecorder:
         self._run = run
         self._window_number = window_number
         self._progress = progress
-        self._generation = GenerationRecorder(history, run, notify)
+        self._generation = GenerationRecorder(run, notify)
 
     def generation_session(self) -> AbstractAsyncContextManager[None]:
         return self._generation.session()

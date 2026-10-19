@@ -670,21 +670,12 @@ class AgentTools:
         message, mentions, created = self._deps.store.submit_message(
             discussion_id, self._actor.member_id, validated, **options
         )
-        mapping: dict[str, Any] = {}
-        if generation_key is not None:
-            preview = self._deps.history.generation.preview(generation_key)
-            assert preview is not None and preview.status == "sent"
-            mapping = {
-                "preview_id": preview.preview_id,
-                "preview_revision": preview.revision,
-            }
         if not created:
             return {
                 "discussion_id": discussion_id,
                 "id": message.id,
                 "created_at": message.created_at,
                 "mentioned": [],
-                **mapping,
             }
         self._record(
             "send",
@@ -698,7 +689,6 @@ class AgentTools:
                 "id": message.id,
                 "created_at": message.created_at,
                 "mentioned": [item.member_id for item in mentions],
-                **mapping,
             },
         )
 

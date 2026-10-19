@@ -8,28 +8,24 @@ from dataclasses import replace
 from fora.ports.agent import (
     AgentRun,
     GenerationKey,
-    GenerationMutation,
     GenerationUpdate,
-    HistoryStore,
     ModelRequestHandle,
 )
-from fora.runtime.reminder import HistoryPersistenceError
 
 
 class GenerationRecorder:
     def __init__(
         self,
-        history: HistoryStore,
         run: AgentRun,
         notify: Callable[[str, dict[str, object]], None],
     ) -> None:
-        self._history = history
         self._run = run
         self._notify = notify
         self._handles: set[ModelRequestHandle] = set()
         self._closed: set[ModelRequestHandle] = set()
         self._updates: dict[GenerationKey, GenerationUpdate] = {}
         self._pending: dict[GenerationKey, GenerationUpdate] = {}
+        self._revisions: dict[GenerationKey, int] = {}
         self._event: asyncio.Event | None = None
         self._finished = False
 
@@ -75,9 +71,9 @@ class GenerationRecorder:
         elif self._event is not None:
             self._event.set()
 
-    def _publish(self, mutation: GenerationMutation) -> None:
-        part = mutation.part
-        key = part.key
+    def _publish(self, key: GenerationKey) -> None:
+        revision = self._revisions.get(key, 0) + 1
+        self._revisions[key] = revision
         self._notify(
             "turn.generation",
             {
@@ -87,41 +83,18 @@ class GenerationRecorder:
                 "request_id": key.request_id,
                 "run_id": key.run_id,
                 "part_index": key.part_index,
-                "revision": part.revision,
+                "revision": revision,
             },
         )
-        preview = mutation.preview
-        if preview is None:
-            return
-        targets = {
-            target
-            for target in (mutation.previous_discussion_id, preview.discussion_id)
-            if target is not None
-        }
-        for discussion_id in sorted(targets):
-            self._notify(
-                "discussion.preview",
-                {
-                    "discussion_id": discussion_id,
-                    "preview_id": preview.preview_id,
-                    "revision": preview.revision,
-                },
-            )
 
     def flush(self, handle: ModelRequestHandle | None = None) -> None:
-        for key, update in tuple(self._pending.items()):
+        for key in tuple(self._pending):
             if handle is not None and (
                 key.ordinal != handle.ordinal or key.request_id != handle.request_id
             ):
                 continue
-            try:
-                mutation = self._history.generation.save(key, update)
-            except Exception as error:
-                raise HistoryPersistenceError(
-                    "Could not save generation content"
-                ) from error
             del self._pending[key]
-            self._publish(mutation)
+            self._publish(key)
 
     def response(self, handle: ModelRequestHandle) -> None:
         for key, update in tuple(self._updates.items()):
@@ -137,23 +110,13 @@ class GenerationRecorder:
         for key, update in tuple(self._updates.items()):
             if key.ordinal != handle.ordinal:
                 continue
-            preview = self._history.generation.preview(key)
-            failure = (
-                None if preview is not None and preview.status == "sent" else error
-            )
-            if (
-                failure is None
-                and preview is not None
-                and preview.status not in ("sent", "failed", "interrupted")
-            ):
-                failure = "The request ended without a confirmed send"
             if update.status in ("failed", "interrupted"):
                 continue
-            if failure is not None or update.status == "generating":
+            if error is not None or update.status == "generating":
                 final = replace(
                     update,
-                    status="failed" if failure is not None else "completed",
-                    error=failure,
+                    status="failed" if error is not None else "completed",
+                    error=error,
                 )
                 self._updates[key] = final
                 self._pending[key] = final

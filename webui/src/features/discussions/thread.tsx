@@ -233,13 +233,8 @@ function ThreadSession({
     setMention({ name, nonce: mentionNonce.current });
   }, []);
   const units = useMemo(
-    () =>
-      combineThreadUnits(
-        detail?.messages ?? [],
-        previews.state,
-        unitCache.current,
-      ),
-    [detail?.messages, previews.state],
+    () => combineThreadUnits(detail?.messages ?? [], unitCache.current),
+    [detail?.messages],
   );
   const virtual = useVirtualizer({
     count: units.length,
