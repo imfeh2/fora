@@ -230,8 +230,14 @@ export function Composer({
     const element = input.current;
     const text = `@${mentionRequest.name} `;
     const value = element?.value ?? body;
-    const start = element?.selectionStart ?? value.length;
-    const end = element?.selectionEnd ?? value.length;
+    const start =
+      element !== null && document.activeElement === element
+        ? element.selectionStart
+        : value.length;
+    const end =
+      element !== null && document.activeElement === element
+        ? element.selectionEnd
+        : value.length;
     setBody(value.slice(0, start) + text + value.slice(end));
     setCaret(start + text.length);
     requestAnimationFrame(() => {
