@@ -3,7 +3,6 @@ import { clsx } from "clsx";
 import {
   Archive,
   ArchiveRestore,
-  AtSign,
   ChevronDown,
   Loader2,
   MessageCircle,
@@ -1050,7 +1049,6 @@ export const MessageRow = memo(function MessageRow({
               {
                 id: "mention",
                 label: `@${name}`,
-                icon: <AtSign size={15} />,
                 onSelect: () => insertMention?.(name),
               },
             ]}
