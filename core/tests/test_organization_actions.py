@@ -28,6 +28,7 @@ from fora.tools.authorize import Actor
 HUMAN = 1
 MAIN = 2
 OTHER = 3
+FOURTH = 4
 
 
 class Settings:
@@ -49,6 +50,7 @@ def world(tmp_path: Path):
     store.create_member("human", "You")
     store.create_member("agent", "Main")
     store.create_member("agent", "Other")
+    store.create_member("agent", "Fourth")
 
     def agent_directory_for(member_id: int) -> Path:
         path = tmp_path / "agents" / str(member_id)
@@ -147,6 +149,10 @@ def rejected(part: Any) -> str:
     return part.content
 
 
+def without_id(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in result.items() if key != "id"}
+
+
 def mention(
     world: Dependencies, body: str = "@Main Use the organization tool."
 ) -> None:
@@ -235,3 +241,43 @@ def test_delete_action_on_self_is_rejected_during_the_turn(world) -> None:
     member = world.store.get_member(MAIN)
     assert member is not None
     assert member.deleted is False
+
+
+def test_rename_and_rename_member_agree(world) -> None:
+    short = returned(call_action(world, MAIN, "rename", member_id=OTHER, name="Fresh"))
+    long = returned(
+        call_action(world, MAIN, "rename_member", member_id=FOURTH, name="Second")
+    )
+    assert set(short) == set(long) == {"id", "name"}
+    assert short["id"] == OTHER
+    assert long["id"] == FOURTH
+    assert world.store.get_member(OTHER).name == "Fresh"
+    assert world.store.get_member(FOURTH).name == "Second"
+
+
+def test_pause_and_pause_agent_agree(world) -> None:
+    short = returned(call_action(world, MAIN, "pause", member_id=OTHER))
+    long = returned(call_action(world, MAIN, "pause_agent", member_id=FOURTH))
+    assert without_id(short) == without_id(long)
+    assert short["state"] == "paused"
+    assert world.store.get_member(OTHER).state == "paused"
+    assert world.store.get_member(FOURTH).state == "paused"
+
+
+def test_resume_and_resume_agent_agree(world) -> None:
+    call_action(world, MAIN, "pause", member_id=OTHER)
+    call_action(world, MAIN, "pause", member_id=FOURTH)
+    short = returned(call_action(world, MAIN, "resume", member_id=OTHER))
+    long = returned(call_action(world, MAIN, "resume_agent", member_id=FOURTH))
+    assert without_id(short) == without_id(long)
+    assert short["state"] == "idle"
+    assert world.store.get_member(OTHER).state == "idle"
+    assert world.store.get_member(FOURTH).state == "idle"
+
+
+def test_delete_and_delete_agent_agree(world) -> None:
+    short = returned(call_action(world, MAIN, "delete", member_id=OTHER))
+    long = returned(call_action(world, MAIN, "delete_agent", member_id=FOURTH))
+    assert without_id(short) == without_id(long) == {"deleted": True}
+    assert world.store.get_member(OTHER).deleted is True
+    assert world.store.get_member(FOURTH).deleted is True
