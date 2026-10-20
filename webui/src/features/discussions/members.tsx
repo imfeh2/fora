@@ -40,7 +40,6 @@ export function MemberPicker({
               compact
               icons={[User, Users, Bot]}
               title="No other Members"
-              description="Add an Agent from Members to start a Discussion."
             />
           </li>
         ) : null}

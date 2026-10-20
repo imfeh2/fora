@@ -445,13 +445,6 @@ export function LibraryPage({ path = "" }: { path?: string }) {
                         ? "The Library is empty"
                         : "This folder has no documents"
                   }
-                  description={
-                    needle
-                      ? "Try a different name."
-                      : empty
-                        ? undefined
-                        : "Open a folder from the tree."
-                  }
                   action={
                     needle
                       ? {

@@ -166,7 +166,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
           <StatePanel
             icons={noAgents ? [User, Bot, Users] : [User, Search, Users]}
             title={noAgents ? "No Agents yet" : "No Members match"}
-            description={noAgents ? undefined : "Try a different name."}
             action={
               noAgents
                 ? {
