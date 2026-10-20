@@ -212,6 +212,37 @@ def test_a_poster_without_a_pointer_is_reclaimed(tmp_path: Path, monkeypatch) ->
     assert len(list(directory.glob("*.jpg"))) == 1
 
 
+def test_a_poster_in_flight_survives_a_trim(tmp_path: Path, monkeypatch) -> None:
+    first = tmp_path / "first.mp4"
+    first.write_bytes(b"\0" * 64)
+    second = tmp_path / "second.mp4"
+    second.write_bytes(b"\0" * 64)
+    directory = tmp_path / "posters"
+
+    async def scenario() -> bytes | None:
+        waiting = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def extract(source: Path, output: Path) -> bytes | None:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"jpeg " + source.name.encode())
+            if source == first:
+                waiting.set()
+                await gate.wait()
+            return output.read_bytes()
+
+        monkeypatch.setattr(posters, "extract", extract)
+        cache = posters.Posters(directory)
+        in_flight = asyncio.create_task(cache.read(first))
+        await waiting.wait()
+        assert await cache.read(second) == b"jpeg second.mp4"
+        gate.set()
+        return await in_flight
+
+    assert asyncio.run(scenario()) == b"jpeg first.mp4"
+    assert len(list((tmp_path / "posters").glob("*.jpg"))) == 2
+
+
 def test_trimming_leaves_the_event_loop_running(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "demo.mp4"
     target.write_bytes(b"\0" * 64)

@@ -89,8 +89,9 @@ class Posters:
                 if stale != current:
                     stale.unlink(missing_ok=True)
         kept: list[tuple[int, Path]] = []
+        active = set(self._generating)
         for poster in self._directory.glob("*.jpg"):
-            if poster.name.split("-")[0] not in indexed:
+            if poster.name.split("-")[0] not in indexed and poster not in active:
                 poster.unlink(missing_ok=True)
                 continue
             kept.append((poster.stat().st_mtime_ns, poster))
