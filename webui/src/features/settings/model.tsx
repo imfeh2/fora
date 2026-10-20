@@ -875,11 +875,6 @@ export function ModelPanel({
           ) : null}
           {view === "providers" ? (
             <>
-              {catalog.providers.length === 0 && !open ? (
-                <p className="text-sm text-fg-muted">
-                  Add a provider to configure its connection and models.
-                </p>
-              ) : null}
               <div className="flex min-h-0 min-w-0 flex-1">
                 <div
                   data-provider-list
