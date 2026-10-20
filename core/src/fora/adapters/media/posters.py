@@ -9,6 +9,7 @@ POSTER_WIDTH = 640
 POSTER_QUALITY = 5
 POSTER_TIMEOUT = 5.0
 POSTER_WORKERS = 2
+POSTER_LIMIT = 256
 
 
 class Posters:
@@ -17,20 +18,52 @@ class Posters:
         self._slots = asyncio.Semaphore(workers)
 
     async def read(self, target: Path) -> bytes | None:
-        cache = self._cache(target)
-        if cache.is_file():
-            return cache.read_bytes()
+        poster = self._poster(target)
+        if poster.is_file():
+            return poster.read_bytes()
         async with self._slots:
-            if cache.is_file():
-                return cache.read_bytes()
-            return await extract(target, cache)
+            if poster.is_file():
+                return poster.read_bytes()
+            produced = await extract(target, poster)
+            if produced is None:
+                return None
+            self._pointer(target).write_text(str(target), encoding="utf-8")
+            self._trim()
+            return produced
 
-    def _cache(self, target: Path) -> Path:
+    def _digest(self, target: Path) -> str:
+        return hashlib.sha256(str(target).encode()).hexdigest()
+
+    def _poster(self, target: Path) -> Path:
         stat = target.stat()
-        digest = hashlib.sha256(
-            f"{target}\0{stat.st_mtime_ns}\0{stat.st_size}".encode()
-        ).hexdigest()
-        return self._directory / f"{digest}.jpg"
+        return self._directory / (
+            f"{self._digest(target)}-{stat.st_mtime_ns}-{stat.st_size}.jpg"
+        )
+
+    def _pointer(self, target: Path) -> Path:
+        return self._directory / f"{self._digest(target)}.path"
+
+    def _trim(self) -> None:
+        for pointer in self._directory.glob("*.path"):
+            source = Path(pointer.read_text(encoding="utf-8").strip())
+            digest = pointer.stem
+            if not source.is_file():
+                pointer.unlink(missing_ok=True)
+                for stale in self._directory.glob(f"{digest}-*.jpg"):
+                    stale.unlink(missing_ok=True)
+                continue
+            stat = source.stat()
+            current = self._directory / (
+                f"{digest}-{stat.st_mtime_ns}-{stat.st_size}.jpg"
+            )
+            for stale in self._directory.glob(f"{digest}-*.jpg"):
+                if stale != current:
+                    stale.unlink(missing_ok=True)
+        posters = sorted(
+            self._directory.glob("*.jpg"), key=lambda path: path.stat().st_mtime
+        )
+        for old in posters[: max(0, len(posters) - POSTER_LIMIT)]:
+            old.unlink(missing_ok=True)
 
 
 async def extract(target: Path, output: Path) -> bytes | None:
