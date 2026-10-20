@@ -43,11 +43,17 @@ beforeAll(() => {
   URL.createObjectURL = vi.fn(() => "blob:inline-media");
   URL.revokeObjectURL = vi.fn();
   vi.spyOn(backend, "library").mockResolvedValue([]);
+  vi.spyOn(backend, "libraryPoster").mockResolvedValue(
+    "http://fora/library/poster?path=tasks/demo.mp4",
+  );
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.spyOn(backend, "library").mockResolvedValue([]);
+  vi.spyOn(backend, "libraryPoster").mockResolvedValue(
+    "http://fora/library/poster?path=tasks/demo.mp4",
+  );
 });
 
 function pending() {
@@ -223,6 +229,52 @@ describe("videos", () => {
     expect(container.querySelector(".inline-media-video")).not.toBeNull();
     expect(container.querySelector("video")).toBeNull();
     expect(libraryFile).not.toHaveBeenCalled();
+  });
+
+  it("shows the poster of the video before it plays", async () => {
+    pending();
+    const { container } = renderMessage("![演示](/tasks/demo.mp4)");
+    const poster = await waitFor(() => {
+      const element = container.querySelector(".inline-media-poster img");
+      if (element === null) throw new Error("poster is missing");
+      return element;
+    });
+    expect(poster.getAttribute("src")).toBe(
+      "http://fora/library/poster?path=tasks/demo.mp4",
+    );
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("drops the poster when the video block leaves the viewport", async () => {
+    pending();
+    const { container } = renderMessage("![演示](/tasks/demo.mp4)");
+    await waitFor(() => {
+      expect(
+        container.querySelector(".inline-media-poster img"),
+      ).not.toBeNull();
+    });
+    Observer.report(
+      container.querySelector(".inline-media-video") as Element,
+      false,
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".inline-media-poster")).toBeNull();
+    });
+  });
+
+  it("keeps the play placeholder when the poster cannot be loaded", async () => {
+    pending();
+    const { container } = renderMessage("![演示](/tasks/demo.mp4)");
+    const poster = await waitFor(() => {
+      const element = container.querySelector(".inline-media-poster img");
+      if (element === null) throw new Error("poster is missing");
+      return element;
+    });
+    fireEvent.error(poster);
+    await waitFor(() => {
+      expect(container.querySelector(".inline-media-poster")).toBeNull();
+    });
+    expect(container.querySelector(".inline-media-play")).not.toBeNull();
   });
 });
 

@@ -103,6 +103,7 @@
 }
 
 .inline-media-placeholder {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -111,8 +112,34 @@
   aspect-ratio: 16 / 9;
   max-height: 360px;
   padding: 16px;
+  overflow: hidden;
   color: var(--color-fg-muted);
   font-size: 13px;
+}
+
+.inline-media-poster {
+  position: absolute;
+  inset: 0;
+  background: var(--color-gray-1100);
+}
+
+.inline-media-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.inline-media-poster::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 45%);
+}
+
+.inline-media-play {
+  position: relative;
+  z-index: 1;
 }
 
 .inline-media-failure {

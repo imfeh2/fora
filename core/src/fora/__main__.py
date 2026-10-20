@@ -342,6 +342,7 @@ def main(argv: list[str] | None = None) -> int:
                 port=options.port,
                 uploads=uploads,
                 library=deps.library_tree.root,
+                posters=directory / "posters",
                 host=options.host,
                 public_hosts=options.public_hosts,
             )

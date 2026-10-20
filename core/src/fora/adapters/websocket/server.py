@@ -22,6 +22,7 @@ from aiohttp import WSMsgType, web
 from yarl import URL
 
 from fora.adapters.jsonl.protocol import Dispatcher, RequestScope, encode, parse
+from fora.adapters.media.posters import Posters
 from fora.adapters.websocket.address import (
     HOST,
     http_origin,
@@ -407,6 +408,7 @@ class WebServer:
         *,
         uploads: Uploads | None = None,
         library: Path | None = None,
+        posters: Path | None = None,
         host: str = HOST,
         public_hosts: frozenset[str] = frozenset(),
     ) -> None:
@@ -414,6 +416,7 @@ class WebServer:
         self._directory = directory
         self._uploads = uploads
         self._library = library
+        self._posters = Posters(posters) if posters is not None else None
         self._host = validate_host(host)
         self._public_hosts = public_hosts
         if not 0 <= port <= 65535:
@@ -484,6 +487,7 @@ class WebServer:
                 self._download,
             )
             self._app.router.add_get("/library/content", self._library_content)
+            self._app.router.add_get("/library/poster", self._library_poster)
             resources.pop_all()
 
     @property
@@ -1118,6 +1122,25 @@ class WebServer:
                     f"attachment; filename*=UTF-8''{quote(target.name, safe='')}"
                 ),
                 "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    async def _library_poster(self, request: web.Request) -> web.StreamResponse:
+        root = self._library
+        if root is None or self._posters is None:
+            raise web.HTTPNotFound()
+        target = contained_file(root, request.query.get("path", ""))
+        if target is None:
+            raise web.HTTPNotFound()
+        poster = await self._posters.read(target)
+        if poster is None:
+            raise web.HTTPNotFound()
+        return web.Response(
+            body=poster,
+            headers={
+                "Content-Type": "image/jpeg",
+                "Cache-Control": "private, max-age=31536000, immutable",
                 "X-Content-Type-Options": "nosniff",
             },
         )

@@ -1190,6 +1190,12 @@ export class Backend {
     return await response.blob();
   }
 
+  async libraryPoster(path: string) {
+    const url = new URL(await this.#fileConnection("/library/poster"));
+    url.searchParams.set("path", path);
+    return url.toString();
+  }
+
   send(discussion_id: number, body: string) {
     return this.call<{ id: number }>("discussion.send", {
       discussion_id,

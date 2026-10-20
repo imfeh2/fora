@@ -528,6 +528,8 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   const [visible, setVisible] = useState(false);
   const [entrySize, setEntrySize] = useState<number | null>(null);
   const [entryReady, setEntryReady] = useState(false);
+  const [poster, setPoster] = useState<string | null>(null);
+  const [posterFailed, setPosterFailed] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -557,6 +559,20 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
     if (root.current !== null) observer.observe(root.current);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!visible || !entryReady) return;
+    let live = true;
+    void backend.libraryPoster(path).then(
+      (address) => {
+        if (live) setPoster(address);
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [visible, entryReady, path]);
 
   useEffect(() => {
     if (visible || playing || url === null) return;
@@ -594,6 +610,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   };
 
   const name = alt || documentName(path);
+  const present = visible && entryReady;
 
   if (entrySize !== null && entrySize > VIDEO_BYTES_LIMIT)
     return (
@@ -644,7 +661,12 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
     <div ref={root} className="inline-media inline-media-video">
       {url === null ? (
         <div className="inline-media-placeholder">
-          {visible && entryReady ? (
+          {present && poster !== null && !posterFailed ? (
+            <div className="inline-media-poster">
+              <img src={poster} alt="" onError={() => setPosterFailed(true)} />
+            </div>
+          ) : null}
+          {present ? (
             <ContextMenuArea
               asChild
               label={`Actions for ${name}`}
