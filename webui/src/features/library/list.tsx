@@ -235,7 +235,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
       <FolderTree
         entries={entries}
         expanded={expanded}
-        selected={folder}
+        selected={path}
         onToggle={(path) =>
           setExpanded((current) => {
             const next = new Set(current);
@@ -245,6 +245,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
           })
         }
         onSelect={selectFolder}
+        onOpen={openFile}
         rowActions={(path) => {
           const entry = entries.find(
             (item) => item.kind === "directory" && item.path === path,

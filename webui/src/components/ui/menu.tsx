@@ -40,11 +40,13 @@ export function OverflowMenu({
   actions,
   align = "end",
   icon,
+  stopPropagation = false,
 }: {
   label: string;
   actions: MenuAction[];
   align?: "start" | "end";
   icon?: ReactNode;
+  stopPropagation?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -154,6 +156,9 @@ export function OverflowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        onPointerDown={
+          stopPropagation ? (event) => event.stopPropagation() : undefined
+        }
         onClick={() => {
           setActive(actions.findIndex((action) => !action.disabled));
           setOpen((current) => !current);
