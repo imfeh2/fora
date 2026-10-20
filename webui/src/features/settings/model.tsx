@@ -81,7 +81,7 @@ function thinkingLabel(option: Thinking, budget?: number | null): string {
 }
 
 export function modelTestDescription(latency: number, reply: string): string {
-  return `${latency.toLocaleString("en-US")} ms · ${reply.trim().replace(/\s+/g, " ").slice(0, 80)}`;
+  return `${latency.toLocaleString("en-US")} ms, ${reply.trim().replace(/\s+/g, " ").slice(0, 80)}`;
 }
 
 export function ModelSelection({

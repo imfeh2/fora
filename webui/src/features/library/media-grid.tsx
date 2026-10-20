@@ -96,7 +96,7 @@ export function MediaGrid({
             </span>
             <span className="flex items-center gap-1.5 text-[11px] text-fg-muted">
               <FileText size={11} aria-hidden="true" />
-              {typeLabel(entry.path)} · {formatBytes(entry.size)}
+              {typeLabel(entry.path)}, {formatBytes(entry.size)}
             </span>
           </button>
         </li>

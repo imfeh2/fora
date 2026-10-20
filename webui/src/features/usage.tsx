@@ -408,7 +408,7 @@ function Trend({ result }: { result: UsageResult }) {
     >
       <div className="flex items-center justify-between gap-3 mb-3">
         <h2 className="text-sm font-semibold">Daily usage</h2>
-        <span className="text-xs text-fg-muted">{label} · UTC</span>
+        <span className="text-xs text-fg-muted">{label} (UTC)</span>
       </div>
       {points.length === 0 ? (
         <p className="text-sm text-fg-muted py-12 text-center">
@@ -733,7 +733,7 @@ function Records({
         <span className="text-xs text-fg-muted" role="status">
           {busy
             ? "Loading records…"
-            : `${result.records.length} of ${result.summary.records} records · 20 per page`}
+            : `${result.records.length} of ${result.summary.records} records, 20 per page`}
         </span>
         <Button
           aria-disabled={busy || !result.has_more || !result.next_cursor}

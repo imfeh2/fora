@@ -322,7 +322,7 @@ function PreviewCard({
         <span className="text-fg-muted">
           {previewType(path)}
           {data.status === "ready" && data.size !== null
-            ? ` · ${formatBytes(data.size)}`
+            ? `, ${formatBytes(data.size)}`
             : null}
         </span>
       )}
