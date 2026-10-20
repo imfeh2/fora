@@ -1133,7 +1133,10 @@ class WebServer:
         target = contained_file(root, request.query.get("path", ""))
         if target is None:
             raise web.HTTPNotFound()
-        poster = await self._posters.read(target)
+        try:
+            poster = await self._posters.read(target)
+        except FileNotFoundError:
+            raise web.HTTPNotFound() from None
         if poster is None:
             raise web.HTTPNotFound()
         return web.Response(

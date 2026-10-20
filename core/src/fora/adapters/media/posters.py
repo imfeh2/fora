@@ -100,6 +100,7 @@ async def extract(target: Path, output: Path) -> bytes | None:
     except TimeoutError:
         process.kill()
         await process.wait()
+        partial.unlink(missing_ok=True)
         return None
     if process.returncode != 0 or not partial.is_file():
         partial.unlink(missing_ok=True)

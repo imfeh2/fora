@@ -1190,9 +1190,10 @@ export class Backend {
     return await response.blob();
   }
 
-  async libraryPoster(path: string) {
+  async libraryPoster(path: string, version: string | null) {
     const url = new URL(await this.#fileConnection("/library/poster"));
     url.searchParams.set("path", path);
+    if (version !== null) url.searchParams.set("v", version);
     return url.toString();
   }
 

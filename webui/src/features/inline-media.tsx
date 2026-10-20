@@ -527,6 +527,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   const hold = useRef<VideoHold | null>(null);
   const [visible, setVisible] = useState(false);
   const [entrySize, setEntrySize] = useState<number | null>(null);
+  const [entryVersion, setEntryVersion] = useState<string | null>(null);
   const [entryReady, setEntryReady] = useState(false);
   const [poster, setPoster] = useState<string | null>(null);
   const [posterFailed, setPosterFailed] = useState(false);
@@ -543,6 +544,9 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
       (entry) => {
         if (abort.signal.aborted) return;
         setEntrySize(entry?.size ?? null);
+        setEntryVersion(
+          entry === null ? null : `${entry.size}-${entry.modified_at}`,
+        );
         setEntryReady(true);
       },
       () => {
@@ -563,7 +567,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   useEffect(() => {
     if (!visible || !entryReady) return;
     let live = true;
-    void backend.libraryPoster(path).then(
+    void backend.libraryPoster(path, entryVersion).then(
       (address) => {
         if (live) setPoster(address);
       },
@@ -572,7 +576,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
     return () => {
       live = false;
     };
-  }, [visible, entryReady, path]);
+  }, [visible, entryReady, path, entryVersion]);
 
   useEffect(() => {
     if (visible || playing || url === null) return;
