@@ -1,15 +1,9 @@
 import type { SettingsSection } from "@/app/router";
-import {
-  Page,
-  PageBody,
-  PageHeader,
-  useNarrowViewport,
-} from "@/components/layout/shell";
+import { Page, PageBody } from "@/components/layout/shell";
 import { AgentPanel } from "@/features/settings/agent";
 import { ExecutionPanel } from "@/features/settings/execution";
 import { LangfusePanel } from "@/features/settings/langfuse";
 import { ModelPanel } from "@/features/settings/model";
-import { sectionLabel } from "@/features/settings/nav";
 import { VoicePanel } from "@/features/settings/voice";
 
 function Panel({ section }: { section: SettingsSection }) {
@@ -30,14 +24,10 @@ function Panel({ section }: { section: SettingsSection }) {
 }
 
 function SettingsPageContent({ section }: { section: SettingsSection }) {
-  const narrow = useNarrowViewport();
   return (
     <Page>
-      <PageHeader
-        title={narrow ? `Settings · ${sectionLabel(section)}` : "Settings"}
-      />
       <PageBody>
-        <div className="settings-layout">
+        <div className="settings-layout pt-6 px-8 pb-4 max-[940px]:px-6 narrow:px-3 narrow:pt-3 narrow:pb-3">
           <Panel section={section} />
         </div>
       </PageBody>
