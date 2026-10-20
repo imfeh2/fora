@@ -174,8 +174,8 @@ export function Sidebar({
 export function SidebarBrand() {
   return (
     <div className="flex items-center gap-3 pt-4 px-4 pb-3 min-w-0">
-      <img src={brandIcon} alt="" className="size-7 flex-none" />
-      <span className="text-sm font-semibold truncate">Fora</span>
+      <img src={brandIcon} alt="" className="size-4.5 flex-none" />
+      <span className="text-lg font-semibold truncate">Fora</span>
     </div>
   );
 }
