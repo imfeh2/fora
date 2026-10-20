@@ -19,7 +19,7 @@ import { useRouter } from "@/app/router";
 import { LoadError } from "@/components/ui/access-error";
 import { Choices } from "@/components/ui/choices";
 import { Combobox } from "@/components/ui/combobox";
-import { ConfirmDialog, Modal } from "@/components/ui/dialog";
+import { ConfirmDialog, Modal, ModalFooter } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -1201,6 +1201,7 @@ function ProviderModelEditor({
       <Modal
         open={expanded}
         variant="form"
+        footerSlot
         title={model ? "Edit model" : "Add model"}
         onOpenChange={(open) => {
           if (!open) close();
@@ -1626,38 +1627,44 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
             Clear stored key
           </label>
         ) : null}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={busy || unavailable || !draftDirty}
-          >
-            {saving ? <Spinner label="Saving provider" /> : null}
-            {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
-          </Button>
-          <Button onClick={editOpen ? cancel : onCancel}>Cancel</Button>
-          {provider ? (
-            <span className="inline-flex items-center gap-1">
-              <Button
-                disabled={unavailable || modelCount > 0}
-                onClick={() => setConfirmDelete(true)}
-              >
-                {onDraft ? "Delete" : "Delete provider"}
-              </Button>
-              {modelCount > 0 ? (
-                <Tooltip label="Remove this provider's models first.">
-                  <button
-                    type="button"
-                    aria-label="About deleting this provider"
-                    className="inline-flex cursor-help p-1.5 -m-1.5"
-                  >
-                    <CircleHelp size={14} />
-                  </button>
-                </Tooltip>
-              ) : null}
-            </span>
-          ) : null}
-        </div>
+        <ModalFooter>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || unavailable || !draftDirty}
+            >
+              {saving ? <Spinner label="Saving provider" /> : null}
+              {onDraft
+                ? "Save"
+                : provider
+                  ? "Save provider"
+                  : "Create provider"}
+            </Button>
+            <Button onClick={editOpen ? cancel : onCancel}>Cancel</Button>
+            {provider ? (
+              <span className="inline-flex items-center gap-1">
+                <Button
+                  disabled={unavailable || modelCount > 0}
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  {onDraft ? "Delete" : "Delete provider"}
+                </Button>
+                {modelCount > 0 ? (
+                  <Tooltip label="Remove this provider's models first.">
+                    <button
+                      type="button"
+                      aria-label="About deleting this provider"
+                      className="inline-flex cursor-help p-1.5 -m-1.5"
+                    >
+                      <CircleHelp size={14} />
+                    </button>
+                  </Tooltip>
+                ) : null}
+              </span>
+            ) : null}
+          </div>
+        </ModalFooter>
       </fieldset>
       <ConfirmDialog
         open={confirmDelete}
@@ -1718,6 +1725,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
         <Modal
           open
           variant="form"
+          footerSlot
           title={provider ? "Edit provider" : "Add provider"}
           onOpenChange={(open) => {
             if (!open) cancel();
@@ -1828,6 +1836,7 @@ function ProviderTest({
       <Modal
         open={open}
         variant="form"
+        footerSlot={models.length > 0}
         title="Test provider model"
         onOpenChange={(next) => {
           setOpen(next);
@@ -1873,14 +1882,16 @@ function ProviderTest({
             <p className="text-sm text-fg-muted">
               Uses the saved provider and model configuration for one request.
             </p>
-            <Button
-              disabled={unavailable || test.testing}
-              onClick={() => {
-                if (model) void test.run({ model_id: model.id, thinking });
-              }}
-            >
-              {test.testing ? <Spinner label="Testing" /> : null}Test
-            </Button>
+            <ModalFooter>
+              <Button
+                disabled={unavailable || test.testing}
+                onClick={() => {
+                  if (model) void test.run({ model_id: model.id, thinking });
+                }}
+              >
+                {test.testing ? <Spinner label="Testing" /> : null}Test
+              </Button>
+            </ModalFooter>
           </>
         )}
         {test.feedback ? <p role="status">{test.feedback}</p> : null}
@@ -2325,40 +2336,42 @@ function ModelForm({
           {test.feedback ?? feedback}
         </p>
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={busy || unavailable || !draftDirty}
-        >
-          {saving ? <Spinner label="Saving model" /> : null}
-          Save
-        </Button>
-        {onClose ? <Button onClick={onClose}>Cancel</Button> : null}
-        <Button
-          disabled={
-            unavailable ||
-            test.testing ||
-            connectionDirty ||
-            !provider.api_key_set ||
-            !remote.trim() ||
-            !validTestSelection ||
-            budgetChanged ||
-            Boolean(model && remote !== model.model)
-          }
-          onClick={() => void testModel()}
-        >
-          {test.testing ? <Spinner label="Testing" /> : null}Test
-        </Button>
-        {model ? (
+      <ModalFooter>
+        <div className="flex flex-wrap gap-2">
           <Button
-            disabled={unavailable || busy}
-            onClick={() => setConfirmDelete(true)}
+            type="submit"
+            variant="primary"
+            disabled={busy || unavailable || !draftDirty}
           >
-            Delete model
+            {saving ? <Spinner label="Saving model" /> : null}
+            Save
           </Button>
-        ) : null}
-      </div>
+          {onClose ? <Button onClick={onClose}>Cancel</Button> : null}
+          <Button
+            disabled={
+              unavailable ||
+              test.testing ||
+              connectionDirty ||
+              !provider.api_key_set ||
+              !remote.trim() ||
+              !validTestSelection ||
+              budgetChanged ||
+              Boolean(model && remote !== model.model)
+            }
+            onClick={() => void testModel()}
+          >
+            {test.testing ? <Spinner label="Testing" /> : null}Test
+          </Button>
+          {model ? (
+            <Button
+              disabled={unavailable || busy}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete model
+            </Button>
+          ) : null}
+        </div>
+      </ModalFooter>
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}

@@ -1,13 +1,16 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import {
+  createContext,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { Button, Field, IconButton, Input, toast } from "@/components/ui/index";
 import { registerToastHost } from "@/components/ui/toast-host";
 
@@ -37,6 +40,14 @@ function refocus(target: { focus: () => void } | null) {
 
 export type ModalVariant = "form" | "confirm" | "history";
 
+const FooterSlot = createContext<HTMLDivElement | null>(null);
+
+export function ModalFooter({ children }: { children: ReactNode }) {
+  const node = useContext(FooterSlot);
+  if (!node) return <>{children}</>;
+  return createPortal(children, node);
+}
+
 export function Modal({
   open,
   onOpenChange,
@@ -44,6 +55,7 @@ export function Modal({
   description,
   children,
   footer,
+  footerSlot = false,
   tone = "dialog",
   wide = false,
   variant,
@@ -58,6 +70,7 @@ export function Modal({
   description?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
+  footerSlot?: boolean;
   tone?: "dialog" | "surface";
   wide?: boolean;
   variant?: ModalVariant;
@@ -69,6 +82,11 @@ export function Modal({
   const opener = useRef<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const footerElement = useRef<HTMLDivElement>(null);
+  const [footerNode, setFooterNode] = useState<HTMLDivElement | null>(null);
+  const attachFooter = useCallback((node: HTMLDivElement | null) => {
+    footerElement.current = node;
+    setFooterNode(node);
+  }, []);
   const closeButton = useRef<HTMLButtonElement>(null);
   const closed = useRef(onClosed);
   closed.current = onClosed;
@@ -89,16 +107,26 @@ export function Modal({
     ? "w-[min(960px,calc(100vw-32px))]"
     : "w-[min(440px,calc(100vw-48px))]";
   const framed = tone === "surface";
-  const spacing = framed ? "gap-4 p-6" : "";
+  const spacing = framed
+    ? "gap-4 p-6 narrow:p-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]"
+    : "";
   const headerSpacing = framed ? "" : "px-6 pt-5 pb-4 narrow:px-4 narrow:pt-4";
   const headerDivider =
     framed || modalKind === "confirm" ? "" : "border-b border-line";
-  const bodySpacing = framed ? "" : "px-6 py-5 narrow:px-4 narrow:py-4";
+  const bodySpacing = framed
+    ? ""
+    : `px-6 py-5 narrow:px-4 narrow:py-4${
+        footer || footerSlot
+          ? ""
+          : " narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]"
+      }`;
   const footerSpacing = framed
     ? ""
     : "px-6 pt-4 pb-5 narrow:px-4 narrow:pt-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]";
   const footerDivider =
-    framed || modalKind === "confirm" || (modalKind === "history" && !footer)
+    framed ||
+    modalKind === "confirm" ||
+    (modalKind === "history" && !footer && !footerSlot)
       ? ""
       : "border-t border-line";
   const panelClass =
@@ -169,28 +197,33 @@ export function Modal({
               </IconButton>
             </Dialog.Close>
           </div>
-          <div ref={toastHost} className="empty:hidden shrink-0" />
-          {side === "left" ? (
-            children ? (
-              <div className="min-h-0 flex-1 flex flex-col">{children}</div>
-            ) : null
-          ) : (
-            <div
-              className={`min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
-            >
-              {description ? (
-                <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
-                  {description}
-                </Dialog.Description>
-              ) : null}
-              {children}
-            </div>
-          )}
-          {footer ? (
-            <div ref={footerElement} className={footerClass}>
-              {footer}
-            </div>
-          ) : null}
+          <div
+            ref={toastHost}
+            className={`empty:hidden shrink-0 ${framed ? "" : "px-6 narrow:px-4"}`}
+          />
+          <FooterSlot.Provider value={footerNode}>
+            {side === "left" ? (
+              children ? (
+                <div className="min-h-0 flex-1 flex flex-col">{children}</div>
+              ) : null
+            ) : (
+              <div
+                className={`min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
+              >
+                {description ? (
+                  <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
+                    {description}
+                  </Dialog.Description>
+                ) : null}
+                {children}
+              </div>
+            )}
+            {footer || footerSlot ? (
+              <div ref={attachFooter} className={footerClass}>
+                {footer}
+              </div>
+            ) : null}
+          </FooterSlot.Provider>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
