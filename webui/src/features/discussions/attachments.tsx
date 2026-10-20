@@ -34,9 +34,11 @@ function FilePreview({ file }: { file: File }) {
 
 export function ComposerAttachments({
   files,
+  uploading = false,
   onRemove,
 }: {
   files: ComposerFile[];
+  uploading?: boolean;
   onRemove: (id: string) => void;
 }) {
   return (
@@ -54,7 +56,9 @@ export function ComposerAttachments({
             <div className="truncate text-xs" title={item.file.name}>
               {item.file.name}
             </div>
-            <div className="text-xs opacity-60">{fileSize(item.file.size)}</div>
+            <div className="text-xs opacity-60">
+              {uploading ? "Uploading" : fileSize(item.file.size)}
+            </div>
           </div>
           <button
             type="button"

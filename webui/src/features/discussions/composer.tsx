@@ -773,9 +773,30 @@ export function Composer({
     if (disabled || !canSend || sending || recording.current) return;
     await controller.send(onSend);
     if (!controller.snapshot().draft.body) setCaret(0);
+    if (controller.snapshot().submissionResult?.state === "sent")
+      dismissToast("composer-send-error");
   };
   const pending = view.draft.pending;
-  const failure = pending ? null : view.error;
+
+  useEffect(() => {
+    const failure = view.error;
+    if (!failure) return;
+    if (failure.kind === "send") {
+      toast({
+        id: "composer-send-error",
+        tone: "danger",
+        title: failure.message,
+        action: { label: "Retry", onClick: () => void submit() },
+      });
+    } else {
+      toast({
+        id: "composer-file-error",
+        tone: "danger",
+        title: failure.message,
+      });
+    }
+    controller.clearError();
+  }, [view.error, controller, submit]);
 
   return (
     <div
@@ -850,27 +871,9 @@ export function Composer({
           {files.length ? (
             <ComposerAttachments
               files={files}
+              uploading={pending?.phase === "uploading"}
               onRemove={(id) => controller?.removeFile(id)}
             />
-          ) : null}
-          {failure ? (
-            <div role="alert" className="px-4 pt-3 text-sm text-red-300">
-              {failure}
-            </div>
-          ) : null}
-          {pending &&
-          sending &&
-          pending.phase === "uploading" &&
-          !pending.cancelRequested ? (
-            <div className="px-4 pt-2 text-xs">
-              <button
-                type="button"
-                className="underline"
-                onClick={() => controller.cancel()}
-              >
-                Cancel upload
-              </button>
-            </div>
           ) : null}
         </div>
         {suggesting ? (

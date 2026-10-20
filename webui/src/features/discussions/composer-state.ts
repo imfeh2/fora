@@ -29,7 +29,7 @@ export type ComposerDraft = {
 export type ComposerView = {
   draft: ComposerDraft;
   busy: boolean;
-  error: string | null;
+  error: { message: string; kind: "rejected" | "send" } | null;
   submissionResult: { id: string; state: "sent" | "cancelled" } | null;
 };
 
@@ -128,13 +128,29 @@ export class ComposerController {
     }
     if (accepted.length)
       this.#change({ files: [...this.#view.draft.files, ...accepted] });
-    if (problem) this.#notify({ error: problem });
+    if (problem)
+      this.#notify({ error: { message: problem, kind: "rejected" } });
+  };
+
+  clearError = () => {
+    if (this.#view.error !== null) this.#notify({ error: null });
   };
 
   removeFile = (id: string) => {
+    const pending = this.#view.draft.pending;
+    const remaining = this.#view.draft.files.filter((item) => item.id !== id);
+    if (!pending) {
+      this.#change({ files: remaining });
+      return;
+    }
     this.#change({
-      files: this.#view.draft.files.filter((item) => item.id !== id),
+      files: remaining,
+      pending: {
+        ...pending,
+        files: pending.files.filter((item) => item.id !== id),
+      },
     });
+    this.#abort?.abort();
   };
 
   cancel = () => {
@@ -247,7 +263,10 @@ export class ComposerController {
       } else {
         this.#notify({
           draft: { ...this.#view.draft, pending: null },
-          error: error instanceof Error ? error.message : String(error),
+          error: {
+            message: error instanceof Error ? error.message : String(error),
+            kind: "send",
+          },
         });
       }
     } finally {

@@ -183,7 +183,7 @@ export function Toaster() {
         className={
           host
             ? "flex flex-col gap-2 w-full m-0 p-0 list-none outline-none"
-            : "fixed right-6 bottom-6 z-(--layer-toast) flex flex-col gap-2 w-[min(360px,calc(100vw-48px))] m-0 p-0 list-none outline-none"
+            : "fixed right-6 bottom-6 z-(--layer-toast) flex flex-col gap-2 w-[min(360px,calc(100vw-48px))] m-0 p-0 list-none outline-none narrow:inset-x-3 narrow:top-[69px] narrow:bottom-auto narrow:w-auto"
         }
         label="Notifications"
       />
