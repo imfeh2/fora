@@ -102,14 +102,14 @@ export function libraryActions(
       ? [
           {
             id: "document",
-            label: "New document inside",
+            label: "New document",
             icon: <Plus size={15} />,
             onSelect: () =>
               handlers.create({ kind: "file", parent: entry.path }),
           },
           {
             id: "folder",
-            label: "New folder inside",
+            label: "New folder",
             icon: <FolderPlus size={15} />,
             onSelect: () =>
               handlers.create({ kind: "directory", parent: entry.path }),
