@@ -17,6 +17,11 @@ import {
   useRouter,
 } from "@/app/router";
 import {
+  applyUnreadTitle,
+  HIDDEN_REFRESH_MS,
+  resetUnreadTitle,
+} from "@/app/unread-title";
+import {
   Nav,
   NavItem,
   NavSubItem,
@@ -442,6 +447,39 @@ export function useApplication() {
     (changed = false) => refreshResource("discussions", changed),
     [refreshResource],
   );
+
+  useEffect(() => {
+    applyUnreadTitle(discussions.data);
+  }, [discussions.data]);
+
+  useEffect(() => () => resetUnreadTitle(), []);
+
+  useEffect(() => {
+    const read = () => {
+      if (!backend.disconnected) void refreshDiscussionsResource();
+    };
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+    };
+    const schedule = () => {
+      stop();
+      if (document.visibilityState !== "visible")
+        timer = setInterval(read, HIDDEN_REFRESH_MS);
+    };
+    const follow = () => {
+      schedule();
+      if (document.visibilityState === "visible") read();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", follow);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", follow);
+    };
+  }, [refreshDiscussionsResource]);
 
   const refresh = useCallback(() => {
     if (joined.current) return joined.current;
