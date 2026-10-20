@@ -16,20 +16,46 @@ class Posters:
     def __init__(self, directory: Path, *, workers: int = POSTER_WORKERS) -> None:
         self._directory = directory
         self._slots = asyncio.Semaphore(workers)
+        self._generating: dict[Path, asyncio.Task[bytes | None]] = {}
 
     async def read(self, target: Path) -> bytes | None:
         poster = self._poster(target)
-        if poster.is_file():
-            return poster.read_bytes()
+        cached = self._cached(poster)
+        if cached is not None:
+            return cached
+        return await asyncio.shield(self._generation(target, poster))
+
+    def _generation(self, target: Path, poster: Path) -> asyncio.Task[bytes | None]:
+        running = self._generating.get(poster)
+        if running is not None:
+            return running
+        task = asyncio.create_task(self._build(target, poster))
+        self._generating[poster] = task
+        task.add_done_callback(lambda done: self._forget(poster, done))
+        return task
+
+    def _forget(self, poster: Path, done: asyncio.Task[bytes | None]) -> None:
+        self._generating.pop(poster, None)
+        if not done.cancelled():
+            done.exception()
+
+    async def _build(self, target: Path, poster: Path) -> bytes | None:
         async with self._slots:
-            if poster.is_file():
-                return poster.read_bytes()
+            cached = self._cached(poster)
+            if cached is not None:
+                return cached
             produced = await extract(target, poster)
             if produced is None:
                 return None
             self._pointer(target).write_text(str(target), encoding="utf-8")
-            self._trim()
+            await asyncio.to_thread(self._trim)
             return produced
+
+    def _cached(self, poster: Path) -> bytes | None:
+        try:
+            return poster.read_bytes()
+        except FileNotFoundError:
+            return None
 
     def _digest(self, target: Path) -> str:
         return hashlib.sha256(str(target).encode()).hexdigest()
@@ -44,25 +70,32 @@ class Posters:
         return self._directory / f"{self._digest(target)}.path"
 
     def _trim(self) -> None:
-        for pointer in self._directory.glob("*.path"):
-            source = Path(pointer.read_text(encoding="utf-8").strip())
+        indexed: set[str] = set()
+        for pointer in list(self._directory.glob("*.path")):
             digest = pointer.stem
-            if not source.is_file():
+            source = Path(pointer.read_text(encoding="utf-8").strip())
+            try:
+                stat = source.stat()
+            except FileNotFoundError:
                 pointer.unlink(missing_ok=True)
                 for stale in self._directory.glob(f"{digest}-*.jpg"):
                     stale.unlink(missing_ok=True)
                 continue
-            stat = source.stat()
+            indexed.add(digest)
             current = self._directory / (
                 f"{digest}-{stat.st_mtime_ns}-{stat.st_size}.jpg"
             )
             for stale in self._directory.glob(f"{digest}-*.jpg"):
                 if stale != current:
                     stale.unlink(missing_ok=True)
-        posters = sorted(
-            self._directory.glob("*.jpg"), key=lambda path: path.stat().st_mtime
-        )
-        for old in posters[: max(0, len(posters) - POSTER_LIMIT)]:
+        kept: list[tuple[int, Path]] = []
+        for poster in self._directory.glob("*.jpg"):
+            if poster.name.split("-")[0] not in indexed:
+                poster.unlink(missing_ok=True)
+                continue
+            kept.append((poster.stat().st_mtime_ns, poster))
+        kept.sort()
+        for _, old in kept[: max(0, len(kept) - POSTER_LIMIT)]:
             old.unlink(missing_ok=True)
 
 
