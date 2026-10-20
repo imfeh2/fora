@@ -246,9 +246,7 @@ export function Composer({
     });
   }, [mentionRequest, body, setBody]);
   const sending = busy || view.busy;
-  const canSend =
-    !view.draft.pending?.cancelRequested &&
-    !!(body.trim() || files.length || view.draft.pending);
+  const canSend = !!(body.trim() || files.length || view.draft.pending);
   const fileInput = useRef<HTMLInputElement>(null);
   const extra = useRef<HTMLDivElement>(null);
   const [extraHeight, setExtraHeight] = useState(0);
@@ -1103,7 +1101,6 @@ export function Composer({
                 : "Start voice input"
           }
           disabled={
-            !!view.draft.pending?.cancelRequested ||
             (!recordingActive && (sending || disabled)) ||
             voiceState === "finishing"
           }

@@ -15,7 +15,6 @@ export type ComposerSubmission = {
   bodyRevision: number;
   files: ComposerFile[];
   phase: "uploading" | "sending";
-  cancelRequested?: boolean;
 };
 
 export type ComposerDraft = {
@@ -143,6 +142,16 @@ export class ComposerController {
       this.#change({ files: remaining });
       return;
     }
+    if (pending.phase === "sending") {
+      void backend.cancelSend(this.discussionId, pending.id).catch(() => {});
+      this.#abort?.abort();
+      this.#notify({
+        busy: false,
+        draft: { ...this.#view.draft, files: remaining, pending: null },
+        submissionResult: { id: pending.id, state: "cancelled" },
+      });
+      return;
+    }
     this.#change({
       files: remaining,
       pending: {
@@ -220,6 +229,7 @@ export class ComposerController {
         return item.upload.id;
       });
       const result = await onSend(sending.body, ids, sending.id);
+      abort.signal.throwIfAborted();
       if (result === "cancelled") {
         this.#notify({
           draft: {
@@ -252,14 +262,16 @@ export class ComposerController {
       if (abort.signal.aborted) {
         if (uploads.length)
           await backend.cancelUploads(uploads).catch(() => {});
-        if (this.#view.draft.pending?.phase === "sending")
+        const current = this.#view.draft.pending;
+        if (current?.phase === "sending" && current.id === submission.id)
           await backend
             .cancelSend(this.discussionId, submission.id)
             .catch(() => {});
-        this.#notify({
-          draft: { ...this.#view.draft, pending: null },
-          submissionResult: { id: submission.id, state: "cancelled" },
-        });
+        if (current === null || current?.id === submission.id)
+          this.#notify({
+            draft: { ...this.#view.draft, pending: null },
+            submissionResult: { id: submission.id, state: "cancelled" },
+          });
       } else {
         this.#notify({
           draft: { ...this.#view.draft, pending: null },
