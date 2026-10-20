@@ -120,7 +120,6 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  min-height: 120px;
   padding: 16px;
   font-size: 13px;
 }
