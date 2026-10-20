@@ -118,18 +118,14 @@ export function FolderTree({
     for (const path of expandedKeys) if (!next.has(path)) onToggle(path);
   };
 
-  const choose = (keys: Selection) => {
-    const [key] = Array.from(keys);
-    if (key === undefined) return;
-    const path = String(key);
-    if (directories.has(path)) onSelect(path);
-    else onOpen?.(path);
-  };
-
   const renderNode = (node: FolderNode): ReactNode => {
     const directory = node.kind === "directory";
     const actions = directory ? (rowActions?.(node.path) ?? []) : [];
     const Icon = iconFor(node);
+    const activate = () => {
+      if (directory) onSelect(node.path);
+      else onOpen?.(node.path);
+    };
     return (
       <TreeItem
         key={node.path}
@@ -143,13 +139,15 @@ export function FolderTree({
         }}
         className={({ isSelected, isFocusVisible }) =>
           clsx(
-            "group relative flex items-center rounded-xs pr-1 outline-none transition-[background-color] duration-(--duration-fast) ease-linear",
+            "group relative flex items-center rounded-xs pr-1 transition-[background-color] duration-(--duration-fast) ease-linear",
             directory ? "h-[34px]" : "h-[30px]",
             isSelected ? "bg-surface-raised" : "hover:bg-surface-raised/60",
             isFocusVisible && "outline-1 -outline-offset-1 outline-line-hover",
           )
         }
         style={({ level }) => ({ paddingLeft: level * 14 })}
+        onPress={activate}
+        onAction={activate}
       >
         <TreeItemContent>
           {({ isExpanded, hasChildItems, isSelected }) => (
@@ -237,8 +235,9 @@ export function FolderTree({
         className="flex flex-col gap-px"
         selectionMode="single"
         selectionBehavior="replace"
-        selectedKeys={known.has(selected) ? new Set([selected]) : undefined}
-        onSelectionChange={choose}
+        defaultSelectedKeys={
+          known.has(selected) ? new Set([selected]) : undefined
+        }
         expandedKeys={expandedKeys}
         onExpandedChange={changeExpanded}
         disallowEmptySelection
