@@ -571,7 +571,6 @@ export function Composer({
         Number.parseFloat(compactStyle.paddingBottom);
       const expanded =
         files.length > 0 ||
-        !!view?.draft.pending ||
         recordingActive ||
         composerMultiline(
           element.value,
