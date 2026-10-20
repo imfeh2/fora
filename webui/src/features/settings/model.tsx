@@ -933,9 +933,9 @@ export function ModelPanel({
                                   {item.name}
                                 </span>
                                 <span className="text-xs text-fg-muted">
-                                  {item.api_type} · {modelCount}{" "}
-                                  {modelCount === 1 ? "model" : "models"} ·{" "}
-                                  {item.api_key_set ? "Key set" : "No key"}
+                                  {item.api_type}, {modelCount}{" "}
+                                  {modelCount === 1 ? "model" : "models"},{" "}
+                                  {item.api_key_set ? "key set" : "no key"}
                                 </span>
                               </button>
                               <Input
