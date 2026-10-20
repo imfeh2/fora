@@ -8,6 +8,7 @@ import {
   Settings,
 } from "lucide-react";
 import {
+  type FormEventHandler,
   type ReactNode,
   useCallback,
   useEffect,
@@ -19,7 +20,7 @@ import { useRouter } from "@/app/router";
 import { LoadError } from "@/components/ui/access-error";
 import { Choices } from "@/components/ui/choices";
 import { Combobox } from "@/components/ui/combobox";
-import { ConfirmDialog, Modal, ModalFooter } from "@/components/ui/dialog";
+import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -1198,40 +1199,26 @@ function ProviderModelEditor({
       ) : (
         directory?.(addAction)
       )}
-      <Modal
-        open={expanded}
-        variant="form"
-        footerSlot
-        title={model ? "Edit model" : "Add model"}
-        onOpenChange={(open) => {
-          if (!open) close();
-        }}
-      >
-        {expanded ? (
-          <>
-            {recovery}
-            {saveError ? <p role="alert">{saveError}</p> : null}
-            {unavailable ? (
-              <p role="alert" className="text-sm text-danger">
-                This model or provider no longer exists. Your draft is retained.
-              </p>
-            ) : null}
-            <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
-              <ModelForm
-                provider={provider}
-                model={model}
-                save={save}
-                busy={busy}
-                saving={saving}
-                onDraft={report}
-                connectionDirty={connectionDirty}
-                unavailable={unavailable}
-                onClose={close}
-              />
-            </fieldset>
-          </>
-        ) : null}
-      </Modal>
+      {expanded ? (
+        <ModelForm
+          open
+          title={model ? "Edit model" : "Add model"}
+          onOpenChange={(next) => {
+            if (!next) close();
+          }}
+          recovery={recovery}
+          saveError={saveError}
+          provider={provider}
+          model={model}
+          save={save}
+          busy={busy}
+          saving={saving}
+          onDraft={report}
+          connectionDirty={connectionDirty}
+          unavailable={unavailable}
+          onClose={close}
+        />
+      ) : null}
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -1405,56 +1392,88 @@ function ProviderForm({
       if (!provider) onCancel?.();
     });
   };
-  const fields = (
-    <form
-      className="provider-form flex flex-col gap-4"
-      onChangeCapture={() => {
-        dirty.current = true;
-      }}
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (busy || unavailable || !draftDirty) return;
-        if (body.error !== null) {
+  const submit: FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault();
+    if (busy || unavailable || !draftDirty) return;
+    if (body.error !== null) {
+      setAdvanced(true);
+      requestAnimationFrame(() => bodyInput.current?.focus());
+      return;
+    }
+    setBodyError(null);
+    if (!name.trim()) {
+      setNameError(true);
+      event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
+      return;
+    }
+    setNameError(false);
+    if (
+      await save(
+        "save_provider",
+        provider?.id ?? null,
+        {
+          name: name.trim(),
+          api_type: apiType,
+          base_url: baseUrl.trim(),
+          api_key: apiKey.trim(),
+          enabled,
+          extra_body: body.value,
+          ...(provider ? { clear_key: clearKey } : {}),
+        },
+        (message) => {
+          setBodyError(message);
           setAdvanced(true);
-          requestAnimationFrame(() => bodyInput.current?.focus());
-          return;
-        }
-        setBodyError(null);
-        if (!name.trim()) {
-          setNameError(true);
-          event.currentTarget.querySelector<HTMLInputElement>("input")?.focus();
-          return;
-        }
-        setNameError(false);
-        if (
-          await save(
-            "save_provider",
-            provider?.id ?? null,
-            {
-              name: name.trim(),
-              api_type: apiType,
-              base_url: baseUrl.trim(),
-              api_key: apiKey.trim(),
-              enabled,
-              extra_body: body.value,
-              ...(provider ? { clear_key: clearKey } : {}),
-            },
-            (message) => {
-              setBodyError(message);
-              setAdvanced(true);
-              restoreBodyFocus.current = true;
-            },
-          )
-        ) {
-          dirty.current = false;
-          setName(name.trim());
-          setBaseUrl(baseUrl.trim());
-          setApiKey("");
-          setClearKey(false);
-          onEdit(false);
-        }
-      }}
-    >
+          restoreBodyFocus.current = true;
+        },
+      )
+    ) {
+      dirty.current = false;
+      setName(name.trim());
+      setBaseUrl(baseUrl.trim());
+      setApiKey("");
+      setClearKey(false);
+      onEdit(false);
+    }
+  };
+  const actions = (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={busy || unavailable || !draftDirty}
+      >
+        {saving ? <Spinner label="Saving provider" /> : null}
+        {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
+      </Button>
+      <Button disabled={busy} onClick={editOpen ? cancel : onCancel}>
+        Cancel
+      </Button>
+      {provider ? (
+        <span className="inline-flex items-center gap-1">
+          <Button
+            disabled={busy || unavailable || modelCount > 0}
+            onClick={() => setConfirmDelete(true)}
+          >
+            {onDraft ? "Delete" : "Delete provider"}
+          </Button>
+          {modelCount > 0 ? (
+            <Tooltip label="Remove this provider's models first.">
+              <button
+                type="button"
+                disabled={busy}
+                aria-label="About deleting this provider"
+                className="inline-flex cursor-help p-1.5 -m-1.5"
+              >
+                <CircleHelp size={14} />
+              </button>
+            </Tooltip>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
+  );
+  const content = (
+    <>
       {editOpen ? recovery : null}
       {editOpen && saveError ? <p role="alert">{saveError}</p> : null}
       {unavailable && editOpen ? (
@@ -1465,6 +1484,9 @@ function ProviderForm({
       <fieldset
         disabled={busy}
         className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
+        onChangeCapture={() => {
+          dirty.current = true;
+        }}
       >
         {editOpen || !provider ? (
           <>
@@ -1627,44 +1649,6 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
             Clear stored key
           </label>
         ) : null}
-        <ModalFooter>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={busy || unavailable || !draftDirty}
-            >
-              {saving ? <Spinner label="Saving provider" /> : null}
-              {onDraft
-                ? "Save"
-                : provider
-                  ? "Save provider"
-                  : "Create provider"}
-            </Button>
-            <Button onClick={editOpen ? cancel : onCancel}>Cancel</Button>
-            {provider ? (
-              <span className="inline-flex items-center gap-1">
-                <Button
-                  disabled={unavailable || modelCount > 0}
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  {onDraft ? "Delete" : "Delete provider"}
-                </Button>
-                {modelCount > 0 ? (
-                  <Tooltip label="Remove this provider's models first.">
-                    <button
-                      type="button"
-                      aria-label="About deleting this provider"
-                      className="inline-flex cursor-help p-1.5 -m-1.5"
-                    >
-                      <CircleHelp size={14} />
-                    </button>
-                  </Tooltip>
-                ) : null}
-              </span>
-            ) : null}
-          </div>
-        </ModalFooter>
       </fieldset>
       <ConfirmDialog
         open={confirmDelete}
@@ -1681,6 +1665,12 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
             onDeleted();
         }}
       />
+    </>
+  );
+  const fields = (
+    <form className="provider-form flex flex-col gap-4" onSubmit={submit}>
+      {content}
+      {actions}
     </form>
   );
   return (
@@ -1725,13 +1715,14 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
         <Modal
           open
           variant="form"
-          footerSlot
+          onSubmit={submit}
+          footer={actions}
           title={provider ? "Edit provider" : "Add provider"}
           onOpenChange={(open) => {
             if (!open) cancel();
           }}
         >
-          {fields}
+          {content}
         </Modal>
       ) : (
         fields
@@ -1836,7 +1827,18 @@ function ProviderTest({
       <Modal
         open={open}
         variant="form"
-        footerSlot={models.length > 0}
+        footer={
+          models.length > 0 ? (
+            <Button
+              disabled={unavailable || test.testing}
+              onClick={() => {
+                if (model) void test.run({ model_id: model.id, thinking });
+              }}
+            >
+              {test.testing ? <Spinner label="Testing" /> : null}Test
+            </Button>
+          ) : undefined
+        }
         title="Test provider model"
         onOpenChange={(next) => {
           setOpen(next);
@@ -1882,16 +1884,6 @@ function ProviderTest({
             <p className="text-sm text-fg-muted">
               Uses the saved provider and model configuration for one request.
             </p>
-            <ModalFooter>
-              <Button
-                disabled={unavailable || test.testing}
-                onClick={() => {
-                  if (model) void test.run({ model_id: model.id, thinking });
-                }}
-              >
-                {test.testing ? <Spinner label="Testing" /> : null}Test
-              </Button>
-            </ModalFooter>
           </>
         )}
         {test.feedback ? <p role="status">{test.feedback}</p> : null}
@@ -2068,6 +2060,11 @@ function ModelDirectory({
 }
 
 function ModelForm({
+  open,
+  title,
+  onOpenChange,
+  recovery,
+  saveError,
   provider,
   model,
   save,
@@ -2078,6 +2075,11 @@ function ModelForm({
   unavailable = false,
   onClose,
 }: {
+  open: boolean;
+  title: string;
+  onOpenChange: (open: boolean) => void;
+  recovery?: ReactNode;
+  saveError?: string | null;
   onClose?: () => void;
   provider: ProviderConfig;
   unavailable?: boolean;
@@ -2203,185 +2205,207 @@ function ModelForm({
             thinking_budget_tokens: budgetSupported ? parsedBudget : null,
           },
     );
-  return (
-    <form
-      className="model-form flex flex-col gap-4"
-      onChangeCapture={() => {
-        dirty.current = true;
-      }}
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (busy || unavailable || !draftDirty) return;
-        if (!remote.trim()) {
-          event.currentTarget
-            .querySelector<HTMLInputElement>('[role="combobox"]')
-            ?.focus();
-          setFeedback("Enter a remote model ID.");
-          return;
-        }
-        if (budgetSupported && !validBudget) {
-          event.currentTarget
-            .querySelector<HTMLInputElement>('[type="number"]')
-            ?.focus();
-          toast({
-            tone: "danger",
-            title: "Invalid thinking budget",
-            description: "Enter a positive whole number.",
-          });
-          return;
-        }
-        if (
-          await save("save_model", model?.id ?? null, {
-            name: name.trim() || remote.trim(),
-            model: remote.trim(),
-            provider_id: provider.id,
-            enabled,
-            thinking_budget_tokens: budgetSupported ? parsedBudget : null,
-          })
-        ) {
-          dirty.current = false;
-          if (model) {
-            setName(name.trim() || remote.trim());
-            setRemote(remote.trim());
-            setBudgetTokens(
-              budgetSupported ? (parsedBudget?.toString() ?? "") : "",
-            );
-          }
-          if (!model) {
-            setName("");
-            setEnabled(true);
-            setRemote("");
-            setBudgetTokens("");
-            setThinking("default");
-          }
-        }
-      }}
-    >
-      <Field label="Display name" htmlFor={`${id}-name`}>
-        <Input
-          id={`${id}-name`}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
-      <Field label="Model ID" htmlFor={`${id}-remote`}>
-        <Combobox
-          id={`${id}-remote`}
-          label="Model ID"
-          value={remote}
-          onChange={(value) => {
-            dirty.current = true;
-            setRemote(value);
-          }}
-          options={options}
-          chooseLabel="Choose model"
-          loadLabel="Load models"
-          onLoad={() => void listModels()}
-          loading={listing}
-        />
-      </Field>
-      {budgetSupported ? (
-        <Field
-          label="Thinking token budget"
-          htmlFor={`${id}-budget`}
-          hint={
-            validBudget
-              ? "Used only when budget is selected."
-              : "Enter a positive whole number."
-          }
-        >
-          <Input
-            id={`${id}-budget`}
-            type="number"
-            min="1"
-            step="1"
-            aria-invalid={!validBudget}
-            value={budgetTokens}
-            onChange={(event) => setBudgetTokens(event.target.value)}
-          />
-        </Field>
-      ) : null}
-      <label
-        htmlFor={`${id}-enabled`}
-        className="flex items-center gap-2 text-sm"
+  const submit: FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault();
+    if (busy || unavailable || !draftDirty) return;
+    if (!remote.trim()) {
+      event.currentTarget
+        .querySelector<HTMLInputElement>('[role="combobox"]')
+        ?.focus();
+      setFeedback("Enter a remote model ID.");
+      return;
+    }
+    if (budgetSupported && !validBudget) {
+      event.currentTarget
+        .querySelector<HTMLInputElement>('[type="number"]')
+        ?.focus();
+      toast({
+        tone: "danger",
+        title: "Invalid thinking budget",
+        description: "Enter a positive whole number.",
+      });
+      return;
+    }
+    if (
+      await save("save_model", model?.id ?? null, {
+        name: name.trim() || remote.trim(),
+        model: remote.trim(),
+        provider_id: provider.id,
+        enabled,
+        thinking_budget_tokens: budgetSupported ? parsedBudget : null,
+      })
+    ) {
+      dirty.current = false;
+      if (model) {
+        setName(name.trim() || remote.trim());
+        setRemote(remote.trim());
+        setBudgetTokens(
+          budgetSupported ? (parsedBudget?.toString() ?? "") : "",
+        );
+      }
+      if (!model) {
+        setName("");
+        setEnabled(true);
+        setRemote("");
+        setBudgetTokens("");
+        setThinking("default");
+      }
+    }
+  };
+  const actions = (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={busy || unavailable || !draftDirty}
       >
-        <Input
-          id={`${id}-enabled`}
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => setEnabled(event.target.checked)}
-        />
-        Enabled
-      </label>
-      <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
-        <Select
-          id={`${id}-thinking`}
-          value={thinking}
-          onChange={(event) => setThinking(event.target.value as Thinking)}
+        {saving ? <Spinner label="Saving model" /> : null}
+        Save
+      </Button>
+      <Button disabled={busy} onClick={onClose}>
+        Cancel
+      </Button>
+      <Button
+        disabled={
+          busy ||
+          unavailable ||
+          test.testing ||
+          connectionDirty ||
+          !provider.api_key_set ||
+          !remote.trim() ||
+          !validTestSelection ||
+          budgetChanged ||
+          Boolean(model && remote !== model.model)
+        }
+        onClick={() => void testModel()}
+      >
+        {test.testing ? <Spinner label="Testing" /> : null}Test
+      </Button>
+      {model ? (
+        <Button
+          disabled={unavailable || busy}
+          onClick={() => setConfirmDelete(true)}
         >
-          {testThinkingOptions.map((option) => (
-            <option key={option} value={option}>
-              {thinkingLabel(option, parsedBudget)}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      {connectionDirty ? (
-        <p className="text-sm text-fg-muted">Save provider connection first.</p>
-      ) : model && (budgetChanged || remote !== model.model) ? (
-        <p className="text-sm text-fg-muted">Save model changes first.</p>
+          Delete model
+        </Button>
       ) : null}
-      {feedback || test.feedback ? (
-        <p role="status" className="text-sm">
-          {test.feedback ?? feedback}
+    </div>
+  );
+  return (
+    <Modal
+      open={open}
+      variant="form"
+      onSubmit={submit}
+      footer={actions}
+      title={title}
+      onOpenChange={onOpenChange}
+    >
+      {recovery}
+      {saveError ? <p role="alert">{saveError}</p> : null}
+      {unavailable ? (
+        <p role="alert" className="text-sm text-danger">
+          This model or provider no longer exists. Your draft is retained.
         </p>
       ) : null}
-      <ModalFooter>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={busy || unavailable || !draftDirty}
-          >
-            {saving ? <Spinner label="Saving model" /> : null}
-            Save
-          </Button>
-          {onClose ? <Button onClick={onClose}>Cancel</Button> : null}
-          <Button
-            disabled={
-              unavailable ||
-              test.testing ||
-              connectionDirty ||
-              !provider.api_key_set ||
-              !remote.trim() ||
-              !validTestSelection ||
-              budgetChanged ||
-              Boolean(model && remote !== model.model)
-            }
-            onClick={() => void testModel()}
-          >
-            {test.testing ? <Spinner label="Testing" /> : null}Test
-          </Button>
-          {model ? (
-            <Button
-              disabled={unavailable || busy}
-              onClick={() => setConfirmDelete(true)}
-            >
-              Delete model
-            </Button>
-          ) : null}
-        </div>
-      </ModalFooter>
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={`Delete ${model?.name}?`}
-        description="This model will be removed."
-        confirmLabel="Delete"
-        onConfirm={async () => {
-          if (!unavailable && model) await save("delete_model", model.id);
+      <fieldset
+        disabled={busy}
+        className="m-0 min-w-0 border-0 p-0"
+        onChangeCapture={() => {
+          dirty.current = true;
         }}
-      />
-    </form>
+      >
+        <Field label="Display name" htmlFor={`${id}-name`}>
+          <Input
+            id={`${id}-name`}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <Field label="Model ID" htmlFor={`${id}-remote`}>
+          <Combobox
+            id={`${id}-remote`}
+            label="Model ID"
+            value={remote}
+            onChange={(value) => {
+              dirty.current = true;
+              setRemote(value);
+            }}
+            options={options}
+            chooseLabel="Choose model"
+            loadLabel="Load models"
+            onLoad={() => void listModels()}
+            loading={listing}
+          />
+        </Field>
+        {budgetSupported ? (
+          <Field
+            label="Thinking token budget"
+            htmlFor={`${id}-budget`}
+            hint={
+              validBudget
+                ? "Used only when budget is selected."
+                : "Enter a positive whole number."
+            }
+          >
+            <Input
+              id={`${id}-budget`}
+              type="number"
+              min="1"
+              step="1"
+              aria-invalid={!validBudget}
+              value={budgetTokens}
+              onChange={(event) => setBudgetTokens(event.target.value)}
+            />
+          </Field>
+        ) : null}
+        <label
+          htmlFor={`${id}-enabled`}
+          className="flex items-center gap-2 text-sm"
+        >
+          <Input
+            id={`${id}-enabled`}
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
+          />
+          Enabled
+        </label>
+        <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
+          <Select
+            id={`${id}-thinking`}
+            value={thinking}
+            onChange={(event) => setThinking(event.target.value as Thinking)}
+          >
+            {testThinkingOptions.map((option) => (
+              <option key={option} value={option}>
+                {thinkingLabel(option, parsedBudget)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {connectionDirty ? (
+          <p className="text-sm text-fg-muted">
+            Save provider connection first.
+          </p>
+        ) : model && (budgetChanged || remote !== model.model) ? (
+          <p className="text-sm text-fg-muted">Save model changes first.</p>
+        ) : null}
+        {feedback || test.feedback ? (
+          <p role="status" className="text-sm">
+            {test.feedback ?? feedback}
+          </p>
+        ) : null}
+        <ConfirmDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={`Delete ${model?.name}?`}
+          description="This model will be removed."
+          confirmLabel="Delete"
+          onConfirm={async () => {
+            if (!unavailable && model) await save("delete_model", model.id);
+          }}
+        />
+      </fieldset>
+    </Modal>
   );
 }

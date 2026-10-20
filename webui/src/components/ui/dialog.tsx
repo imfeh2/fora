@@ -1,16 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import {
-  createContext,
+  type FormEventHandler,
   type ReactNode,
   useCallback,
-  useContext,
   useEffect,
   useId,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import { Button, Field, IconButton, Input, toast } from "@/components/ui/index";
 import { registerToastHost } from "@/components/ui/toast-host";
 
@@ -40,14 +38,6 @@ function refocus(target: { focus: () => void } | null) {
 
 export type ModalVariant = "form" | "confirm" | "history";
 
-const FooterSlot = createContext<HTMLDivElement | null>(null);
-
-export function ModalFooter({ children }: { children: ReactNode }) {
-  const node = useContext(FooterSlot);
-  if (!node) return <>{children}</>;
-  return createPortal(children, node);
-}
-
 export function Modal({
   open,
   onOpenChange,
@@ -55,7 +45,7 @@ export function Modal({
   description,
   children,
   footer,
-  footerSlot = false,
+  onSubmit,
   tone = "dialog",
   wide = false,
   variant,
@@ -70,7 +60,7 @@ export function Modal({
   description?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
-  footerSlot?: boolean;
+  onSubmit?: FormEventHandler<HTMLFormElement>;
   tone?: "dialog" | "surface";
   wide?: boolean;
   variant?: ModalVariant;
@@ -80,12 +70,10 @@ export function Modal({
   onClosed?: () => void;
 }) {
   const opener = useRef<HTMLElement | null>(null);
-  const content = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLElement | null>(null);
   const footerElement = useRef<HTMLDivElement>(null);
-  const [footerNode, setFooterNode] = useState<HTMLDivElement | null>(null);
-  const attachFooter = useCallback((node: HTMLDivElement | null) => {
-    footerElement.current = node;
-    setFooterNode(node);
+  const attachContent = useCallback((node: HTMLElement | null) => {
+    content.current = node;
   }, []);
   const closeButton = useRef<HTMLButtonElement>(null);
   const closed = useRef(onClosed);
@@ -116,17 +104,13 @@ export function Modal({
   const bodySpacing = framed
     ? ""
     : `px-6 py-5 narrow:px-4 narrow:py-4${
-        footer || footerSlot
-          ? ""
-          : " narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]"
+        footer ? "" : " narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]"
       }`;
   const footerSpacing = framed
     ? ""
     : "px-6 pt-4 pb-5 narrow:px-4 narrow:pt-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]";
   const footerDivider =
-    framed ||
-    modalKind === "confirm" ||
-    (modalKind === "history" && !footer && !footerSlot)
+    framed || modalKind === "confirm" || (modalKind === "history" && !footer)
       ? ""
       : "border-t border-line";
   const panelClass =
@@ -139,91 +123,103 @@ export function Modal({
       : `flex items-start justify-between gap-3 shrink-0 ${headerSpacing} ${headerDivider}`;
   const footerClass = `flex justify-end gap-2 shrink-0 ${footerSpacing} ${footerDivider} narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11 touch:flex-col-reverse touch:*:w-full touch:*:min-h-11`;
 
+  const focusOnOpen = (event: Event) => {
+    opener.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    event.preventDefault();
+    const root = content.current;
+    if (!root) return;
+    const target = initialFocus
+      ? initialFocus()
+      : side === "left"
+        ? closeButton.current
+        : dialogFocusTarget(
+            Array.from(
+              root.querySelectorAll<
+                HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+              >("input, textarea, select"),
+            ),
+            Array.from(
+              footerElement.current?.querySelectorAll<HTMLButtonElement>(
+                "button",
+              ) ?? [],
+            ),
+          );
+    (target ?? root).focus();
+  };
+  const focusOnClose = (event: Event) => {
+    event.preventDefault();
+    const target = restoreFocus ? restoreFocus() : opener.current;
+    target?.focus();
+    if (!isOpen.current) closed.current?.();
+  };
+  const panel = (
+    <>
+      <div className={headerClass}>
+        <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
+          {title}
+        </Dialog.Title>
+        <Dialog.Close asChild>
+          <IconButton
+            ref={closeButton}
+            label={side === "left" ? "Close navigation" : "Close"}
+            size="sm"
+            touchTarget
+          >
+            <X size={15} />
+          </IconButton>
+        </Dialog.Close>
+      </div>
+      <div
+        ref={toastHost}
+        className={`empty:hidden shrink-0 ${framed ? "" : "px-6 narrow:px-4"}`}
+      />
+      {side === "left" ? (
+        children ? (
+          <div className="min-h-0 flex-1 flex flex-col">{children}</div>
+        ) : null
+      ) : (
+        <div
+          className={`min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
+        >
+          {description ? (
+            <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
+              {description}
+            </Dialog.Description>
+          ) : null}
+          {children}
+        </div>
+      )}
+      {footer ? (
+        <div ref={footerElement} className={footerClass}>
+          {footer}
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-(--layer-overlay) bg-gray-1100/60 animate-fade-in [animation-duration:var(--duration-fast)] [animation-timing-function:var(--ease-out)]" />
         <Dialog.Content
-          ref={content}
+          asChild
           className={panelClass}
-          onOpenAutoFocus={(event) => {
-            opener.current =
-              document.activeElement instanceof HTMLElement
-                ? document.activeElement
-                : null;
-            event.preventDefault();
-            const root = content.current;
-            if (!root) return;
-            const target = initialFocus
-              ? initialFocus()
-              : side === "left"
-                ? closeButton.current
-                : dialogFocusTarget(
-                    Array.from(
-                      root.querySelectorAll<
-                        | HTMLInputElement
-                        | HTMLTextAreaElement
-                        | HTMLSelectElement
-                      >("input, textarea, select"),
-                    ),
-                    Array.from(
-                      footerElement.current?.querySelectorAll<HTMLButtonElement>(
-                        "button",
-                      ) ?? [],
-                    ),
-                  );
-            (target ?? root).focus();
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            const target = restoreFocus ? restoreFocus() : opener.current;
-            target?.focus();
-            if (!isOpen.current) closed.current?.();
-          }}
+          onOpenAutoFocus={focusOnOpen}
+          onCloseAutoFocus={focusOnClose}
           {...(description ? {} : { "aria-describedby": undefined })}
         >
-          <div className={headerClass}>
-            <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
-              {title}
-            </Dialog.Title>
-            <Dialog.Close asChild>
-              <IconButton
-                ref={closeButton}
-                label={side === "left" ? "Close navigation" : "Close"}
-                size="sm"
-                touchTarget
-              >
-                <X size={15} />
-              </IconButton>
-            </Dialog.Close>
-          </div>
-          <div
-            ref={toastHost}
-            className={`empty:hidden shrink-0 ${framed ? "" : "px-6 narrow:px-4"}`}
-          />
-          <FooterSlot.Provider value={footerNode}>
-            {side === "left" ? (
-              children ? (
-                <div className="min-h-0 flex-1 flex flex-col">{children}</div>
-              ) : null
-            ) : (
-              <div
-                className={`min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
-              >
-                {description ? (
-                  <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
-                    {description}
-                  </Dialog.Description>
-                ) : null}
-                {children}
-              </div>
-            )}
-            {footer || footerSlot ? (
-              <div ref={attachFooter} className={footerClass}>
-                {footer}
-              </div>
-            ) : null}
-          </FooterSlot.Provider>
+          {onSubmit ? (
+            <form ref={attachContent} onSubmit={onSubmit} noValidate>
+              {panel}
+            </form>
+          ) : (
+            <div ref={attachContent} tabIndex={-1}>
+              {panel}
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
