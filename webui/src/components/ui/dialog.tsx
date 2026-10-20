@@ -44,6 +44,7 @@ export function Modal({
   description,
   children,
   footer,
+  tone = "dialog",
   wide = false,
   variant,
   side,
@@ -57,6 +58,7 @@ export function Modal({
   description?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
+  tone?: "dialog" | "surface";
   wide?: boolean;
   variant?: ModalVariant;
   side?: "left";
@@ -86,6 +88,28 @@ export function Modal({
   const wideWidth = wide
     ? "w-[min(960px,calc(100vw-32px))]"
     : "w-[min(440px,calc(100vw-48px))]";
+  const framed = tone === "surface";
+  const spacing = framed ? "gap-4 p-6" : "";
+  const headerSpacing = framed ? "" : "px-6 pt-5 pb-4 narrow:px-4 narrow:pt-4";
+  const headerDivider =
+    framed || modalKind === "confirm" ? "" : "border-b border-line";
+  const bodySpacing = framed ? "" : "px-6 py-5 narrow:px-4 narrow:py-4";
+  const footerSpacing = framed
+    ? ""
+    : "px-6 pt-4 pb-5 narrow:px-4 narrow:pt-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]";
+  const footerDivider =
+    framed || modalKind === "confirm" || (modalKind === "history" && !footer)
+      ? ""
+      : "border-t border-line";
+  const panelClass =
+    side === "left"
+      ? "dialog-panel fixed inset-y-0 left-0 z-(--layer-dialog) flex min-h-0 w-[280px] max-w-[85vw] flex-col border-r border-line rounded-r-lg bg-surface-dialog shadow-dialog animate-fade-in"
+      : `dialog-panel fixed top-1/2 left-1/2 z-(--layer-dialog) flex min-h-0 max-h-[calc(100vh-32px)] flex-col ${spacing} border border-line rounded-lg ${framed ? "bg-surface" : "bg-surface-dialog"} shadow-dialog [translate:-50%_-50%] origin-center animate-pop-in narrow:inset-x-0 narrow:bottom-0 narrow:top-auto narrow:translate-x-0 narrow:translate-y-0 narrow:w-full narrow:max-w-full narrow:rounded-t-lg narrow:rounded-b-none narrow:border-t narrow:border-x-0 narrow:border-b-0 ${maxDvhClass} narrow:animate-slide-up ${wideWidth}`;
+  const headerClass =
+    side === "left"
+      ? "flex items-center justify-between gap-3 p-3 border-b border-line shrink-0"
+      : `flex items-start justify-between gap-3 shrink-0 ${headerSpacing} ${headerDivider}`;
+  const footerClass = `flex justify-end gap-2 shrink-0 ${footerSpacing} ${footerDivider} narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11 touch:flex-col-reverse touch:*:w-full touch:*:min-h-11`;
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -93,11 +117,7 @@ export function Modal({
         <Dialog.Overlay className="fixed inset-0 z-(--layer-overlay) bg-gray-1100/60 animate-fade-in [animation-duration:var(--duration-fast)] [animation-timing-function:var(--ease-out)]" />
         <Dialog.Content
           ref={content}
-          className={
-            side === "left"
-              ? "fixed inset-y-0 left-0 z-(--layer-dialog) flex min-h-0 w-[280px] max-w-[85vw] flex-col border-r border-line bg-surface-raised shadow-dialog animate-fade-in"
-              : `fixed top-1/2 left-1/2 z-(--layer-dialog) flex min-h-0 max-h-[calc(100vh-32px)] flex-col gap-4 p-6 border border-line rounded-lg bg-surface-raised shadow-dialog [translate:-50%_-50%] origin-center animate-pop-in narrow:inset-x-0 narrow:bottom-0 narrow:top-auto narrow:translate-x-0 narrow:translate-y-0 narrow:w-full narrow:max-w-full narrow:rounded-t-lg narrow:rounded-b-none narrow:border-t narrow:border-x-0 narrow:border-b-0 ${maxDvhClass} narrow:p-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))] narrow:animate-slide-up ${wideWidth}`
-          }
+          className={panelClass}
           onOpenAutoFocus={(event) => {
             opener.current =
               document.activeElement instanceof HTMLElement
@@ -134,13 +154,7 @@ export function Modal({
           }}
           {...(description ? {} : { "aria-describedby": undefined })}
         >
-          <div
-            className={
-              side === "left"
-                ? "flex items-center justify-between gap-3 p-3 border-b border-line shrink-0"
-                : "flex items-start justify-between gap-3 shrink-0"
-            }
-          >
+          <div className={headerClass}>
             <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
               {title}
             </Dialog.Title>
@@ -161,7 +175,9 @@ export function Modal({
               <div className="min-h-0 flex-1 flex flex-col">{children}</div>
             ) : null
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto flex flex-col gap-4">
+            <div
+              className={`min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
+            >
               {description ? (
                 <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
                   {description}
@@ -171,10 +187,7 @@ export function Modal({
             </div>
           )}
           {footer ? (
-            <div
-              ref={footerElement}
-              className="flex justify-end gap-2 shrink-0 narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11 touch:flex-col-reverse touch:*:w-full touch:*:min-h-11"
-            >
+            <div ref={footerElement} className={footerClass}>
               {footer}
             </div>
           ) : null}

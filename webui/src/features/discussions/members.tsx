@@ -33,7 +33,7 @@ export function MemberPicker({
       disabled={disabled}
     >
       <legend className="p-0 text-xs font-medium text-fg-muted">Members</legend>
-      <ul className="flex max-h-[220px] flex-col overflow-y-auto rounded-sm border border-line bg-app">
+      <ul className="flex max-h-[220px] flex-col overflow-y-auto rounded-sm border border-line bg-surface">
         {members.length === 0 ? (
           <li>
             <StatePanel

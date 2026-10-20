@@ -605,6 +605,18 @@ body.sidebar-resizing {
   user-select: none;
 }
 
+.dialog-panel input:not([type="checkbox"]),
+.dialog-panel select,
+.dialog-panel textarea {
+  background-color: var(--color-surface);
+}
+
+.dialog-panel input:not([type="checkbox"]):focus,
+.dialog-panel select:focus,
+.dialog-panel textarea:focus {
+  border-color: var(--color-line-focus);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

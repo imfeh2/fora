@@ -331,6 +331,7 @@ function ImageViewer({
       }}
       title={documentName(current.path)}
       variant="history"
+      tone="surface"
       wide
       footer={
         <Button disabled={downloading} onClick={() => void download()}>
