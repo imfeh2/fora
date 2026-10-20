@@ -28,10 +28,6 @@ const SECTIONS: {
   { id: "voice", label: "Voice", icon: <AudioLines size={16} /> },
 ];
 
-export function sectionLabel(section: SettingsSection): string {
-  return SECTIONS.find((item) => item.id === section)?.label ?? section;
-}
-
 export function SettingsNav({ section }: { section: SettingsSection }) {
   const navigate = useNavigate();
   const saving = useSettingsSaving();

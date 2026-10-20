@@ -27,7 +27,7 @@ function SettingsPageContent({ section }: { section: SettingsSection }) {
   return (
     <Page>
       <PageBody>
-        <div className="settings-layout pt-6 px-8 pb-4 max-[940px]:px-6 narrow:px-3 narrow:pt-3 narrow:pb-3">
+        <div className="settings-layout pt-6 narrow:pt-3">
           <Panel section={section} />
         </div>
       </PageBody>
