@@ -396,7 +396,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
           {file ? (
             <DocumentBody path={file} />
           ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 flex flex-col">
               {resource.error &&
               !(resource.error.transport && backend.disconnected) ? (
                 <div className="pb-4">
