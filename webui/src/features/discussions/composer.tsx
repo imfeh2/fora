@@ -784,7 +784,6 @@ export function Composer({
         id: "composer-send-error",
         tone: "danger",
         title: failure.message,
-        action: { label: "Retry", onClick: () => void submit() },
       });
     } else {
       toast({
@@ -794,7 +793,7 @@ export function Composer({
       });
     }
     controller.clearError();
-  }, [view.error, controller, submit]);
+  }, [view.error, controller]);
 
   return (
     <div
