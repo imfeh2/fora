@@ -1567,6 +1567,7 @@ function ProviderForm({
                   label={`JSON merged into every model request sent through this provider, up to 16 KiB of UTF-8 JSON.
 Use at most 16 container levels.
 Omit a key to remove it; null is sent as a real JSON null.
+Nested objects are replaced as a whole, never merged key by key.
 Clear the field to remove all custom content.
 Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
                 >
