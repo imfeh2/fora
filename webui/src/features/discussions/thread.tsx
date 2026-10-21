@@ -263,6 +263,15 @@ function ThreadSession({
     [virtual],
   );
   const items = virtual.getVirtualItems();
+  const listRef = useRef<HTMLOListElement | null>(null);
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+  const backendRef = useRef(backend);
+  backendRef.current = backend;
+  const composerHeightRef = useRef(composerSize);
+  composerHeightRef.current = composerSize;
   const memberIds = useMemo(
     () => new Set((detail?.members ?? []).map((member) => member.id)),
     [detail?.members],
@@ -271,56 +280,65 @@ function ThreadSession({
   const sample = useCallback(
     (paginate = false) => {
       const root = scroll.current;
-      const current = thread.current.current;
+      const list = listRef.current;
+      const current = threadRef.current.current.current;
       if (!root || !ready.current || !current) return;
       const { top: effectiveTop, end } = getAvailableViewport(
         root,
-        composerSize,
-        keyboardOffset,
+        composerHeightRef.current,
+        keyboardOffsetRef.current,
       );
       const visible: number[] = [];
-      if (end > effectiveTop) {
-        for (const element of root.querySelectorAll<HTMLElement>(
-          "[data-message-id]",
-        )) {
-          const rect = element.getBoundingClientRect();
-          if (rect.bottom > effectiveTop && rect.top < end)
-            visible.push(Number(element.dataset.messageId));
+      if (end > effectiveTop && list !== null) {
+        const origin = list.getBoundingClientRect().top;
+        for (const item of virtual.getVirtualItems()) {
+          const unit = unitsRef.current[item.index];
+          if (unit === undefined) continue;
+          const rowTop = origin + item.start;
+          if (rowTop + item.size > effectiveTop && rowTop < end)
+            visible.push(unit.message.id);
         }
       }
+      const live = threadRef.current;
       setAtBottom(virtual.isAtEnd());
-      thread.view(visible, virtual.isAtEnd());
+      live.view(visible, virtual.isAtEnd());
       if (
         document.visibilityState === "visible" &&
         visible.length &&
-        !backend.disconnected &&
-        !thread.loading
+        !backendRef.current.disconnected &&
+        !live.loading
       )
-        void thread.markRead(Math.max(...visible)).catch(() => {});
+        void live.markRead(Math.max(...visible)).catch(() => {});
       if (positioning.current) return;
-      if (!thread.failed && !thread.loading) {
+      if (!live.failed && !live.loading) {
         if (
           current.hasBefore &&
           root.clientHeight > 0 &&
           (virtual.getTotalSize() <= root.clientHeight ||
             (paginate && root.scrollTop <= 200))
         )
-          void thread.request("before");
+          void live.request("before");
         else if (
           paginate &&
           root.scrollHeight - root.scrollTop - root.clientHeight <
             root.clientHeight &&
           current.hasAfter
         )
-          void thread.request("after");
+          void live.request("after");
       }
     },
-    [composerSize, keyboardOffset, thread, virtual],
+    [virtual],
   );
 
   const sampleRef = useRef(sample);
-  useEffect(() => {
-    sampleRef.current = sample;
+  sampleRef.current = sample;
+  const scrollFrame = useRef(0);
+  const scheduleSample = useCallback(() => {
+    if (scrollFrame.current !== 0) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = 0;
+      sample(true);
+    });
   }, [sample]);
 
   const terminateOwnedTarget = useCallback(() => {
@@ -401,6 +419,7 @@ function ThreadSession({
       cancelAnimationFrame(monitorFrame.current);
       cancelAnimationFrame(frame.current);
       cancelAnimationFrame(interruptFrame.current);
+      cancelAnimationFrame(scrollFrame.current);
     },
     [],
   );
@@ -637,7 +656,7 @@ function ThreadSession({
         vv.removeEventListener("scroll", onViewport);
       }
     };
-  }, [sample, items, virtual]);
+  }, [sample, virtual]);
 
   useLayoutEffect(() => {
     const follow = shouldFollowBottom.current;
@@ -795,7 +814,7 @@ function ThreadSession({
                 shouldFollowBottom.current = false;
                 if (positioningInterrupted.current && scroll.current)
                   virtual.scrollToOffset(scroll.current.scrollTop);
-                sample(true);
+                scheduleSample();
               }}
               onWheel={stopPositioning}
               onTouchStart={stopPositioning}
@@ -830,6 +849,7 @@ function ThreadSession({
                 </div>
               ) : null}
               <ol
+                ref={listRef}
                 className="relative transition-none"
                 hidden={units.length === 0}
                 style={{ height: virtual.getTotalSize() }}
