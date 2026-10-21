@@ -333,12 +333,19 @@ function ThreadSession({
   const sampleRef = useRef(sample);
   sampleRef.current = sample;
   const scrollFrame = useRef(0);
+  const scrollTimer = useRef(0);
   const scheduleSample = useCallback(() => {
-    if (scrollFrame.current !== 0) return;
-    scrollFrame.current = requestAnimationFrame(() => {
-      scrollFrame.current = 0;
+    if (scrollFrame.current === 0) {
+      scrollFrame.current = requestAnimationFrame(() => {
+        scrollFrame.current = 0;
+        sample(true);
+      });
+    }
+    if (scrollTimer.current !== 0) window.clearTimeout(scrollTimer.current);
+    scrollTimer.current = window.setTimeout(() => {
+      scrollTimer.current = 0;
       sample(true);
-    });
+    }, 100);
   }, [sample]);
 
   const terminateOwnedTarget = useCallback(() => {
@@ -420,6 +427,7 @@ function ThreadSession({
       cancelAnimationFrame(frame.current);
       cancelAnimationFrame(interruptFrame.current);
       cancelAnimationFrame(scrollFrame.current);
+      window.clearTimeout(scrollTimer.current);
     },
     [],
   );
