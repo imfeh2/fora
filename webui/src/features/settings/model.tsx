@@ -1563,7 +1563,13 @@ function ProviderForm({
             label={
               <span className="inline-flex items-center gap-1">
                 <label htmlFor={`${id}-body`}>Custom request body</label>
-                <Tooltip label="Add a JSON object to every model request for this provider. Supports OpenAI Chat, OpenAI Responses and Anthropic. Maximum 16 KiB of UTF-8 JSON and 16 container levels. Explicit fields take priority over thinking settings; nested objects are replaced as a whole. Changes apply to the next Turn. Clear the field to remove all custom content. Omit a key to remove it; null is sent as a real JSON null.">
+                <Tooltip
+                  label={`JSON merged into every model request sent through this provider, up to 16 KiB of UTF-8 JSON.
+Use at most 16 container levels.
+Omit a key to remove it; null is sent as a real JSON null.
+Clear the field to remove all custom content.
+Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
+                >
                   <button
                     type="button"
                     aria-label="About custom request body"
