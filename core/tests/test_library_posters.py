@@ -1,7 +1,11 @@
 import asyncio
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
+
+import pytest
 
 from fora.adapters.media import posters
 
@@ -281,3 +285,33 @@ def test_extract_without_ffmpeg_returns_nothing(tmp_path: Path, monkeypatch) -> 
 
     assert asyncio.run(posters.extract(target, tmp_path / "out.jpg")) is None
     assert not (tmp_path / "out.jpg").exists()
+
+
+def test_a_clip_shorter_than_a_second_gets_a_poster(tmp_path: Path) -> None:
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg and ffprobe are not installed")
+    target = tmp_path / "short.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x64:rate=25:duration=0.4",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            str(target),
+        ],
+        check=True,
+    )
+
+    output = tmp_path / "poster.jpg"
+    produced = asyncio.run(posters.extract(target, output))
+
+    assert produced is not None
+    assert produced.startswith(b"\xff\xd8\xff")
+    assert output.read_bytes() == produced

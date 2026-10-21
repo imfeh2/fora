@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 FFMPEG = "ffmpeg"
+FFPROBE = "ffprobe"
 POSTER_SECONDS = 0.5
 POSTER_WIDTH = 640
 POSTER_QUALITY = 5
@@ -104,6 +105,49 @@ async def extract(target: Path, output: Path) -> bytes | None:
     ffmpeg = shutil.which(FFMPEG)
     if ffmpeg is None:
         return None
+    length = await duration(target)
+    seconds = POSTER_SECONDS if length is None else min(POSTER_SECONDS, length / 2)
+    produced = await _grab(ffmpeg, target, output, seconds)
+    if produced is not None or seconds == 0:
+        return produced
+    return await _grab(ffmpeg, target, output, 0.0)
+
+
+async def duration(target: Path) -> float | None:
+    ffprobe = shutil.which(FFPROBE)
+    if ffprobe is None:
+        return None
+    process = await asyncio.create_subprocess_exec(
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(target),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), POSTER_TIMEOUT)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        return None
+    if process.returncode != 0:
+        return None
+    try:
+        length = float(stdout.decode().strip())
+    except ValueError:
+        return None
+    return length if length > 0 else None
+
+
+async def _grab(
+    ffmpeg: str, target: Path, output: Path, seconds: float
+) -> bytes | None:
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_name(f"{output.name}.part")
     process = await asyncio.create_subprocess_exec(
@@ -112,7 +156,7 @@ async def extract(target: Path, output: Path) -> bytes | None:
         "-loglevel",
         "error",
         "-ss",
-        str(POSTER_SECONDS),
+        str(seconds),
         "-i",
         str(target),
         "-frames:v",
