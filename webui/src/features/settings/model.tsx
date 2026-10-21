@@ -512,7 +512,15 @@ export function ModelPanel({
       setSelected(id);
       setEditProvider(edit || id === "new");
       setError(null);
-      if (id === null) requestAnimationFrame(() => opener.current?.focus());
+      if (id === null)
+        requestAnimationFrame(() => {
+          const target =
+            opener.current?.isConnected === true
+              ? opener.current
+              : (document.querySelector<HTMLElement>("[data-provider-add]") ??
+                document.querySelector<HTMLElement>("[data-nav]"));
+          target?.focus();
+        });
     };
     if (Array.from(drafts.current.values()).some(Boolean))
       setDiscard(() => proceed);
@@ -881,6 +889,7 @@ export function ModelPanel({
                     title="No providers found"
                     action={
                       <Button
+                        data-provider-add
                         className="px-4"
                         disabled={busy || uncertain || !connected}
                         variant="primary"
@@ -1008,6 +1017,7 @@ export function ModelPanel({
                       ) : null}
                     </div>
                     <Button
+                      data-provider-add
                       disabled={busy || uncertain || !connected}
                       variant="primary"
                       onClick={(event) => {
