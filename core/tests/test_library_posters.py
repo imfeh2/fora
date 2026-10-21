@@ -288,8 +288,8 @@ def test_extract_without_ffmpeg_returns_nothing(tmp_path: Path, monkeypatch) -> 
 
 
 def test_a_clip_shorter_than_a_second_gets_a_poster(tmp_path: Path) -> None:
-    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
-        pytest.skip("ffmpeg and ffprobe are not installed")
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
     target = tmp_path / "short.mp4"
     subprocess.run(
         [
