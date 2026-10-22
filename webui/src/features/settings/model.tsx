@@ -1481,20 +1481,21 @@ function ProviderForm({
       </Button>
     </DialogActions>
   );
-  const alerts = (
-    <>
-      {editOpen && saveError ? (
-        <p role="alert" className="text-sm text-danger">
-          {saveError}
-        </p>
-      ) : null}
-      {unavailable && editOpen ? (
-        <p role="alert" className="text-sm text-danger">
-          This provider no longer exists. Your draft is retained.
-        </p>
-      ) : null}
-    </>
-  );
+  const alerts =
+    editOpen && (saveError || unavailable) ? (
+      <>
+        {saveError ? (
+          <p role="alert" className="text-sm text-danger">
+            {saveError}
+          </p>
+        ) : null}
+        {unavailable ? (
+          <p role="alert" className="text-sm text-danger">
+            This provider no longer exists. Your draft is retained.
+          </p>
+        ) : null}
+      </>
+    ) : null;
   const content = (
     <>
       {editOpen ? recovery : null}
@@ -1740,7 +1741,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
           variant="form"
           onSubmit={submit}
           footer={actions}
-          alert={editOpen ? alerts : null}
+          alert={alerts}
           title={provider ? "Edit provider" : "Add provider"}
           onOpenChange={(open) => {
             if (!open) cancel();
