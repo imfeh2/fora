@@ -131,11 +131,11 @@ export function deleteConsequence(
   entries: LibraryEntry[],
 ): string {
   if (entry?.kind !== "directory")
-    return "The document is removed for every Member.";
+    return "The document is removed for every Member. This cannot be undone.";
   const count = entries.filter(
     (item) => item.kind === "file" && item.path.startsWith(`${entry.path}/`),
   ).length;
-  return `Removes ${plural(count, "file")} for every Member.`;
+  return `Removes ${plural(count, "file")} for every Member. This cannot be undone.`;
 }
 
 export function LibraryPage({ path = "" }: { path?: string }) {
@@ -516,6 +516,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
         open={creating !== null}
         onOpenChange={(next) => !next && setCreating(null)}
         title={creating?.kind === "directory" ? "New folder" : "New document"}
+        protectUnsaved
         label="Name"
         description={
           creating?.parent
@@ -549,6 +550,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
         title={
           renaming?.kind === "directory" ? "Rename folder" : "Rename document"
         }
+        protectUnsaved
         label="New path"
         initial={renaming?.path ?? ""}
         submitLabel="Rename"

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useOrganization } from "@/app/organization";
-import { Modal } from "@/components/ui/dialog";
+import { DialogActions, Modal } from "@/components/ui/dialog";
 import { Button, Field, Input, toast } from "@/components/ui/index";
 import { MemberPicker } from "@/features/discussions/members";
 import { backend } from "@/lib/backend";
@@ -101,13 +101,18 @@ export function CreateDiscussionDialog({
       variant="form"
       restoreFocus={restoreFocus}
       onClosed={closed}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void create();
+      }}
       footer={
-        <>
-          <Button onClick={() => changeOpen(false)}>Cancel</Button>
-          <Button variant="primary" disabled={!ready || busy} onClick={create}>
+        <DialogActions
+          cancel={<Button onClick={() => changeOpen(false)}>Cancel</Button>}
+        >
+          <Button type="submit" variant="primary" disabled={!ready || busy}>
             Create Discussion
           </Button>
-        </>
+        </DialogActions>
       }
     >
       <Field label="Topic" htmlFor={topicId}>

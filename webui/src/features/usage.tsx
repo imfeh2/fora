@@ -19,7 +19,7 @@ import {
   Table,
 } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
-import { Modal } from "@/components/ui/dialog";
+import { DialogActions, Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -1075,6 +1075,11 @@ export function UsagePage({ entrySignal = 0 }: { entrySignal?: number }) {
         title="Request details"
         variant="history"
         wide
+        footer={
+          <DialogActions>
+            <Button onClick={() => setRecord(null)}>Close</Button>
+          </DialogActions>
+        }
       >
         {record ? (
           <DetailContent

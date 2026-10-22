@@ -133,6 +133,7 @@ function DocumentFrame({
         open={renaming}
         onOpenChange={setRenaming}
         title="Rename document"
+        protectUnsaved
         label="New path"
         initial={path}
         submitLabel="Rename"
@@ -146,7 +147,7 @@ function DocumentFrame({
         open={doomed}
         onOpenChange={setDoomed}
         title={`Delete ${path}?`}
-        description="The document is removed for every Member."
+        description="The document is removed for every Member. This cannot be undone."
         confirmLabel="Delete document"
         onConfirm={async () => {
           await backend.deleteLibrary(path);

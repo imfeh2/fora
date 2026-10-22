@@ -1,7 +1,7 @@
 import { Bot, User, Users } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useOrganization } from "@/app/organization";
-import { Modal } from "@/components/ui/dialog";
+import { DialogActions, Modal } from "@/components/ui/dialog";
 import {
   Avatar,
   Button,
@@ -90,31 +90,33 @@ export function DiscussionMembersDialog({
   const { members } = useOrganization();
   const [selected, setSelected] = useState(memberIds);
   const [busy, setBusy] = useState(false);
-  const changed =
-    selected.length !== memberIds.length ||
-    selected.some((id) => !memberIds.includes(id));
+  const saved = useRef(memberIds);
+  const request = useRef(0);
 
   if (members === null) return null;
 
-  const save = async () => {
-    if (!changed || busy || members === null || backend.disconnected) return;
+  const apply = async (next: number[]) => {
+    if (busy || backend.disconnected) return;
+    setSelected(next);
+    const current = ++request.current;
     setBusy(true);
     try {
-      const updated = await backend.setDiscussionMembers(
-        discussionId,
-        selected,
-      );
+      const updated = await backend.setDiscussionMembers(discussionId, next);
+      if (current !== request.current) return;
+      saved.current = updated.member_ids;
+      setSelected(updated.member_ids);
       await onSaved(updated.member_ids);
-      onClose();
     } catch (failure) {
+      if (current !== request.current) return;
+      setSelected(saved.current);
       toast({
         tone: "danger",
-        title: "Could not save",
+        title: "Could not save members",
         description:
           failure instanceof Error ? failure.message : String(failure),
       });
     } finally {
-      setBusy(false);
+      if (current === request.current) setBusy(false);
     }
   };
 
@@ -127,27 +129,18 @@ export function DiscussionMembersDialog({
       title="Discussion members"
       variant="form"
       footer={
-        <>
+        <DialogActions>
           <Button disabled={busy} onClick={onClose}>
-            Cancel
+            Close
           </Button>
-          <Button
-            variant="primary"
-            disabled={
-              !changed || busy || members === null || backend.disconnected
-            }
-            onClick={save}
-          >
-            Save
-          </Button>
-        </>
+        </DialogActions>
       }
     >
       {members !== null ? (
         <MemberPicker
           members={members}
           selected={selected}
-          onChange={setSelected}
+          onChange={(next) => void apply(next)}
           disabled={busy || backend.disconnected}
         />
       ) : (

@@ -20,7 +20,7 @@ import { useRouter } from "@/app/router";
 import { LoadError } from "@/components/ui/access-error";
 import { Choices } from "@/components/ui/choices";
 import { Combobox } from "@/components/ui/combobox";
-import { ConfirmDialog, Modal } from "@/components/ui/dialog";
+import { ConfirmDialog, DialogActions, Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -255,10 +255,13 @@ export function AgentCreateDialog({
       title="New Agent"
       variant="form"
       footer={
-        <>
-          <Button disabled={busy} onClick={onClose}>
-            Cancel
-          </Button>
+        <DialogActions
+          cancel={
+            <Button disabled={busy} onClick={onClose}>
+              Cancel
+            </Button>
+          }
+        >
           <Button
             variant="primary"
             disabled={!catalog || !name.trim() || busy}
@@ -267,7 +270,7 @@ export function AgentCreateDialog({
             {busy ? <Spinner label="Creating Agent" /> : null}
             Create Agent
           </Button>
-        </>
+        </DialogActions>
       }
     >
       {loadError ? (
@@ -1053,8 +1056,8 @@ export function ModelPanel({
                   if (!next) setDeleteProvider(null);
                 }}
                 title={`Delete ${deleteProvider?.name}?`}
-                description="This provider will be removed."
-                confirmLabel="Delete"
+                description="The provider is removed from the settings for every Member. This cannot be undone."
+                confirmLabel="Delete provider"
                 onConfirm={async () => {
                   if (
                     deleteProvider &&
@@ -1082,10 +1085,13 @@ export function ModelPanel({
         description="Your changes have not been saved."
         initialFocus={() => keepEditing.current}
         footer={
-          <>
-            <Button ref={keepEditing} onClick={() => setDiscard(null)}>
-              Keep Editing
-            </Button>
+          <DialogActions
+            cancel={
+              <Button ref={keepEditing} onClick={() => setDiscard(null)}>
+                Keep Editing
+              </Button>
+            }
+          >
             <Button
               variant="danger"
               onClick={() => {
@@ -1096,7 +1102,7 @@ export function ModelPanel({
             >
               Discard
             </Button>
-          </>
+          </DialogActions>
         }
       />
     </fieldset>
@@ -1223,8 +1229,8 @@ function ProviderModelEditor({
         open={deleting}
         onOpenChange={setDeleting}
         title={`Delete ${model?.name}?`}
-        description="This model will be removed if nothing uses it."
-        confirmLabel="Delete"
+        description="The model is removed from the settings. This cannot be undone."
+        confirmLabel="Delete model"
         onConfirm={async () => {
           if (model && !unavailable) await save("delete_model", model.id);
         }}
@@ -1436,18 +1442,13 @@ function ProviderForm({
     }
   };
   const actions = (
-    <div className="flex flex-wrap gap-2">
-      <Button
-        type="submit"
-        variant="primary"
-        disabled={busy || unavailable || !draftDirty}
-      >
-        {saving ? <Spinner label="Saving provider" /> : null}
-        {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
-      </Button>
-      <Button disabled={busy} onClick={editOpen ? cancel : onCancel}>
-        Cancel
-      </Button>
+    <DialogActions
+      cancel={
+        <Button disabled={busy} onClick={editOpen ? cancel : onCancel}>
+          Cancel
+        </Button>
+      }
+    >
       {provider ? (
         <span className="inline-flex items-center gap-1">
           <Button
@@ -1470,17 +1471,33 @@ function ProviderForm({
           ) : null}
         </span>
       ) : null}
-    </div>
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={busy || unavailable || !draftDirty}
+      >
+        {saving ? <Spinner label="Saving provider" /> : null}
+        {onDraft ? "Save" : provider ? "Save provider" : "Create provider"}
+      </Button>
+    </DialogActions>
+  );
+  const alerts = (
+    <>
+      {editOpen && saveError ? (
+        <p role="alert" className="text-sm text-danger">
+          {saveError}
+        </p>
+      ) : null}
+      {unavailable && editOpen ? (
+        <p role="alert" className="text-sm text-danger">
+          This provider no longer exists. Your draft is retained.
+        </p>
+      ) : null}
+    </>
   );
   const content = (
     <>
       {editOpen ? recovery : null}
-      {editOpen && saveError ? <p role="alert">{saveError}</p> : null}
-      {unavailable && editOpen ? (
-        <p role="alert">
-          This provider no longer exists. Your draft is retained.
-        </p>
-      ) : null}
       <fieldset
         disabled={busy}
         className="m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
@@ -1493,14 +1510,19 @@ function ProviderForm({
             <Field
               label="Provider name"
               htmlFor={`${id}-name`}
-              hint={nameError ? "Enter a provider name." : undefined}
+              error={nameError ? "Enter a provider name." : undefined}
+              errorId={`${id}-name-error`}
             >
               <Input
                 id={`${id}-name`}
                 value={name}
                 required
                 aria-invalid={nameError}
-                onChange={(event) => setName(event.target.value)}
+                aria-describedby={nameError ? `${id}-name-error` : undefined}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setNameError(false);
+                }}
               />
             </Field>
             <Field label="Protocol">
@@ -1654,8 +1676,8 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title={`Delete ${provider?.name}?`}
-        description="This provider will be removed."
-        confirmLabel="Delete"
+        description="The provider is removed from the settings for every Member. This cannot be undone."
+        confirmLabel="Delete provider"
         onConfirm={async () => {
           if (
             !unavailable &&
@@ -1669,6 +1691,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
   );
   const fields = (
     <form className="provider-form flex flex-col gap-4" onSubmit={submit}>
+      {alerts}
       {content}
       {actions}
     </form>
@@ -1717,6 +1740,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
           variant="form"
           onSubmit={submit}
           footer={actions}
+          alert={editOpen ? alerts : null}
           title={provider ? "Edit provider" : "Add provider"}
           onOpenChange={(open) => {
             if (!open) cancel();
@@ -1827,16 +1851,19 @@ function ProviderTest({
       <Modal
         open={open}
         variant="form"
+        description="Testing sends one request to the provider and changes nothing."
         footer={
           models.length > 0 ? (
-            <Button
-              disabled={unavailable || test.testing}
-              onClick={() => {
-                if (model) void test.run({ model_id: model.id, thinking });
-              }}
-            >
-              {test.testing ? <Spinner label="Testing" /> : null}Test
-            </Button>
+            <DialogActions>
+              <Button
+                disabled={unavailable || test.testing}
+                onClick={() => {
+                  if (model) void test.run({ model_id: model.id, thinking });
+                }}
+              >
+                {test.testing ? <Spinner label="Testing" /> : null}Test
+              </Button>
+            </DialogActions>
           ) : undefined
         }
         title="Test provider model"
@@ -2000,6 +2027,11 @@ function ModelDirectory({
         variant="form"
         title="Model list"
         onOpenChange={setOpen}
+        footer={
+          <DialogActions>
+            <Button onClick={() => setOpen(false)}>Done</Button>
+          </DialogActions>
+        }
       >
         {recovery}
         <SearchField
@@ -2102,6 +2134,7 @@ function ModelForm({
   const [thinking, setThinking] = useState<Thinking>("default");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [remoteError, setRemoteError] = useState(false);
 
   const draftDirty =
     name !== (model?.name ?? "") ||
@@ -2212,18 +2245,14 @@ function ModelForm({
       event.currentTarget
         .querySelector<HTMLInputElement>('[role="combobox"]')
         ?.focus();
-      setFeedback("Enter a remote model ID.");
+      setRemoteError(true);
       return;
     }
+    setRemoteError(false);
     if (budgetSupported && !validBudget) {
       event.currentTarget
         .querySelector<HTMLInputElement>('[type="number"]')
         ?.focus();
-      toast({
-        tone: "danger",
-        title: "Invalid thinking budget",
-        description: "Enter a positive whole number.",
-      });
       return;
     }
     if (
@@ -2250,21 +2279,18 @@ function ModelForm({
         setBudgetTokens("");
         setThinking("default");
       }
+      onDraft?.(false);
+      onOpenChange(false);
     }
   };
   const actions = (
-    <div className="flex flex-wrap gap-2">
-      <Button
-        type="submit"
-        variant="primary"
-        disabled={busy || unavailable || !draftDirty}
-      >
-        {saving ? <Spinner label="Saving model" /> : null}
-        Save
-      </Button>
-      <Button disabled={busy} onClick={onClose}>
-        Cancel
-      </Button>
+    <DialogActions
+      cancel={
+        <Button disabled={busy} onClick={onClose}>
+          Cancel
+        </Button>
+      }
+    >
       <Button
         disabled={
           busy ||
@@ -2289,7 +2315,15 @@ function ModelForm({
           Delete model
         </Button>
       ) : null}
-    </div>
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={busy || unavailable || !draftDirty}
+      >
+        {saving ? <Spinner label="Saving model" /> : null}
+        Save
+      </Button>
+    </DialogActions>
   );
   return (
     <Modal
@@ -2299,14 +2333,17 @@ function ModelForm({
       footer={actions}
       title={title}
       onOpenChange={onOpenChange}
+      alert={
+        saveError || unavailable ? (
+          <p role="alert" className="text-sm text-danger">
+            {unavailable
+              ? "This model or provider no longer exists. Your draft is retained."
+              : saveError}
+          </p>
+        ) : null
+      }
     >
       {recovery}
-      {saveError ? <p role="alert">{saveError}</p> : null}
-      {unavailable ? (
-        <p role="alert" className="text-sm text-danger">
-          This model or provider no longer exists. Your draft is retained.
-        </p>
-      ) : null}
       <fieldset
         disabled={busy}
         className="m-0 min-w-0 border-0 p-0"
@@ -2321,7 +2358,12 @@ function ModelForm({
             onChange={(event) => setName(event.target.value)}
           />
         </Field>
-        <Field label="Model ID" htmlFor={`${id}-remote`}>
+        <Field
+          label="Model ID"
+          htmlFor={`${id}-remote`}
+          error={remoteError ? "Enter a remote model ID." : undefined}
+          errorId={`${id}-remote-error`}
+        >
           <Combobox
             id={`${id}-remote`}
             label="Model ID"
@@ -2329,12 +2371,15 @@ function ModelForm({
             onChange={(value) => {
               dirty.current = true;
               setRemote(value);
+              setRemoteError(false);
             }}
             options={options}
             chooseLabel="Choose model"
             loadLabel="Load models"
             onLoad={() => void listModels()}
             loading={listing}
+            invalid={remoteError}
+            describedBy={remoteError ? `${id}-remote-error` : undefined}
           />
         </Field>
         {budgetSupported ? (
@@ -2342,10 +2387,10 @@ function ModelForm({
             label="Thinking token budget"
             htmlFor={`${id}-budget`}
             hint={
-              validBudget
-                ? "Used only when budget is selected."
-                : "Enter a positive whole number."
+              validBudget ? "Used only when budget is selected." : undefined
             }
+            error={validBudget ? undefined : "Enter a positive whole number."}
+            errorId={`${id}-budget-error`}
           >
             <Input
               id={`${id}-budget`}
@@ -2353,6 +2398,7 @@ function ModelForm({
               min="1"
               step="1"
               aria-invalid={!validBudget}
+              aria-describedby={validBudget ? undefined : `${id}-budget-error`}
               value={budgetTokens}
               onChange={(event) => setBudgetTokens(event.target.value)}
             />
@@ -2399,8 +2445,8 @@ function ModelForm({
           open={confirmDelete}
           onOpenChange={setConfirmDelete}
           title={`Delete ${model?.name}?`}
-          description="This model will be removed."
-          confirmLabel="Delete"
+          description="The model is removed from the settings. This cannot be undone."
+          confirmLabel="Delete model"
           onConfirm={async () => {
             if (!unavailable && model) await save("delete_model", model.id);
           }}
