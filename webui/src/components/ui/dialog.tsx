@@ -9,7 +9,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { Button, Field, IconButton, Input, toast } from "@/components/ui/index";
+import { dialogLook } from "@/components/ui/dialog-look";
+import {
+  Button,
+  Field,
+  IconButton,
+  Input,
+  Spinner,
+  toast,
+} from "@/components/ui/index";
 import { registerToastHost } from "@/components/ui/toast-host";
 
 export function dialogFocusTarget<
@@ -18,8 +26,7 @@ export function dialogFocusTarget<
 >(fields: T[], buttons: U[]): T | U | null {
   const field = fields.find((item) => !item.disabled);
   if (field) return field;
-  const enabled = buttons.filter((item) => !item.disabled);
-  return enabled.length > 0 ? enabled[enabled.length - 1] : null;
+  return buttons.find((item) => !item.disabled) ?? null;
 }
 
 function reportFailure(title: string, failure: unknown) {
@@ -36,7 +43,22 @@ function refocus(target: { focus: () => void } | null) {
   });
 }
 
-export type ModalVariant = "form" | "confirm" | "history";
+export type ModalVariant = "form" | "confirm" | "history" | "prompt";
+
+export function DialogActions({
+  cancel,
+  children,
+}: {
+  cancel?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="dialog-actions">
+      {cancel ? <div className="dialog-actions-cancel">{cancel}</div> : null}
+      <div className="dialog-actions-main">{children}</div>
+    </div>
+  );
+}
 
 export function Modal({
   open,
@@ -45,6 +67,7 @@ export function Modal({
   description,
   children,
   footer,
+  alert,
   onSubmit,
   tone = "dialog",
   wide = false,
@@ -60,6 +83,7 @@ export function Modal({
   description?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
+  alert?: ReactNode;
   onSubmit?: FormEventHandler<HTMLFormElement>;
   tone?: "dialog" | "surface";
   wide?: boolean;
@@ -85,6 +109,9 @@ export function Modal({
   }, []);
 
   const modalKind = variant ?? "form";
+  const look = dialogLook;
+  const footerLayout =
+    modalKind === "confirm" || modalKind === "prompt" ? "stack" : "row";
   const maxDvhClass =
     modalKind === "confirm"
       ? ""
@@ -93,14 +120,21 @@ export function Modal({
         : "narrow:max-h-[85dvh]";
   const wideWidth = wide
     ? "w-[min(960px,calc(100vw-32px))]"
-    : "w-[min(440px,calc(100vw-48px))]";
+    : look === 3 && modalKind !== "confirm"
+      ? "w-[min(560px,calc(100vw-48px))]"
+      : "w-[min(440px,calc(100vw-48px))]";
   const framed = tone === "surface";
+  const descriptionInHeader = look === 2 && !framed;
+  const showBody =
+    Boolean(children) || Boolean(description && !descriptionInHeader);
   const spacing = framed
     ? "gap-4 p-6 narrow:p-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]"
     : "";
   const headerSpacing = framed ? "" : "px-6 pt-5 pb-4 narrow:px-4 narrow:pt-4";
   const headerDivider =
-    framed || modalKind === "confirm" ? "" : "border-b border-line";
+    framed || (modalKind === "confirm" && look !== 2)
+      ? ""
+      : "border-b border-line";
   const bodySpacing = framed
     ? ""
     : `px-6 py-5 narrow:px-4 narrow:py-4${
@@ -120,8 +154,8 @@ export function Modal({
   const headerClass =
     side === "left"
       ? "flex items-center justify-between gap-3 p-3 border-b border-line shrink-0"
-      : `flex items-start justify-between gap-3 shrink-0 ${headerSpacing} ${headerDivider}`;
-  const footerClass = `flex justify-end gap-2 shrink-0 ${footerSpacing} ${footerDivider} narrow:flex-col-reverse narrow:*:w-full narrow:*:min-h-11 touch:flex-col-reverse touch:*:w-full touch:*:min-h-11`;
+      : `dialog-header flex items-start justify-between gap-3 shrink-0 ${headerSpacing} ${headerDivider}`;
+  const footerClass = `flex shrink-0 ${footerSpacing} ${footerDivider}`;
 
   const focusOnOpen = (event: Event) => {
     opener.current =
@@ -158,12 +192,20 @@ export function Modal({
   const panel = (
     <>
       <div className={headerClass}>
-        <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
-          {title}
-        </Dialog.Title>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <Dialog.Title className="dialog-title min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
+            {title}
+          </Dialog.Title>
+          {descriptionInHeader && description ? (
+            <Dialog.Description className="dialog-consequence mx-0 mb-0 text-fg-muted text-sm">
+              {description}
+            </Dialog.Description>
+          ) : null}
+        </div>
         <Dialog.Close asChild>
           <IconButton
             ref={closeButton}
+            className="dialog-close"
             label={side === "left" ? "Close navigation" : "Close"}
             size="sm"
             touchTarget
@@ -176,24 +218,29 @@ export function Modal({
         ref={toastHost}
         className={`empty:hidden shrink-0 ${framed ? "" : "px-6 narrow:px-4"}`}
       />
+      {alert ? (
+        <div className={`shrink-0 ${framed ? "" : "px-6 pb-4 narrow:px-4"}`}>
+          {alert}
+        </div>
+      ) : null}
       {side === "left" ? (
         children ? (
           <div className="min-h-0 flex-1 flex flex-col">{children}</div>
         ) : null
-      ) : (
+      ) : showBody ? (
         <div
-          className={`min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
+          className={`dialog-body min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
         >
-          {description ? (
+          {description && !descriptionInHeader ? (
             <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
               {description}
             </Dialog.Description>
           ) : null}
           {children}
         </div>
-      )}
+      ) : null}
       {footer ? (
-        <div ref={footerElement} className={footerClass}>
+        <div ref={footerElement} className={`dialog-footer ${footerClass}`}>
           {footer}
         </div>
       ) : null}
@@ -207,6 +254,8 @@ export function Modal({
         <Dialog.Content
           asChild
           className={panelClass}
+          data-look={look}
+          data-footer={footerLayout}
           onOpenAutoFocus={focusOnOpen}
           onCloseAutoFocus={focusOnClose}
           {...(description ? {} : { "aria-describedby": undefined })}
@@ -257,6 +306,7 @@ export function PromptDialog({
   const [busy, setBusy] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const keepEditingButton = useRef<HTMLButtonElement>(null);
   const inputId = useId();
   const wasOpen = useRef(false);
   const savedValue = useRef(initial);
@@ -307,21 +357,28 @@ export function PromptDialog({
         open={open}
         onOpenChange={(next) => (next ? onOpenChange(true) : close())}
         title={title}
-        variant="form"
+        variant="prompt"
         description={description}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void commit();
+        }}
         footer={
-          <>
-            <Button disabled={busy} onClick={close}>
-              Cancel
-            </Button>
+          <DialogActions
+            cancel={
+              <Button disabled={busy} onClick={close}>
+                Cancel
+              </Button>
+            }
+          >
             <Button
+              type="submit"
               variant="primary"
               disabled={!submitted || !!error || busy}
-              onClick={commit}
             >
               {submitLabel}
             </Button>
-          </>
+          </DialogActions>
         }
       >
         <Field label={label} htmlFor={inputId}>
@@ -335,12 +392,6 @@ export function PromptDialog({
             aria-describedby={error ? `${inputId}-error` : undefined}
             onChange={(event) => {
               if (!inFlight.current) setValue(event.target.value);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void commit();
-              }
             }}
           />
           {error ? (
@@ -360,9 +411,15 @@ export function PromptDialog({
         title="Discard unsaved changes?"
         variant="confirm"
         description="You have unsaved modifications."
+        initialFocus={() => keepEditingButton.current}
         footer={
-          <>
-            <Button onClick={keepEditing}>Keep Editing</Button>
+          <DialogActions
+            cancel={
+              <Button ref={keepEditingButton} onClick={keepEditing}>
+                Keep Editing
+              </Button>
+            }
+          >
             <Button
               variant="danger"
               onClick={() => {
@@ -372,7 +429,7 @@ export function PromptDialog({
             >
               Discard
             </Button>
-          </>
+          </DialogActions>
         }
       />
     </>
@@ -395,7 +452,7 @@ export function ConfirmDialog({
   onConfirm: () => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
-  const action = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
 
   const confirm = async () => {
     if (busy) return;
@@ -405,7 +462,7 @@ export function ConfirmDialog({
       onOpenChange(false);
     } catch (failure) {
       reportFailure(`Could not ${confirmLabel.toLowerCase()}`, failure);
-      refocus(action.current);
+      refocus(cancel.current);
     } finally {
       setBusy(false);
     }
@@ -418,20 +475,24 @@ export function ConfirmDialog({
       title={title}
       variant="confirm"
       description={description}
+      initialFocus={() => cancel.current}
       footer={
-        <>
-          <Button disabled={busy} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            ref={action}
-            variant="danger"
-            disabled={busy}
-            onClick={confirm}
-          >
+        <DialogActions
+          cancel={
+            <Button
+              ref={cancel}
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+          }
+        >
+          <Button variant="danger" disabled={busy} onClick={confirm}>
+            {busy ? <Spinner label={confirmLabel} /> : null}
             {confirmLabel}
           </Button>
-        </>
+        </DialogActions>
       }
     />
   );

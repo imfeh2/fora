@@ -29,6 +29,8 @@ export type ComboboxProps = {
   chooseLabel: string;
   disabled?: boolean;
   loading?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
   onLoad?: () => void;
   loadLabel?: string;
 };
@@ -42,6 +44,8 @@ export function Combobox({
   chooseLabel,
   disabled = false,
   loading = false,
+  invalid = false,
+  describedBy,
   onLoad,
   loadLabel = "Load options",
 }: ComboboxProps) {
@@ -106,6 +110,8 @@ export function Combobox({
             }
             autoComplete="off"
             disabled={disabled}
+            aria-invalid={invalid || undefined}
+            aria-describedby={describedBy}
             value={value}
             onChange={(event) => {
               setActive(-1);

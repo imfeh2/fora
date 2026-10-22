@@ -337,12 +337,16 @@ export function Field({
   label,
   htmlFor,
   hint,
+  error,
+  errorId,
   action,
   children,
 }: {
   label: ReactNode;
   htmlFor?: string;
   hint?: ReactNode;
+  error?: string;
+  errorId?: string;
   action?: ReactNode;
   children: ReactNode;
 }) {
@@ -362,7 +366,13 @@ export function Field({
         {action}
       </span>
       {children}
-      {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
+      {error ? (
+        <p id={errorId} className="text-xs text-danger" role="alert">
+          {error}
+        </p>
+      ) : hint ? (
+        <p className="text-xs text-fg-muted">{hint}</p>
+      ) : null}
     </div>
   );
 }

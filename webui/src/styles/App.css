@@ -617,6 +617,83 @@ body.sidebar-resizing {
   border-color: var(--color-line-focus);
 }
 
+.dialog-actions {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-actions-cancel,
+.dialog-actions-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialog-panel[data-look="2"] .dialog-header {
+  padding-bottom: 20px;
+}
+
+.dialog-panel[data-look="2"] .dialog-title {
+  font-size: 18px;
+  line-height: 26px;
+}
+
+.dialog-panel[data-look="2"] .dialog-consequence {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.dialog-panel[data-look="2"] .dialog-actions {
+  justify-content: space-between;
+}
+
+.dialog-panel[data-look="3"] .dialog-title {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.dialog-panel[data-look="3"] .dialog-close {
+  width: 32px;
+  height: 32px;
+}
+
+.dialog-panel[data-look="3"] .dialog-footer button {
+  min-height: 36px;
+}
+
+.dialog-panel[data-look="3"] .dialog-actions-main > :last-child {
+  min-width: 96px;
+}
+
+@media (max-width: 640px) {
+  .dialog-panel[data-footer="stack"] .dialog-actions,
+  .dialog-panel[data-footer="stack"] .dialog-actions-cancel,
+  .dialog-panel[data-footer="stack"] .dialog-actions-main {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .dialog-panel[data-footer="stack"] .dialog-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .dialog-panel[data-footer="row"] .dialog-actions button {
+    min-height: 44px;
+  }
+}
+
+@media (pointer: coarse) {
+  .dialog-panel .dialog-footer button {
+    min-height: 44px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
