@@ -652,6 +652,10 @@ body.sidebar-resizing {
   justify-content: space-between;
 }
 
+.dialog-panel[data-look="2"] .dialog-actions:not(:has(.dialog-actions-cancel)) {
+  justify-content: flex-end;
+}
+
 .dialog-panel[data-look="3"] .dialog-title {
   font-size: 20px;
   line-height: 28px;
