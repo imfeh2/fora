@@ -562,7 +562,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: var(--sidebar-width);
+  left: calc(var(--sidebar-width) - 1px);
   z-index: var(--layer-popover);
   width: 4px;
   height: auto;
@@ -579,7 +579,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -1px;
+  left: 0;
   width: 2px;
   background: transparent;
 }
