@@ -63,6 +63,10 @@ const RouterContext = createContext<Router | null>(null);
 
 const LIST_PATH = "/discussions";
 
+function keepSearch(path: string): string {
+  return `${path}${location.search}`;
+}
+
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "providers",
   "models",
@@ -143,10 +147,10 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => {
     const initial = routeFromPath(location.pathname);
     if (initial === null) {
-      history.replaceState(history.state, "", LIST_PATH);
+      history.replaceState(history.state, "", keepSearch(LIST_PATH));
       return { name: "discussions" };
     }
-    const path = routePath(initial);
+    const path = keepSearch(routePath(initial));
     if (`${location.pathname}${location.search}` !== path)
       history.replaceState(history.state, "", path);
     return initial;
@@ -170,7 +174,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const apply = useCallback((next: Route) => {
     currentRoute.current = next;
     setRoute(next);
-    const path = routePath(next);
+    const path = keepSearch(routePath(next));
     if (`${location.pathname}${location.search}` !== path)
       history.pushState(history.state, "", path);
   }, []);
@@ -178,7 +182,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const settle = useCallback((next: Route) => {
     currentRoute.current = next;
     setRoute(next);
-    const path = routePath(next);
+    const path = keepSearch(routePath(next));
     if (`${location.pathname}${location.search}` !== path)
       history.replaceState(history.state, "", path);
   }, []);
@@ -202,7 +206,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       }
       const next = routeFromPath(location.pathname);
       if (next === null) {
-        history.replaceState(history.state, "", LIST_PATH);
+        history.replaceState(history.state, "", keepSearch(LIST_PATH));
         settle({ name: "discussions" });
         return;
       }
