@@ -2,10 +2,12 @@ import { clsx } from "clsx";
 import { ArrowLeft, Menu } from "lucide-react";
 import {
   Children,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 import { Modal } from "@/components/ui/dialog";
@@ -28,6 +30,31 @@ const columnVisibility = {
 
 const badgeSlot = "flex min-w-5 flex-none items-center justify-end";
 const trailingSlot = "flex w-[26px] flex-none items-center justify-center";
+
+const SIDEBAR_WIDTH_DEFAULT = 240;
+const SIDEBAR_WIDTH_MIN = 200;
+const SIDEBAR_WIDTH_MAX = 400;
+const SIDEBAR_WIDTH_STEP = 16;
+const SIDEBAR_WIDTH_KEY = "fora.sidebar-width";
+
+function clampSidebarWidth(value: number): number {
+  return Math.min(
+    Math.max(Math.round(value), SIDEBAR_WIDTH_MIN),
+    SIDEBAR_WIDTH_MAX,
+  );
+}
+
+function readSidebarWidth(): number {
+  if (typeof window === "undefined") return SIDEBAR_WIDTH_DEFAULT;
+  const stored = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  return Number.isFinite(stored) && stored > 0
+    ? clampSidebarWidth(stored)
+    : SIDEBAR_WIDTH_DEFAULT;
+}
+
+function writeSidebarWidth(width: number) {
+  window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+}
 
 function subscribeViewport(listener: () => void) {
   window.addEventListener("resize", listener);
@@ -87,6 +114,60 @@ export function Shell({
   };
 }) {
   const narrow = useNarrowViewport();
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const [resizing, setResizing] = useState(false);
+  const widthRef = useRef(sidebarWidth);
+  widthRef.current = sidebarWidth;
+  const applySidebarWidth = (next: number) => {
+    const clamped = clampSidebarWidth(next);
+    widthRef.current = clamped;
+    setSidebarWidth(clamped);
+  };
+  useEffect(() => {
+    if (!resizing) return;
+    document.body.classList.add("sidebar-resizing");
+    return () => document.body.classList.remove("sidebar-resizing");
+  }, [resizing]);
+  const startResize = (event: React.PointerEvent<HTMLHRElement>) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startWidth = widthRef.current;
+    setResizing(true);
+    const move = (next: PointerEvent) => {
+      if (next.pointerId !== pointerId) return;
+      applySidebarWidth(startWidth + next.clientX - startX);
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      window.removeEventListener("blur", stop);
+      setResizing(false);
+      writeSidebarWidth(widthRef.current);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    window.addEventListener("blur", stop);
+  };
+  const resizeWithKeys = (event: React.KeyboardEvent<HTMLHRElement>) => {
+    let next: number | null = null;
+    if (event.key === "ArrowLeft") next = widthRef.current - SIDEBAR_WIDTH_STEP;
+    else if (event.key === "ArrowRight")
+      next = widthRef.current + SIDEBAR_WIDTH_STEP;
+    else if (event.key === "Home") next = SIDEBAR_WIDTH_MIN;
+    else if (event.key === "End") next = SIDEBAR_WIDTH_MAX;
+    if (next === null) return;
+    event.preventDefault();
+    applySidebarWidth(next);
+    writeSidebarWidth(widthRef.current);
+  };
+  const resetSidebarWidth = () => {
+    applySidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+    writeSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+  };
   useEffect(() => {
     if (!navigation) return;
     if (!narrow && navigation.trigger.current === document.activeElement)
@@ -95,8 +176,12 @@ export function Shell({
       navigation.trigger.current?.focus();
   }, [narrow, navigation]);
   return (
-    <div className="grid grid-cols-[240px_minmax(0,1fr)] h-full bg-app narrow:grid-cols-[minmax(0,1fr)]">
+    <div
+      className="relative grid grid-cols-[var(--sidebar-width)_minmax(0,1fr)] h-full bg-app narrow:grid-cols-[minmax(0,1fr)]"
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
+    >
       <div
+        id="sidebar-navigation"
         ref={navigation?.desktop}
         inert={narrow}
         aria-hidden={narrow || undefined}
@@ -120,6 +205,23 @@ export function Shell({
         </div>
         {children}
       </div>
+      {narrow ? null : (
+        <hr
+          data-sidebar-resize=""
+          aria-orientation="vertical"
+          aria-label="Resize navigation"
+          aria-controls="sidebar-navigation"
+          aria-valuemin={SIDEBAR_WIDTH_MIN}
+          aria-valuemax={SIDEBAR_WIDTH_MAX}
+          aria-valuenow={sidebarWidth}
+          data-resizing={resizing ? "true" : undefined}
+          tabIndex={0}
+          className="sidebar-resize"
+          onPointerDown={startResize}
+          onKeyDown={resizeWithKeys}
+          onDoubleClick={resetSidebarWidth}
+        />
+      )}
       {navigation ? (
         <Modal
           open={navigation.open && narrow}
