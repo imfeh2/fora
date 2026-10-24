@@ -1,16 +1,16 @@
 import { clsx } from "clsx";
+import { FileVideo, FolderOpen, Play } from "lucide-react";
 import {
-  ChevronLeft,
-  ChevronRight,
-  FileVideo,
-  FolderOpen,
-  Play,
-} from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+  type CSSProperties,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { documentPath, useNavigate } from "@/app/router";
 import { ContextMenuArea } from "@/components/ui/context-menu";
-import { Modal } from "@/components/ui/dialog";
-import { Button, IconButton, Spinner } from "@/components/ui/index";
+import { ImageViewer as SharedImageViewer } from "@/components/ui/image-viewer";
+import { Button, Spinner } from "@/components/ui/index";
 import { mediaKind } from "@/features/library/media";
 import { libraryPathFromHref } from "@/features/library/path";
 import { libraryEntry } from "@/features/library/preview";
@@ -259,129 +259,24 @@ function ImageViewer({
   onIndex: (next: number) => void;
   onClose: () => void;
 }) {
-  const current = gallery[index];
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [downloadFailed, setDownloadFailed] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (current === undefined) return;
-    const abort = new AbortController();
-    let objectUrl: string | null = null;
-    setUrl(null);
-    setFailed(false);
-    void backend.libraryFile(current.path, abort.signal).then(
-      (blob) => {
-        if (abort.signal.aborted) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      },
-      () => {
-        if (!abort.signal.aborted) setFailed(true);
-      },
-    );
-    return () => {
-      abort.abort();
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
-    };
-  }, [current]);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "ArrowLeft" && index > 0) onIndex(index - 1);
-      if (event.key === "ArrowRight" && index < gallery.length - 1)
-        onIndex(index + 1);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [gallery.length, index, onIndex]);
-
-  const download = async () => {
-    if (current === undefined) return;
-    setDownloading(true);
-    setDownloadFailed(null);
-    const abort = new AbortController();
-    try {
-      const blob = await backend.libraryFile(current.path, abort.signal);
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = documentName(current.path);
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
-    } catch (failure) {
-      setDownloadFailed(
-        failure instanceof Error ? failure.message : String(failure),
-      );
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  if (current === undefined) return null;
-
+  const images = useMemo(
+    () =>
+      gallery.map((entry) => ({
+        src: entry.path,
+        name: documentName(entry.path),
+        alt: entry.alt,
+        load: (signal: AbortSignal) => backend.libraryFile(entry.path, signal),
+      })),
+    [gallery],
+  );
   return (
-    <Modal
+    <SharedImageViewer
       open
-      onOpenChange={(next) => {
-        if (!next) onClose();
-      }}
-      title={documentName(current.path)}
-      variant="history"
-      tone="surface"
-      wide
-      footer={
-        <Button disabled={downloading} onClick={() => void download()}>
-          Download original
-        </Button>
-      }
-    >
-      <div className="relative flex min-h-0 items-center justify-center">
-        {failed ? (
-          <p role="alert" className="m-0 text-danger">
-            Image could not be loaded.
-          </p>
-        ) : url === null ? (
-          <Spinner label="Loading image" />
-        ) : (
-          <img
-            src={url}
-            alt={current.alt}
-            className="max-h-[65vh] w-full object-contain"
-          />
-        )}
-        {index > 0 ? (
-          <span className="absolute top-1/2 left-2 -translate-y-1/2">
-            <IconButton
-              label="Previous image"
-              className="bg-surface/90"
-              onClick={() => onIndex(index - 1)}
-            >
-              <ChevronLeft size={16} />
-            </IconButton>
-          </span>
-        ) : null}
-        {index < gallery.length - 1 ? (
-          <span className="absolute top-1/2 right-2 -translate-y-1/2">
-            <IconButton
-              label="Next image"
-              className="bg-surface/90"
-              onClick={() => onIndex(index + 1)}
-            >
-              <ChevronRight size={16} />
-            </IconButton>
-          </span>
-        ) : null}
-      </div>
-      {downloadFailed === null ? null : (
-        <p role="alert" className="m-0 text-danger">
-          {downloadFailed}
-        </p>
-      )}
-    </Modal>
+      images={images}
+      index={index}
+      onIndex={onIndex}
+      onClose={onClose}
+    />
   );
 }
 

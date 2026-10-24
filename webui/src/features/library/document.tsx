@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -16,6 +17,7 @@ import {
 } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
+import { ImageViewer } from "@/components/ui/image-viewer";
 import {
   Button,
   Chip,
@@ -33,7 +35,7 @@ import { type MediaKind, mediaKind } from "@/features/library/media";
 import { MarkdownContent } from "@/features/markdown";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend } from "@/lib/backend";
-import { formatBytes } from "@/lib/format";
+import { documentName, formatBytes } from "@/lib/format";
 
 type Loaded = { content: string; hash: string };
 
@@ -543,6 +545,14 @@ function MediaDocument({
 }) {
   const [state, setState] = useState<MediaState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
+  const [opened, setOpened] = useState(false);
+  const images = useMemo(
+    () =>
+      state.status === "ready"
+        ? [{ src: state.url, name: documentName(path), alt: path }]
+        : [],
+    [state, path],
+  );
 
   useEffect(() => {
     const abort = new AbortController();
@@ -590,17 +600,35 @@ function MediaDocument({
             </Button>
           </div>
         ) : kind === "image" ? (
-          <img
-            src={state.url}
-            alt={path}
-            className="max-h-full max-w-full object-contain"
-          />
+          <button
+            type="button"
+            aria-label={`View ${documentName(path)}`}
+            className="flex size-full min-h-0 cursor-zoom-in items-center justify-center"
+            onClick={() => setOpened(true)}
+          >
+            <img
+              src={state.url}
+              alt={path}
+              className="max-h-full max-w-full object-contain"
+              onError={() =>
+                setState({
+                  status: "error",
+                  message: "Image could not be loaded.",
+                })
+              }
+            />
+          </button>
         ) : kind === "video" ? (
           <video src={state.url} controls className="max-h-full max-w-full" />
         ) : (
           <audio src={state.url} controls className="w-full max-w-[520px]" />
         )}
       </div>
+      <ImageViewer
+        open={opened}
+        images={images}
+        onClose={() => setOpened(false)}
+      />
     </DocumentFrame>
   );
 }

@@ -1,6 +1,6 @@
 import { Download, FileIcon, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { Modal } from "@/components/ui/dialog";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ImageViewer } from "@/components/ui/image-viewer";
 import { Button, Spinner } from "@/components/ui/index";
 import type { ComposerFile } from "@/features/discussions/composer-state";
 import { type Attachment, backend } from "@/lib/backend";
@@ -96,6 +96,11 @@ export function MessageAttachment({
   const downloadRequest = useRef<AbortController | null>(null);
   const downloadUrls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [attempt, setAttempt] = useState(0);
+  const images = useMemo(
+    () =>
+      url ? [{ src: url, name: attachment.name, alt: attachment.name }] : [],
+    [url, attachment.name],
+  );
   useEffect(
     () => () => {
       downloadRequest.current?.abort();
@@ -209,7 +214,7 @@ export function MessageAttachment({
       {image ? (
         <button
           type="button"
-          disabled={loading || error !== null}
+          disabled={loading || error !== null || url === null}
           aria-label={`View ${attachment.name}`}
           onClick={() => setOpened(true)}
           className={
@@ -268,29 +273,11 @@ export function MessageAttachment({
           </Button>
         </div>
       ) : null}
-      <Modal
+      <ImageViewer
         open={opened}
-        onOpenChange={setOpened}
-        title={attachment.name}
-        variant="history"
-        tone="surface"
-        footer={
-          <Button disabled={downloading} onClick={() => void download()}>
-            Download original
-          </Button>
-        }
-      >
-        {loading ? <Spinner label="Loading image" /> : null}
-        {previewFeedback}
-        {url && !error && !loading ? (
-          <img
-            src={url}
-            alt={attachment.name}
-            className="max-h-[65vh] w-full object-contain"
-            onError={() => setError("The image could not be displayed.")}
-          />
-        ) : null}
-      </Modal>
+        images={images}
+        onClose={() => setOpened(false)}
+      />
     </div>
   );
 }
