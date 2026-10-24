@@ -1,0 +1,38 @@
+.viewer-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
+
+.viewer-viewport:active {
+  cursor: grabbing;
+}
+
+.viewer-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  max-height: none;
+  transform-origin: 0 0;
+  user-select: none;
+}
+
+.viewer-percent {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 1;
+  min-width: 80px;
+  padding: 6px 12px;
+  border: 1px solid #555;
+  border-radius: 6px;
+  background: #222;
+  color: white;
+  font: 14px sans-serif;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
