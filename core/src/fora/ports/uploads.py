@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import BinaryIO, Protocol
 
-from fora.core.attachment import Attachment, ImageData, Upload
+from fora.core.attachment import Attachment, Upload
 
 
 class UploadStore(Protocol):
@@ -49,5 +49,3 @@ class UploadFiles(Protocol):
     def path(self, attachment_id: str) -> str: ...
 
     def reader(self, attachment: Attachment) -> BinaryIO: ...
-
-    def image(self, attachment: Attachment) -> ImageData: ...

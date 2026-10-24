@@ -137,29 +137,3 @@ class DirectoryUploads:
             source.close()
             raise
         return source
-
-    def image(self, attachment: Attachment) -> ImageData:
-        if attachment.media_type not in IMAGE_TYPES:
-            raise DomainError(
-                ErrorCode.UNSUPPORTED_IMAGE, "This attachment is not a supported image"
-            )
-        with self.reader(attachment) as source:
-            data = source.read(MAX_IMAGE_BYTES + 1)
-        if (
-            len(data) != attachment.size
-            or hashlib.sha256(data).hexdigest() != attachment.sha256
-        ):
-            raise DomainError(
-                ErrorCode.ATTACHMENT_CHANGED, "The attachment content has changed"
-            )
-        image = decode_image(data)
-        if (image.media_type, image.width, image.height) != (
-            attachment.media_type,
-            attachment.width,
-            attachment.height,
-        ):
-            raise DomainError(
-                ErrorCode.ATTACHMENT_CHANGED,
-                "The attachment image details have changed",
-            )
-        return image

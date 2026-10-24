@@ -36,14 +36,6 @@ class ImageData:
 
 
 @dataclass(frozen=True)
-class ViewedAttachment:
-    discussion_id: int
-    message_id: int
-    attachment: Attachment
-    image: ImageData
-
-
-@dataclass(frozen=True)
 class ViewedImage:
     path: str
     image: ImageData

@@ -9,7 +9,6 @@ from typing import Any
 from fora.core.attachment import (
     MAX_IMAGE_BYTES,
     ImageData,
-    ViewedAttachment,
     ViewedImage,
     identifier,
 )
@@ -505,21 +504,6 @@ class AgentTools:
             "member_id": self._actor.member_id,
             "read_through": watermark,
         }
-
-    def view_attachment(
-        self, discussion_id: int, message_id: int, attachment_id: str
-    ) -> ViewedAttachment:
-        self._check("discussion.read", discussion_id)
-        self._check("view_attachment", discussion_id)
-        self._require_membership(discussion_id)
-        result = self._uploads().view(
-            discussion_id, message_id, attachment_id, self._actor.member_id
-        )
-        self._record(
-            "view_attachment",
-            f"Discussion {discussion_id}: message {message_id}, attachment {attachment_id}",
-        )
-        return result
 
     def view_image(self, path: str) -> ViewedImage:
         self._check("view_image", path)

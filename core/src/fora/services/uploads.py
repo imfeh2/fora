@@ -6,7 +6,6 @@ from typing import BinaryIO
 from fora.core.attachment import (
     Attachment,
     Upload,
-    ViewedAttachment,
     identifier,
     validate_upload,
 )
@@ -119,21 +118,6 @@ class Uploads:
             for record in self.store.abandoned_uploads(restart=restart):
                 if record.id not in self._active:
                     self._discard(record.id)
-
-    def view(
-        self,
-        discussion_id: int,
-        message_id: int,
-        attachment_id: str,
-        member_id: int,
-    ) -> ViewedAttachment:
-        identifier(attachment_id)
-        attachment = self.store.attachment(
-            discussion_id, message_id, attachment_id, member_id
-        )
-        return ViewedAttachment(
-            discussion_id, message_id, attachment, self.files.image(attachment)
-        )
 
     def read(
         self,
