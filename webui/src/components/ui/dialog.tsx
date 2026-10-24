@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { dialogLook } from "@/components/ui/dialog-look";
 import {
   Button,
   Field,
@@ -109,7 +108,6 @@ export function Modal({
   }, []);
 
   const modalKind = variant ?? "form";
-  const look = dialogLook;
   const footerLayout =
     modalKind === "confirm" || modalKind === "prompt" ? "stack" : "row";
   const maxDvhClass =
@@ -120,21 +118,15 @@ export function Modal({
         : "narrow:max-h-[85dvh]";
   const wideWidth = wide
     ? "w-[min(960px,calc(100vw-32px))]"
-    : look === 3 && modalKind !== "confirm"
-      ? "w-[min(560px,calc(100vw-48px))]"
-      : "w-[min(440px,calc(100vw-48px))]";
+    : "w-[min(440px,calc(100vw-48px))]";
   const framed = tone === "surface";
-  const descriptionInHeader = look === 2 && !framed;
-  const showBody =
-    Boolean(children) || Boolean(description && !descriptionInHeader);
+  const showBody = Boolean(children) || Boolean(description);
   const spacing = framed
     ? "gap-4 p-6 narrow:p-4 narrow:pb-[calc(16px+env(safe-area-inset-bottom,0px))]"
     : "";
   const headerSpacing = framed ? "" : "px-6 pt-5 pb-4 narrow:px-4 narrow:pt-4";
   const headerDivider =
-    framed || (modalKind === "confirm" && look !== 2)
-      ? ""
-      : "border-b border-line";
+    framed || modalKind === "confirm" ? "" : "border-b border-line";
   const bodySpacing = framed
     ? ""
     : `px-6 py-5 narrow:px-4 narrow:py-4${
@@ -154,7 +146,7 @@ export function Modal({
   const headerClass =
     side === "left"
       ? "flex items-center justify-between gap-3 p-3 border-b border-line shrink-0"
-      : `dialog-header flex items-start justify-between gap-3 shrink-0 ${headerSpacing} ${headerDivider}`;
+      : `flex items-start justify-between gap-3 shrink-0 ${headerSpacing} ${headerDivider}`;
   const footerClass = `flex shrink-0 ${footerSpacing} ${footerDivider}`;
 
   const focusOnOpen = (event: Event) => {
@@ -192,20 +184,12 @@ export function Modal({
   const panel = (
     <>
       <div className={headerClass}>
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <Dialog.Title className="dialog-title min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
-            {title}
-          </Dialog.Title>
-          {descriptionInHeader && description ? (
-            <Dialog.Description className="dialog-consequence mx-0 mb-0 text-fg-muted text-sm">
-              {description}
-            </Dialog.Description>
-          ) : null}
-        </div>
+        <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
+          {title}
+        </Dialog.Title>
         <Dialog.Close asChild>
           <IconButton
             ref={closeButton}
-            className="dialog-close"
             label={side === "left" ? "Close navigation" : "Close"}
             size="sm"
             touchTarget
@@ -231,7 +215,7 @@ export function Modal({
         <div
           className={`dialog-body min-h-0 flex-1 overflow-y-auto flex flex-col gap-4 ${bodySpacing}`}
         >
-          {description && !descriptionInHeader ? (
+          {description ? (
             <Dialog.Description className="mx-0 mb-0 text-fg-muted text-sm shrink-0">
               {description}
             </Dialog.Description>
@@ -254,7 +238,6 @@ export function Modal({
         <Dialog.Content
           asChild
           className={panelClass}
-          data-look={look}
           data-footer={footerLayout}
           onOpenAutoFocus={focusOnOpen}
           onCloseAutoFocus={focusOnClose}

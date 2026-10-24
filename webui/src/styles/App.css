@@ -634,46 +634,6 @@ body.sidebar-resizing {
   gap: 8px;
 }
 
-.dialog-panel[data-look="2"] .dialog-header {
-  padding-bottom: 20px;
-}
-
-.dialog-panel[data-look="2"] .dialog-title {
-  font-size: 18px;
-  line-height: 26px;
-}
-
-.dialog-panel[data-look="2"] .dialog-consequence {
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.dialog-panel[data-look="2"] .dialog-actions {
-  justify-content: space-between;
-}
-
-.dialog-panel[data-look="2"] .dialog-actions:not(:has(.dialog-actions-cancel)) {
-  justify-content: flex-end;
-}
-
-.dialog-panel[data-look="3"] .dialog-title {
-  font-size: 20px;
-  line-height: 28px;
-}
-
-.dialog-panel[data-look="3"] .dialog-close {
-  width: 32px;
-  height: 32px;
-}
-
-.dialog-panel[data-look="3"] .dialog-footer button {
-  min-height: 36px;
-}
-
-.dialog-panel[data-look="3"] .dialog-actions-main > :last-child {
-  min-width: 96px;
-}
-
 @media (max-width: 640px) {
   .dialog-panel[data-footer="stack"] .dialog-actions,
   .dialog-panel[data-footer="stack"] .dialog-actions-cancel,
