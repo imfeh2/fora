@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { connectBackdropClick } from "./viewer-backdrop";
+import { connectBackdropClick } from "./viewer-viewport";
 
 let viewport: HTMLDivElement;
 let image: HTMLImageElement;

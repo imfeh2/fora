@@ -1,162 +1,17 @@
-import { Download, ImageOff, Minus, Plus, RotateCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Lightbox from "yet-another-react-lightbox";
+import { ViewerHeading, viewerToolbar } from "./viewer-toolbar";
 import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
-import Lightbox, { type SlideImage } from "yet-another-react-lightbox";
-import { Spinner } from "@/components/ui/index";
-import { StatePanel } from "@/components/ui/state-panel";
-import { connectBackdropClick } from "./viewer-backdrop";
-import { connectImageZoom, type ImageZoom, zoomPercent } from "./viewer-zoom";
+  type ImageInfo,
+  type ViewerImage,
+  ViewerViewport,
+} from "./viewer-viewport";
+import type { ImageZoom } from "./viewer-zoom";
+import { ViewerZoomControls } from "./viewer-zoom-controls";
 import "yet-another-react-lightbox/styles.css";
 import "./image-viewer.css";
 
-export type ViewerImage = SlideImage & {
-  name?: string;
-  load?: (signal: AbortSignal) => Promise<Blob>;
-};
-
-type ImageInfo = {
-  src: string;
-  url: string | null;
-  dimensions: { width: number; height: number } | null;
-  failed: boolean;
-};
-
-type RegisterZoom = (actions: ImageZoom) => () => void;
-
-function ZoomImage({
-  slide,
-  active,
-  register,
-  onScale,
-  onInfo,
-  onRetry,
-  onClose,
-}: {
-  slide: ViewerImage;
-  active: boolean;
-  register: RegisterZoom;
-  onScale: (scale: number) => void;
-  onInfo: (info: ImageInfo) => void;
-  onRetry: () => void;
-  onClose: () => void;
-}) {
-  const viewport = useRef<HTMLDivElement>(null);
-  const image = useRef<HTMLImageElement>(null);
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    if (active && viewport.current)
-      return connectBackdropClick(viewport.current, () => close.current());
-  }, [active]);
-  const [dimensions, setDimensions] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
-  const [visible, setVisible] = useState(false);
-  const [url, setUrl] = useState(slide.load ? null : slide.src);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (!slide.load) return;
-    const abort = new AbortController();
-    let objectUrl: string | null = null;
-    setUrl(null);
-    setDimensions(null);
-    setVisible(false);
-    setFailed(false);
-    void slide.load(abort.signal).then(
-      (blob) => {
-        if (abort.signal.aborted) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      },
-      () => {
-        if (!abort.signal.aborted) setFailed(true);
-      },
-    );
-    return () => {
-      abort.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [slide.load]);
-  useLayoutEffect(() => {
-    if (active) onInfo({ src: slide.src, url, dimensions, failed });
-  }, [active, slide.src, url, dimensions, failed, onInfo]);
-  useLayoutEffect(() => {
-    if (
-      !active ||
-      failed ||
-      dimensions === null ||
-      !viewport.current ||
-      !image.current
-    )
-      return;
-    const actions = connectImageZoom(viewport.current, image.current, onScale);
-    const unregister = register(actions);
-    setVisible(true);
-    return () => {
-      unregister();
-      actions.dispose();
-    };
-  }, [active, failed, dimensions, register, onScale]);
-  return (
-    <div ref={viewport} className="viewer-viewport">
-      {url && !failed ? (
-        <img
-          ref={image}
-          src={url}
-          alt={slide.alt ?? ""}
-          draggable={false}
-          className="viewer-image"
-          style={{
-            width: dimensions?.width,
-            height: dimensions?.height,
-            visibility: visible ? "visible" : "hidden",
-          }}
-          onLoad={(event) => {
-            const { naturalWidth: width, naturalHeight: height } =
-              event.currentTarget;
-            setDimensions({ width, height });
-          }}
-          onError={() => setFailed(true)}
-        />
-      ) : null}
-      {failed ? (
-        <div className="viewer-feedback">
-          <StatePanel
-            compact
-            icons={[ImageOff, ImageOff, ImageOff]}
-            title="Image could not be loaded"
-            action={{
-              label: "Retry",
-              icon: <RotateCw size={16} />,
-              onClick: onRetry,
-            }}
-          />
-        </div>
-      ) : dimensions === null ? (
-        <div className="viewer-feedback">
-          <Spinner label="Loading image" />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ViewerSlide(props: Omit<Parameters<typeof ZoomImage>[0], "onRetry">) {
-  const [attempt, setAttempt] = useState(0);
-  return (
-    <ZoomImage
-      {...props}
-      key={attempt}
-      onRetry={() => setAttempt((value) => value + 1)}
-    />
-  );
-}
+export type { ViewerImage } from "./viewer-viewport";
 
 export function ImageViewer({
   open,
@@ -177,10 +32,9 @@ export function ImageViewer({
   const [info, setInfo] = useState<ImageInfo | null>(null);
   const current = images[currentIndex];
   const loaded = info?.src === current?.src && !info?.failed ? info : null;
-  const dimensions = loaded?.dimensions;
-  const ready = dimensions != null;
+  const ready = loaded?.dimensions != null;
   const name = current?.name ?? current?.alt ?? "Image";
-  const register = useCallback<RegisterZoom>((value) => {
+  const register = useCallback((value: ImageZoom) => {
     actions.current = value;
     return () => {
       if (actions.current === value) actions.current = null;
@@ -209,7 +63,7 @@ export function ImageViewer({
   return (
     <Lightbox
       open={open}
-      className="image-viewer"
+      className="image-viewer text-fg font-sans"
       close={onClose}
       slides={images}
       index={index}
@@ -219,23 +73,7 @@ export function ImageViewer({
         closeOnBackdropClick: false,
       }}
       carousel={{ padding: 0, spacing: 0, preload: images.length > 1 ? 1 : 0 }}
-      toolbar={{
-        buttons: [
-          <a
-            key="download"
-            className="yarl__button viewer-download"
-            href={ready ? (loaded?.url ?? undefined) : undefined}
-            download={name}
-            aria-label="Download image"
-            aria-disabled={!ready}
-            tabIndex={ready ? 0 : -1}
-            title="Download image"
-          >
-            <Download size={22} />
-          </a>,
-          "close",
-        ],
-      }}
+      toolbar={viewerToolbar(name, loaded)}
       on={{
         view: ({ index: next }) => {
           setCurrentIndex(next);
@@ -245,7 +83,7 @@ export function ImageViewer({
       }}
       render={{
         slide: ({ slide, offset }) => (
-          <ViewerSlide
+          <ViewerViewport
             key={slide.src}
             slide={slide}
             active={offset === 0}
@@ -257,55 +95,18 @@ export function ImageViewer({
         ),
         controls: () => (
           <>
-            <header className="viewer-heading">
-              <div className="viewer-name" title={name}>
-                {name}
-              </div>
-              <div className="viewer-details">
-                <span className="viewer-dimensions">
-                  {ready ? `${dimensions.width} × ${dimensions.height}` : "—"}
-                </span>
-                {images.length > 1 ? (
-                  <span title="Image number">
-                    {currentIndex + 1} / {images.length}
-                  </span>
-                ) : null}
-              </div>
-            </header>
-            <fieldset className="viewer-zoom-controls" aria-label="Image zoom">
-              <button
-                type="button"
-                aria-label="Zoom out"
-                title="Zoom out"
-                disabled={!ready}
-                onClick={() => actions.current?.scaleBy(1 / 1.25)}
-              >
-                <Minus size={18} />
-              </button>
-              <button
-                className="viewer-percent"
-                type="button"
-                aria-label="Fit image"
-                title="Fit image"
-                disabled={!ready}
-                onClick={() => actions.current?.fit()}
-              >
-                {ready
-                  ? zoomPercent(scale)
-                  : info?.src === current?.src && info.failed
-                    ? "—"
-                    : "Loading…"}
-              </button>
-              <button
-                type="button"
-                aria-label="Zoom in"
-                title="Zoom in"
-                disabled={!ready}
-                onClick={() => actions.current?.scaleBy(1.25)}
-              >
-                <Plus size={18} />
-              </button>
-            </fieldset>
+            <ViewerHeading
+              name={name}
+              info={loaded}
+              index={currentIndex}
+              total={images.length}
+            />
+            <ViewerZoomControls
+              actions={actions}
+              scale={scale}
+              ready={ready}
+              failed={info?.src === current?.src && info?.failed === true}
+            />
           </>
         ),
         ...(images.length < 2

@@ -62,6 +62,8 @@ export function connectImageZoom(
   const width = image.naturalWidth;
   const height = image.naturalHeight;
   const selection = select(viewport);
+  const listeners = new AbortController();
+  const capture = { capture: true, signal: listeners.signal };
   let animation: ReturnType<typeof animate> | null = null;
   let rendered = zoomTransform(viewport);
   let animationTarget = rendered;
@@ -208,14 +210,11 @@ export function connectImageZoom(
     event.stopPropagation();
     if (event.target === image) fit();
   });
-  viewport.addEventListener("mousedown", down, true);
-  viewport.addEventListener("touchstart", stop, {
-    capture: true,
-    passive: true,
-  });
-  viewport.addEventListener("touchend", touchEnd, true);
-  viewport.addEventListener("touchcancel", touchEnd, true);
-  window.addEventListener("wheel", wheel, { capture: true, passive: true });
+  viewport.addEventListener("mousedown", down, capture);
+  viewport.addEventListener("touchstart", stop, { ...capture, passive: true });
+  viewport.addEventListener("touchend", touchEnd, capture);
+  viewport.addEventListener("touchcancel", touchEnd, capture);
+  window.addEventListener("wheel", wheel, { ...capture, passive: true });
   fit(0);
   return {
     fit: () => fit(),
@@ -226,11 +225,7 @@ export function connectImageZoom(
       disposed = true;
       stop();
       selection.on(".zoom", null);
-      viewport.removeEventListener("mousedown", down, true);
-      viewport.removeEventListener("touchstart", stop, true);
-      viewport.removeEventListener("touchend", touchEnd, true);
-      viewport.removeEventListener("touchcancel", touchEnd, true);
-      window.removeEventListener("wheel", wheel, true);
+      listeners.abort();
     },
   };
 }
