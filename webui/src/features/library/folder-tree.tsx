@@ -8,7 +8,7 @@ import {
   Image as ImageIcon,
   Music,
 } from "lucide-react";
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useEffect, useMemo, useRef } from "react";
 import {
   Button as AriaButton,
   type Selection,
@@ -111,6 +111,20 @@ export function FolderTree({
     () => new Set([...expanded].filter((path) => directories.has(path))),
     [directories, expanded],
   );
+  const container = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!selected) return;
+    const frame = requestAnimationFrame(() => {
+      const rows =
+        container.current?.querySelectorAll<HTMLElement>("[data-key]");
+      const row = [...(rows ?? [])].find(
+        (item) => item.dataset.key === selected,
+      );
+      row?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selected, roots]);
 
   const changeExpanded = (keys: Selection) => {
     const next = new Set(Array.from(keys, (key) => String(key)));
@@ -120,7 +134,7 @@ export function FolderTree({
 
   const renderNode = (node: FolderNode): ReactNode => {
     const directory = node.kind === "directory";
-    const actions = directory ? (rowActions?.(node.path) ?? []) : [];
+    const actions = rowActions?.(node.path) ?? [];
     const Icon = iconFor(node);
     const activate = () => {
       if (directory) onSelect(node.path);
@@ -194,7 +208,7 @@ export function FolderTree({
               {actions.length > 0 ? (
                 <span className="flex-none opacity-0 group-hover:opacity-100 group-focus-within:opacity-100">
                   <OverflowMenu
-                    label={`Folder actions for ${node.path}`}
+                    label={`Actions for ${node.path}`}
                     actions={actions}
                     stopPropagation
                   />
@@ -209,7 +223,7 @@ export function FolderTree({
   };
 
   return (
-    <div className="flex flex-col gap-px">
+    <div ref={container} className="flex flex-col gap-px">
       <div
         className={clsx(
           "flex h-[34px] items-center rounded-xs pr-1",

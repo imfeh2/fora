@@ -8,7 +8,6 @@ import {
   Search,
   SquarePen,
   Trash2,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useResource } from "@/app/organization";
@@ -29,9 +28,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { DocumentBody } from "@/features/library/document";
 import { FolderTree } from "@/features/library/folder-tree";
 import { mediaKind } from "@/features/library/media";
-import { MediaGrid } from "@/features/library/media-grid";
 import { expandedFolders } from "@/features/library/tree";
-import { FileList } from "@/features/library/tree-view";
 import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
 import {
   documentFolder,
@@ -146,7 +143,10 @@ export function LibraryPage({ path = "" }: { path?: string }) {
   const failed = resource.error !== null;
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(() => expandedFolders(path));
-  const [treeOpen, setTreeOpen] = useState(false);
+  const [picked, setPicked] = useState(path);
+  const [treeOpen, setTreeOpen] = useState(
+    () => typeof window !== "undefined" && window.innerWidth <= 900 && !path,
+  );
   const [creating, setCreating] = useState<Creation | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
   const [doomed, setDoomed] = useState<LibraryEntry | null>(null);
@@ -185,41 +185,70 @@ export function LibraryPage({ path = "" }: { path?: string }) {
     (entry) => entry.kind === "file" && entry.path === path,
   );
   const file = fileEntry?.path;
-  const folder = fileEntry ? (documentFolder(fileEntry.path) ?? "") : path;
+  const pickedEntry = (entries ?? []).find((entry) => entry.path === picked);
+  const folder = pickedEntry
+    ? pickedEntry.kind === "directory"
+      ? pickedEntry.path
+      : (documentFolder(pickedEntry.path) ?? "")
+    : "";
   const needle = query.trim().toLowerCase();
-  const files = (entries ?? []).filter((entry) => entry.kind === "file");
-  const directory = files.filter(
-    (entry) => (documentFolder(entry.path) ?? "") === folder,
-  );
-  const visible = needle
-    ? directory.filter((entry) => entry.path.toLowerCase().includes(needle))
-    : directory;
-  const media = visible.filter((entry) => mediaKind(entry.path) !== null);
-  const documents = visible.filter((entry) => mediaKind(entry.path) === null);
-  const folderEntry = (entries ?? []).find(
-    (entry) => entry.kind === "directory" && entry.path === folder,
-  );
-  const parts = folder ? folder.split("/") : [];
-  const empty = entries !== null && entries.length === 0;
-  const currentEmpty = documents.length === 0 && media.length === 0;
+  const shown =
+    needle && entries
+      ? [
+          ...entries.filter(
+            (entry) =>
+              entry.kind === "directory" &&
+              entries.some(
+                (item) =>
+                  item.kind === "file" &&
+                  item.path.startsWith(`${entry.path}/`) &&
+                  item.path.toLowerCase().includes(needle),
+              ),
+          ),
+          ...entries.filter(
+            (entry) =>
+              entry.kind === "file" &&
+              entry.path.toLowerCase().includes(needle),
+          ),
+        ]
+      : entries;
+  const parts = file ? file.split("/").slice(0, -1) : [];
   const disabled = entries === null || failed || backend.disconnected;
 
-  const selectFolder = (next: string) => {
-    setTreeOpen(false);
-    setQuery("");
-    navigate({ name: "library", path: next || undefined });
+  useEffect(() => {
+    setPicked(path);
+  }, [path]);
+
+  useEffect(() => {
+    if (!needle || !entries) return;
+    setExpanded((current) => {
+      const next = new Set(current);
+      for (const entry of entries)
+        if (entry.kind === "file" && entry.path.toLowerCase().includes(needle))
+          for (const parent of expandedFolders(entry.path)) next.add(parent);
+      return next;
+    });
+  }, [needle, entries]);
+
+  const pickFolder = (next: string) => {
+    setPicked(next);
+    if (next)
+      setExpanded((current) => {
+        const nextSet = new Set(current);
+        if (nextSet.has(next)) nextSet.delete(next);
+        else nextSet.add(next);
+        return nextSet;
+      });
   };
 
   const openFile = (next: string) => {
+    setPicked(next);
     setTreeOpen(false);
     setQuery("");
     navigate({ name: "library", path: next });
   };
 
-  const changeQuery = (value: string) => {
-    setQuery(value);
-    if (fileEntry) navigate({ name: "library", path: folder || undefined });
-  };
+  const changeQuery = (value: string) => setQuery(value);
 
   const actionsFor = (entry: LibraryEntry) =>
     libraryActions(entry, {
@@ -231,9 +260,9 @@ export function LibraryPage({ path = "" }: { path?: string }) {
   const tree =
     entries === null ? null : (
       <FolderTree
-        entries={entries}
+        entries={shown ?? []}
         expanded={expanded}
-        selected={path}
+        selected={picked}
         onToggle={(path) =>
           setExpanded((current) => {
             const next = new Set(current);
@@ -242,12 +271,10 @@ export function LibraryPage({ path = "" }: { path?: string }) {
             return next;
           })
         }
-        onSelect={selectFolder}
+        onSelect={pickFolder}
         onOpen={openFile}
         rowActions={(path) => {
-          const entry = entries.find(
-            (item) => item.kind === "directory" && item.path === path,
-          );
+          const entry = entries.find((item) => item.path === path);
           return entry ? actionsFor(entry) : [];
         }}
       />
@@ -300,28 +327,21 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               aria-label="Breadcrumb"
               className="flex min-w-0 items-center gap-1 text-sm"
             >
-              <button
-                type="button"
-                className="min-w-0 truncate border-0 bg-transparent text-fg-muted cursor-pointer hover:text-fg"
-                onClick={() => selectFolder("")}
-              >
-                Library
-              </button>
+              <span className="min-w-0 truncate text-fg-muted">Library</span>
               {parts.map((part, index) => {
-                const path = parts.slice(0, index + 1).join("/");
+                const folderPath = parts.slice(0, index + 1).join("/");
                 return (
-                  <span key={path} className="flex min-w-0 items-center gap-1">
+                  <span
+                    key={folderPath}
+                    className="flex min-w-0 items-center gap-1"
+                  >
                     <ChevronRight
                       size={14}
                       className="flex-none text-fg-muted"
                     />
-                    <button
-                      type="button"
-                      className="min-w-0 truncate border-0 bg-transparent text-fg-muted cursor-pointer hover:text-fg"
-                      onClick={() => selectFolder(path)}
-                    >
+                    <span className="min-w-0 truncate text-fg-muted">
                       {part}
-                    </button>
+                    </span>
                   </span>
                 );
               })}
@@ -421,84 +441,17 @@ export function LibraryPage({ path = "" }: { path?: string }) {
                     ))}
                   </LoadingSkeleton>
                 )
-              ) : !needle && folderEntry === undefined && folder !== "" ? (
+              ) : (
                 <StatePanel
-                  icons={[FolderPlus, FileText, File]}
-                  title="This folder no longer exists"
+                  icons={[File, FileText, FolderPlus]}
+                  title="Pick a file on the left"
                   action={{
-                    label: "Back to Library",
-                    icon: <X size={16} />,
-                    onClick: () => selectFolder(""),
+                    label: "New document",
+                    icon: <Plus size={16} />,
+                    onClick: () =>
+                      setCreating({ kind: "file", parent: folder }),
                   }}
                 />
-              ) : empty || currentEmpty ? (
-                <StatePanel
-                  icons={
-                    needle
-                      ? [FileText, Search, File]
-                      : [File, FileText, FolderPlus]
-                  }
-                  title={
-                    needle
-                      ? "No documents match"
-                      : empty
-                        ? "The Library is empty"
-                        : "This folder has no documents"
-                  }
-                  action={
-                    needle
-                      ? {
-                          label: "Clear search",
-                          icon: <X size={16} />,
-                          onClick: () => setQuery(""),
-                        }
-                      : {
-                          label: "New document",
-                          icon: <Plus size={16} />,
-                          onClick: () =>
-                            setCreating({ kind: "file", parent: folder }),
-                        }
-                  }
-                  secondaryAction={
-                    needle
-                      ? undefined
-                      : {
-                          label: "New folder",
-                          icon: <FolderPlus size={16} />,
-                          onClick: () =>
-                            setCreating({ kind: "directory", parent: folder }),
-                        }
-                  }
-                />
-              ) : (
-                <div className="flex flex-col gap-6">
-                  {media.length > 0 ? (
-                    <section className="flex flex-col gap-3">
-                      <h2 className="text-xs font-medium text-fg-muted">
-                        Media
-                      </h2>
-                      <MediaGrid
-                        entries={media}
-                        onOpen={openFile}
-                        rowActions={actionsFor}
-                      />
-                    </section>
-                  ) : null}
-                  {documents.length > 0 ? (
-                    <FileList
-                      entries={documents}
-                      onOpen={openFile}
-                      rowActions={actionsFor}
-                      label={
-                        needle
-                          ? "Search results"
-                          : folder
-                            ? `Documents in ${folder}`
-                            : "Library documents"
-                      }
-                    />
-                  ) : null}
-                </div>
               )}
             </div>
           )}
