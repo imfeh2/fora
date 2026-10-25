@@ -134,7 +134,7 @@ export function FolderTree({
 
   const handleClick = (event: MouseEvent) => {
     const target = event.target;
-    if (!(target instanceof HTMLElement) || target.closest("button")) return;
+    if (!(target instanceof Element) || target.closest("button")) return;
     const key = target.closest<HTMLElement>('[role="row"]')?.dataset.key;
     if (key === undefined) return;
     event.stopPropagation();
