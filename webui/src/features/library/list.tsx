@@ -9,7 +9,7 @@ import {
   SquarePen,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page } from "@/components/layout/shell";
@@ -123,6 +123,32 @@ export function libraryActions(
   ];
 }
 
+export function searchResults(
+  entries: LibraryEntry[],
+  query: string,
+): { entries: LibraryEntry[]; expanded: Set<string> } {
+  const needle = query.trim().toLowerCase();
+  const files = entries.filter(
+    (entry) =>
+      entry.kind === "file" && entry.path.toLowerCase().includes(needle),
+  );
+  const expanded = new Set<string>();
+  for (const file of files)
+    for (const parent of expandedFolders(
+      documentFolder(file.path) ?? undefined,
+    ))
+      expanded.add(parent);
+  return {
+    entries: [
+      ...entries.filter(
+        (entry) => entry.kind === "directory" && expanded.has(entry.path),
+      ),
+      ...files,
+    ],
+    expanded,
+  };
+}
+
 export function deleteConsequence(
   entry: LibraryEntry | null,
   entries: LibraryEntry[],
@@ -143,7 +169,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
   const failed = resource.error !== null;
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(() => expandedFolders(path));
-  const [picked, setPicked] = useState(path);
+  const browsing = useRef<Set<string> | null>(null);
   const [treeOpen, setTreeOpen] = useState(
     () => typeof window !== "undefined" && window.innerWidth <= 900 && !path,
   );
@@ -185,64 +211,44 @@ export function LibraryPage({ path = "" }: { path?: string }) {
     (entry) => entry.kind === "file" && entry.path === path,
   );
   const file = fileEntry?.path;
-  const pickedEntry = (entries ?? []).find((entry) => entry.path === picked);
+  const pickedEntry = (entries ?? []).find((entry) => entry.path === path);
   const folder = pickedEntry
     ? pickedEntry.kind === "directory"
       ? pickedEntry.path
       : (documentFolder(pickedEntry.path) ?? "")
     : "";
   const needle = query.trim().toLowerCase();
-  const shown =
-    needle && entries
-      ? [
-          ...entries.filter(
-            (entry) =>
-              entry.kind === "directory" &&
-              entries.some(
-                (item) =>
-                  item.kind === "file" &&
-                  item.path.startsWith(`${entry.path}/`) &&
-                  item.path.toLowerCase().includes(needle),
-              ),
-          ),
-          ...entries.filter(
-            (entry) =>
-              entry.kind === "file" &&
-              entry.path.toLowerCase().includes(needle),
-          ),
-        ]
-      : entries;
+  const results = useMemo(
+    () => searchResults(entries ?? [], needle),
+    [entries, needle],
+  );
+  const shown = needle ? results.entries : entries;
   const parts = file ? file.split("/").slice(0, -1) : [];
   const disabled = entries === null || failed || backend.disconnected;
 
   useEffect(() => {
-    setPicked(path);
-  }, [path]);
-
-  useEffect(() => {
-    if (!needle || !entries) return;
+    if (!needle) {
+      const restore = browsing.current;
+      if (!restore) return;
+      browsing.current = null;
+      setExpanded(restore);
+      return;
+    }
     setExpanded((current) => {
-      const next = new Set(current);
-      for (const entry of entries)
-        if (entry.kind === "file" && entry.path.toLowerCase().includes(needle))
-          for (const parent of expandedFolders(entry.path)) next.add(parent);
-      return next;
+      browsing.current ??= current;
+      return results.expanded;
     });
-  }, [needle, entries]);
+  }, [needle, results]);
 
-  const pickFolder = (next: string) => {
-    setPicked(next);
-    if (next)
-      setExpanded((current) => {
-        const nextSet = new Set(current);
-        if (nextSet.has(next)) nextSet.delete(next);
-        else nextSet.add(next);
-        return nextSet;
-      });
-  };
+  const toggleFolder = (next: string) =>
+    setExpanded((current) => {
+      const changed = new Set(current);
+      if (changed.has(next)) changed.delete(next);
+      else changed.add(next);
+      return changed;
+    });
 
   const openFile = (next: string) => {
-    setPicked(next);
     setTreeOpen(false);
     setQuery("");
     navigate({ name: "library", path: next });
@@ -262,16 +268,8 @@ export function LibraryPage({ path = "" }: { path?: string }) {
       <FolderTree
         entries={shown ?? []}
         expanded={expanded}
-        selected={picked}
-        onToggle={(path) =>
-          setExpanded((current) => {
-            const next = new Set(current);
-            if (next.has(path)) next.delete(path);
-            else next.add(path);
-            return next;
-          })
-        }
-        onSelect={pickFolder}
+        selected={path}
+        onToggle={toggleFolder}
         onOpen={openFile}
         rowActions={(path) => {
           const entry = entries.find((item) => item.path === path);
@@ -314,7 +312,15 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               ]}
             />
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-6">{tree}</div>
+          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-6">
+            {needle && (shown ?? []).length === 0 ? (
+              <p className="px-2 py-2 text-sm text-fg-muted">
+                No documents match
+              </p>
+            ) : (
+              tree
+            )}
+          </div>
         </aside>
         <div className="flex flex-1 min-w-0 min-h-0 flex-col">
           <header className="flex flex-none items-center gap-2 border-b border-line px-6 py-2">
@@ -521,8 +527,13 @@ export function LibraryPage({ path = "" }: { path?: string }) {
                   ),
                 ),
             );
-            if (file === renaming.path)
+            if (path === renaming.path)
               navigate({ name: "library", path: destination });
+            else if (path.startsWith(`${renaming.path}/`))
+              navigate({
+                name: "library",
+                path: destination + path.slice(renaming.path.length),
+              });
           }
           await load();
         }}
@@ -537,8 +548,11 @@ export function LibraryPage({ path = "" }: { path?: string }) {
         }
         onConfirm={async () => {
           if (doomed) await backend.deleteLibrary(doomed.path);
-          if (file && doomed && file === doomed.path)
-            navigate({ name: "library", path: folder || undefined });
+          if (
+            doomed &&
+            (path === doomed.path || path.startsWith(`${doomed.path}/`))
+          )
+            navigate({ name: "library" });
           await load();
         }}
       />

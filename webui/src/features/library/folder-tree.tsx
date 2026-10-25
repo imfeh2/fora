@@ -79,7 +79,6 @@ export function FolderTree({
   expanded,
   selected,
   onToggle,
-  onSelect,
   onOpen,
   rowActions,
 }: {
@@ -87,7 +86,6 @@ export function FolderTree({
   expanded: ReadonlySet<string>;
   selected: string;
   onToggle: (path: string) => void;
-  onSelect: (path: string) => void;
   onOpen?: (path: string) => void;
   rowActions?: (path: string) => MenuAction[];
 }) {
@@ -96,17 +94,6 @@ export function FolderTree({
     () => folderPaths(roots, new Set<string>()),
     [roots],
   );
-  const known = useMemo(() => {
-    const paths = new Set<string>([""]);
-    const walk = (nodes: FolderNode[]) => {
-      for (const node of nodes) {
-        paths.add(node.path);
-        walk(node.children);
-      }
-    };
-    walk(roots);
-    return paths;
-  }, [roots]);
   const expandedKeys = useMemo(
     () => new Set([...expanded].filter((path) => directories.has(path))),
     [directories, expanded],
@@ -132,14 +119,45 @@ export function FolderTree({
     for (const path of expandedKeys) if (!next.has(path)) onToggle(path);
   };
 
+  const handleKey = (event: globalThis.KeyboardEvent) => {
+    if (event.key !== " " && event.key !== "Enter") return;
+    const row = event.target;
+    if (!(row instanceof HTMLElement) || row.getAttribute("role") !== "row")
+      return;
+    const key = row.dataset.key;
+    if (key === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (directories.has(key)) onToggle(key);
+    else onOpen?.(key);
+  };
+
+  const handleClick = (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || target.closest("button")) return;
+    const key = target.closest<HTMLElement>('[role="row"]')?.dataset.key;
+    if (key === undefined) return;
+    event.stopPropagation();
+    if (directories.has(key)) onToggle(key);
+    else onOpen?.(key);
+  };
+
+  useEffect(() => {
+    const node = container.current;
+    if (!node) return;
+    node.addEventListener("keydown", handleKey);
+    node.addEventListener("click", handleClick, true);
+    return () => {
+      node.removeEventListener("keydown", handleKey);
+      node.removeEventListener("click", handleClick, true);
+    };
+  }, [handleKey, handleClick]);
+
   const renderNode = (node: FolderNode): ReactNode => {
     const directory = node.kind === "directory";
     const actions = rowActions?.(node.path) ?? [];
     const Icon = iconFor(node);
-    const activate = () => {
-      if (directory) onSelect(node.path);
-      else onOpen?.(node.path);
-    };
+    const current = selected === node.path;
     return (
       <TreeItem
         key={node.path}
@@ -151,20 +169,18 @@ export function FolderTree({
             element.setAttribute("aria-current", "true");
           else element.removeAttribute("aria-current");
         }}
-        className={({ isSelected, isFocusVisible }) =>
+        className={({ isFocusVisible }) =>
           clsx(
             "group relative flex items-center rounded-xs pr-1 transition-[background-color] duration-(--duration-fast) ease-linear",
             directory ? "h-[34px]" : "h-[30px]",
-            isSelected ? "bg-surface-raised" : "hover:bg-surface-raised/60",
+            current ? "bg-surface-raised" : "hover:bg-surface-raised/60",
             isFocusVisible && "outline-1 -outline-offset-1 outline-line-hover",
           )
         }
         style={({ level }) => ({ paddingLeft: level * 14 })}
-        onPress={activate}
-        onAction={activate}
       >
         <TreeItemContent>
-          {({ isExpanded, hasChildItems, isSelected }) => (
+          {({ isExpanded, hasChildItems }) => (
             <>
               {hasChildItems ? (
                 <AriaButton
@@ -188,7 +204,7 @@ export function FolderTree({
                   "flex-none",
                   directory
                     ? "text-fg-muted"
-                    : isSelected
+                    : current
                       ? "text-fg-muted"
                       : "text-fg-subtle",
                 )}
@@ -200,7 +216,7 @@ export function FolderTree({
                   directory
                     ? "text-sm leading-5"
                     : "text-[13px] leading-[18px]",
-                  isSelected ? "text-fg" : "text-fg-muted group-hover:text-fg",
+                  current ? "text-fg" : "text-fg-muted group-hover:text-fg",
                 )}
               >
                 {node.name}
@@ -224,37 +240,15 @@ export function FolderTree({
 
   return (
     <div ref={container} className="flex flex-col gap-px">
-      <div
-        className={clsx(
-          "flex h-[34px] items-center rounded-xs pr-1",
-          selected === "" ? "bg-surface-raised" : "hover:bg-surface-raised/60",
-        )}
-      >
-        <button
-          type="button"
-          data-folder=""
-          aria-current={selected === "" ? "true" : undefined}
-          className={clsx(
-            "flex h-full flex-1 min-w-0 items-center gap-2 border-0 bg-transparent pl-6 pr-2 text-left text-sm cursor-pointer",
-            selected === "" ? "text-fg" : "text-fg-muted",
-          )}
-          onClick={() => onSelect("")}
-        >
-          <Folder size={16} className="flex-none" />
-          <span className="min-w-0 truncate">Library</span>
-        </button>
+      <div className="flex h-[34px] items-center gap-2 pl-6 pr-2 text-sm text-fg-muted">
+        <Folder size={16} className="flex-none" />
+        <span className="min-w-0 truncate">Library</span>
       </div>
       <Tree
         aria-label="Library"
         className="flex flex-col gap-px"
-        selectionMode="single"
-        selectionBehavior="replace"
-        defaultSelectedKeys={
-          known.has(selected) ? new Set([selected]) : undefined
-        }
         expandedKeys={expandedKeys}
         onExpandedChange={changeExpanded}
-        disallowEmptySelection
       >
         {roots.map(renderNode)}
       </Tree>

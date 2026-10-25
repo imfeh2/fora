@@ -4,6 +4,7 @@ import {
   creationDestination,
   creationNameError,
   libraryActions,
+  searchResults,
 } from "@/features/library/list";
 import type { LibraryEntry } from "@/lib/backend";
 
@@ -66,6 +67,38 @@ describe("libraryActions", () => {
     );
 
     expect(labels).toEqual(["Rename", "New document", "New folder", "Delete"]);
+  });
+});
+
+describe("searchResults", () => {
+  it("finds a file in a nested folder and keeps its folders", () => {
+    const result = searchResults(
+      [
+        entry("docs", "directory"),
+        entry("docs/reports", "directory"),
+        entry("docs/reports/note-30.md"),
+        entry("projects", "directory"),
+        entry("projects/plan.md"),
+      ],
+      "NOTE",
+    );
+
+    expect(result.entries.map((item) => item.path)).toEqual([
+      "docs",
+      "docs/reports",
+      "docs/reports/note-30.md",
+    ]);
+    expect([...result.expanded]).toEqual(["docs", "docs/reports"]);
+  });
+
+  it("matches nothing when no file carries the word", () => {
+    const result = searchResults(
+      [entry("docs", "directory"), entry("docs/plan.md")],
+      "zzz-no-match",
+    );
+
+    expect(result.entries).toEqual([]);
+    expect(result.expanded.size).toBe(0);
   });
 });
 
