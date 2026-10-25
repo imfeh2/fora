@@ -200,12 +200,10 @@ export function ImageViewer({
     window.addEventListener("keydown", keys, true);
     window.addEventListener("pointerdown", stop, true);
     window.addEventListener("pointercancel", stop, true);
-    window.addEventListener("wheel", stop, { capture: true, passive: true });
     return () => {
       window.removeEventListener("keydown", keys, true);
       window.removeEventListener("pointerdown", stop, true);
       window.removeEventListener("pointercancel", stop, true);
-      window.removeEventListener("wheel", stop, true);
     };
   }, [open]);
   return (

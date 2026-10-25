@@ -1,8 +1,10 @@
+import { waitFor } from "@testing-library/react";
+import { zoomIdentity } from "d3-zoom";
 import { describe, expect, it, vi } from "vitest";
 import {
   connectImageZoom,
   drawableTransform,
-  releaseVelocity,
+  interpolateView,
   zoomPercent,
 } from "./viewer-zoom";
 
@@ -38,7 +40,7 @@ describe("viewer scale", () => {
 });
 
 describe("image gesture connection", () => {
-  it("connects mouse and wheel input to the image and removes handlers on disposal", () => {
+  it("eases mouse and wheel input to their exact targets and removes handlers on disposal", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     const view = frame.contentWindow;
@@ -59,6 +61,8 @@ describe("image gesture connection", () => {
     const actions = connectImageZoom(viewport, image, onScale);
     expect(image.style.transform).toBe("translate(45px, 0px) scale(4.5)");
     actions.scaleBy(0.01);
+    expect(image.style.transform).toBe("translate(45px, 0px) scale(4.5)");
+    await waitFor(() => expect(onScale).toHaveBeenLastCalledWith(0.045));
     viewport.dispatchEvent(
       new MouseEvent("mousedown", {
         view,
@@ -75,8 +79,13 @@ describe("image gesture connection", () => {
         buttons: 1,
       }),
     );
-    expect(image.style.transform).toBe(
+    expect(image.style.transform).not.toBe(
       "translate(793.25px, 505.5px) scale(0.045)",
+    );
+    await waitFor(() =>
+      expect(image.style.transform).toBe(
+        "translate(793.25px, 505.5px) scale(0.045)",
+      ),
     );
     actions.stop();
     view.dispatchEvent(
@@ -90,12 +99,14 @@ describe("image gesture connection", () => {
         cancelable: true,
       }),
     );
-    expect(onScale).toHaveBeenLastCalledWith(0.09);
+    await waitFor(() => expect(onScale).toHaveBeenLastCalledWith(0.09));
     expect(image.style.transform).toBe(
       "translate(1386.5px, 711px) scale(0.09)",
     );
     actions.fit();
-    expect(image.style.transform).toBe("translate(45px, 0px) scale(4.5)");
+    await waitFor(() =>
+      expect(image.style.transform).toBe("translate(45px, 0px) scale(4.5)"),
+    );
     actions.dispose();
     const calls = onScale.mock.calls.length;
     viewport.dispatchEvent(
@@ -108,29 +119,20 @@ describe("image gesture connection", () => {
   });
 });
 
-describe("release velocity", () => {
-  const samples = [
-    { x: 10, y: 20, time: 0 },
-    { x: 30, y: 10, time: 20 },
-    { x: 50, y: 0, time: 40 },
-  ];
-
-  it("measures screen pixels per second", () => {
-    expect(releaseVelocity(samples, 40)).toEqual({ x: 1000, y: -500 });
-  });
-
-  it("includes a pause before releasing", () => {
-    expect(releaseVelocity(samples, 60)).toEqual({ x: 2000 / 3, y: -1000 / 3 });
-    expect(releaseVelocity(samples, 150)).toEqual({ x: 0, y: 0 });
-  });
-
-  it("ignores older movement and stationary input", () => {
-    expect(
-      releaseVelocity(
-        [...samples, { x: 50, y: 0, time: 200 }, { x: 50, y: 0, time: 220 }],
-        230,
-      ),
-    ).toEqual({ x: 0, y: 0 });
-    expect(releaseVelocity([], 230)).toEqual({ x: 0, y: 0 });
-  });
+it("interpolates without overshoot and preserves exact endpoints at extreme scales", () => {
+  const start = zoomIdentity.translate(400, 300).scale(1e30);
+  const target = zoomIdentity.translate(-900, -700).scale(1e-30);
+  expect(interpolateView(start, target, 0)).toBe(start);
+  expect(interpolateView(start, target, 1)).toBe(target);
+  let previous = start;
+  for (let index = 1; index <= 100; index += 1) {
+    const current = interpolateView(start, target, index / 100);
+    expect(current.k).toBeGreaterThanOrEqual(target.k);
+    expect(current.k).toBeLessThanOrEqual(previous.k);
+    expect(current.x).toBeGreaterThanOrEqual(target.x);
+    expect(current.x).toBeLessThanOrEqual(previous.x);
+    expect(current.y).toBeGreaterThanOrEqual(target.y);
+    expect(current.y).toBeLessThanOrEqual(previous.y);
+    previous = current;
+  }
 });
