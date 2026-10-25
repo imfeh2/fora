@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Lightbox from "yet-another-react-lightbox";
 import { ViewerHeading, viewerToolbar } from "./viewer-toolbar";
 import {
@@ -34,12 +34,6 @@ export function ImageViewer({
   const loaded = info?.src === current?.src && !info?.failed ? info : null;
   const ready = loaded?.dimensions != null;
   const name = current?.name ?? current?.alt ?? "Image";
-  const register = useCallback((value: ImageZoom) => {
-    actions.current = value;
-    return () => {
-      if (actions.current === value) actions.current = null;
-    };
-  }, []);
   useEffect(() => {
     if (!open) return;
     const keys = (event: KeyboardEvent) => {
@@ -87,7 +81,7 @@ export function ImageViewer({
             key={slide.src}
             slide={slide}
             active={offset === 0}
-            register={register}
+            actionsRef={actions}
             onScale={setScale}
             onInfo={setInfo}
             onClose={onClose}

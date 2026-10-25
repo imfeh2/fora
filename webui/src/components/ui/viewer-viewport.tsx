@@ -1,5 +1,11 @@
 import { ImageOff, RotateCw } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { SlideImage } from "yet-another-react-lightbox";
 import { Spinner } from "@/components/ui/index";
 import { StatePanel } from "@/components/ui/state-panel";
@@ -18,7 +24,7 @@ export type ImageInfo = {
 type ViewportProps = {
   slide: ViewerImage;
   active: boolean;
-  register: (actions: ImageZoom) => () => void;
+  actionsRef: RefObject<ImageZoom | null>;
   onScale: (scale: number) => void;
   onInfo: (info: ImageInfo) => void;
   onClose: () => void;
@@ -82,7 +88,7 @@ export function connectBackdropClick(viewport: HTMLElement, close: () => void) {
 function ZoomImage({
   slide,
   active,
-  register,
+  actionsRef,
   onScale,
   onInfo,
   onClose,
@@ -136,13 +142,13 @@ function ZoomImage({
     )
       return;
     const actions = connectImageZoom(viewport.current, image.current, onScale);
-    const unregister = register(actions);
+    actionsRef.current = actions;
     setVisible(true);
     return () => {
-      unregister();
+      if (actionsRef.current === actions) actionsRef.current = null;
       actions.dispose();
     };
-  }, [active, failed, dimensions, register, onScale]);
+  }, [active, failed, dimensions, actionsRef, onScale]);
   return (
     <div
       ref={viewport}

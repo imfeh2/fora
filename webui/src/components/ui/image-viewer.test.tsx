@@ -5,8 +5,65 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ImageViewer } from "./image-viewer";
+import { ViewerViewport } from "./viewer-viewport";
+import type { ImageZoom } from "./viewer-zoom";
+
+it("keeps the active controller through strict effects and slide handover", () => {
+  const actionsRef: { current: ImageZoom | null } = { current: null };
+  const onInfo = vi.fn();
+  const onScale = vi.fn();
+  const onClose = vi.fn();
+  const slides = [
+    { src: "first.png", alt: "First image" },
+    { src: "next.png", alt: "Next image" },
+  ];
+  const scene = (active: number) => (
+    <StrictMode>
+      {slides.map((slide, index) => (
+        <ViewerViewport
+          key={slide.src}
+          slide={slide}
+          active={index === active}
+          actionsRef={actionsRef}
+          onInfo={onInfo}
+          onScale={onScale}
+          onClose={onClose}
+        />
+      ))}
+    </StrictMode>
+  );
+  const view = render(scene(0));
+  for (const name of ["First image", "Next image"]) {
+    const image = screen.getByAltText(name);
+    Object.defineProperties(image, {
+      naturalWidth: { value: 300 },
+      naturalHeight: { value: 200 },
+    });
+    fireEvent.load(image);
+  }
+  const first = actionsRef.current;
+  expect(first).not.toBeNull();
+  expect(
+    (screen.getByAltText("Next image") as HTMLImageElement).style.visibility,
+  ).toBe("hidden");
+  if (!first) throw new Error("Missing first controller");
+  const disposeFirst = vi.spyOn(first, "dispose");
+  view.rerender(scene(1));
+  expect(disposeFirst).toHaveBeenCalledTimes(1);
+  expect(actionsRef.current).not.toBe(first);
+  expect(
+    (screen.getByAltText("First image") as HTMLImageElement).style.visibility,
+  ).toBe("visible");
+  const next = actionsRef.current;
+  if (!next) throw new Error("Missing next controller");
+  const disposeNext = vi.spyOn(next, "dispose");
+  view.unmount();
+  expect(actionsRef.current).toBeNull();
+  expect(disposeNext).toHaveBeenCalledTimes(1);
+});
 
 afterEach(() => {
   cleanup();
