@@ -9,6 +9,7 @@ import {
 import Lightbox, { type SlideImage } from "yet-another-react-lightbox";
 import { Spinner } from "@/components/ui/index";
 import { StatePanel } from "@/components/ui/state-panel";
+import { connectBackdropClick } from "./viewer-backdrop";
 import { connectImageZoom, type ImageZoom, zoomPercent } from "./viewer-zoom";
 import "yet-another-react-lightbox/styles.css";
 import "./image-viewer.css";
@@ -34,6 +35,7 @@ function ZoomImage({
   onScale,
   onInfo,
   onRetry,
+  onClose,
 }: {
   slide: ViewerImage;
   active: boolean;
@@ -41,9 +43,16 @@ function ZoomImage({
   onScale: (scale: number) => void;
   onInfo: (info: ImageInfo) => void;
   onRetry: () => void;
+  onClose: () => void;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (active && viewport.current)
+      return connectBackdropClick(viewport.current, () => close.current());
+  }, [active]);
   const [dimensions, setDimensions] = useState<{
     width: number;
     height: number;
@@ -245,6 +254,7 @@ export function ImageViewer({
             register={register}
             onScale={setScale}
             onInfo={setInfo}
+            onClose={onClose}
           />
         ),
         controls: () => (
