@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { folderTree } from "@/features/library/folder-tree";
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { useState } from "react";
+import { afterEach, describe, expect, it } from "vitest";
+import { FolderTree, folderTree } from "@/features/library/folder-tree";
 import {
   creationDestination,
   creationNameError,
@@ -20,6 +22,53 @@ const handlers = {
   create: () => {},
   remove: () => {},
 };
+
+const tree = [
+  entry("media", "directory"),
+  entry("media/demo.mp4"),
+  entry("README.md"),
+];
+
+Element.prototype.scrollIntoView = () => {};
+
+afterEach(() => {
+  cleanup();
+});
+
+function Harness({ open }: { open: string }) {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [selected, setSelected] = useState(open);
+  return (
+    <FolderTree
+      entries={tree}
+      expanded={expanded}
+      selected={selected}
+      onToggle={(path) =>
+        setExpanded((current) => {
+          const next = new Set(current);
+          if (next.has(path)) next.delete(path);
+          else next.add(path);
+          return next;
+        })
+      }
+      onOpen={setSelected}
+    />
+  );
+}
+
+function rowFor(key: string) {
+  const row = document.querySelector<HTMLElement>(`[data-key="${key}"]`);
+  if (!row) throw new Error(`no row for ${key}`);
+  return row;
+}
+
+function iconIn(row: HTMLElement) {
+  const icon = [...row.querySelectorAll("svg")].find(
+    (svg) => !svg.closest("button"),
+  );
+  if (!icon) throw new Error("no icon in row");
+  return icon;
+}
 
 describe("folderTree", () => {
   it("keeps files beside folders, with folders first", () => {
@@ -99,6 +148,32 @@ describe("searchResults", () => {
 
     expect(result.entries).toEqual([]);
     expect(result.expanded.size).toBe(0);
+  });
+});
+
+describe("folder tree clicks", () => {
+  it("expands a folder from its icon and keeps the open file current", () => {
+    render(<Harness open="README.md" />);
+    expect(rowFor("README.md").getAttribute("aria-current")).toBe("true");
+    expect(document.querySelector('[data-key="media/demo.mp4"]')).toBeNull();
+
+    fireEvent.click(iconIn(rowFor("media")), { detail: 1 });
+
+    expect(rowFor("media").getAttribute("aria-expanded")).toBe("true");
+    expect(
+      document.querySelector('[data-key="media/demo.mp4"]'),
+    ).not.toBeNull();
+    expect(rowFor("media").getAttribute("aria-current")).toBeNull();
+    expect(rowFor("README.md").getAttribute("aria-current")).toBe("true");
+  });
+
+  it("opens a file from its icon", () => {
+    render(<Harness open="" />);
+    expect(rowFor("README.md").getAttribute("aria-current")).toBeNull();
+
+    fireEvent.click(iconIn(rowFor("README.md")), { detail: 1 });
+
+    expect(rowFor("README.md").getAttribute("aria-current")).toBe("true");
   });
 });
 
