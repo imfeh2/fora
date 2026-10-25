@@ -6,7 +6,7 @@ import {
   zoomIdentity,
   zoomTransform,
 } from "d3-zoom";
-import { animate } from "framer-motion";
+import { animate, cancelFrame, frame } from "framer-motion";
 
 const percentFormat = new Intl.NumberFormat("en", {
   maximumSignificantDigits: 3,
@@ -64,10 +64,12 @@ export function connectImageZoom(
   const selection = select(viewport);
   let animation: ReturnType<typeof animate> | null = null;
   let rendered = zoomTransform(viewport);
+  let animationTarget = rendered;
   let generation = 0;
   let syncing = false;
   let disposed = false;
   let commandDuration: number | null = null;
+  let pendingDuration: number | null = null;
   let wheeling = false;
   let wheelDirection = 0;
   let wheelPoint = [0, 0];
@@ -84,6 +86,7 @@ export function connectImageZoom(
   const follow = (target: ZoomTransform, duration: number) => {
     cancelAnimation();
     const start = rendered;
+    animationTarget = target;
     if (
       duration === 0 ||
       (start.k === target.k && start.x === target.x && start.y === target.y)
@@ -105,6 +108,11 @@ export function connectImageZoom(
       },
     });
   };
+  const followFrame = () => {
+    if (!disposed && pendingDuration !== null)
+      follow(zoomTransform(viewport), pendingDuration);
+    pendingDuration = null;
+  };
   const behavior = zoom<HTMLDivElement, unknown>()
     .constrain((transform) =>
       drawableTransform(transform, width, height)
@@ -124,12 +132,27 @@ export function connectImageZoom(
           : source?.type === "mousemove" || source?.type === "touchmove"
             ? 100
             : 0);
-      follow(event.transform, duration);
+      if (duration === 0) follow(event.transform, 0);
+      else {
+        if (
+          (["x", "y", "k"] as const).some(
+            (key) =>
+              (event.transform[key] - animationTarget[key]) *
+                (animationTarget[key] - rendered[key]) <
+              0,
+          )
+        )
+          cancelAnimation();
+        pendingDuration = duration;
+        frame.postRender(followFrame);
+      }
     })
     .on("end.viewer", (event: D3ZoomEvent<HTMLDivElement, unknown>) => {
       if (!syncing && event.sourceEvent?.type === "wheel") wheeling = false;
     });
   const stop = () => {
+    cancelFrame(followFrame);
+    pendingDuration = null;
     cancelAnimation();
     wheeling = false;
     syncing = true;
