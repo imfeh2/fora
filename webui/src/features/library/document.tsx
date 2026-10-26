@@ -13,7 +13,6 @@ import {
   Page,
   PageBody,
   PageHeader,
-  Toolbar,
 } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
@@ -49,12 +48,14 @@ const conflictDescription =
 export function documentCrumbs(
   path: string,
   navigate: (route: Route) => void,
+  size?: string,
 ): Crumb[] {
   const parts = path.split("/");
   return [
     { label: "Library", onSelect: () => navigate({ name: "library" }) },
     ...parts.map((label, index) => ({
       label,
+      hint: index === parts.length - 1 ? size : undefined,
       onSelect: () =>
         navigate({
           name: "library",
@@ -70,34 +71,26 @@ export function documentCrumbs(
 function DocumentFrame({
   path,
   actions,
+  status,
+  size,
   menuDisabled = false,
-  toolbar,
   children,
   embedded = false,
 }: {
   path: string;
   actions?: ReactNode;
+  status?: ReactNode;
+  size?: string;
   menuDisabled?: boolean;
-  toolbar?: ReactNode;
   children: ReactNode;
   embedded?: boolean;
 }) {
   const navigate = useNavigate();
-  const crumb = documentCrumbs(path, navigate);
+  const crumb = documentCrumbs(path, navigate, size);
   const [renaming, setRenaming] = useState(false);
   const [doomed, setDoomed] = useState(false);
   if (embedded)
-    return (
-      <div className="flex flex-1 min-h-0 flex-col">
-        {toolbar || actions ? (
-          <div className="flex flex-none flex-wrap items-center gap-2 border-b border-line px-6 py-2">
-            {toolbar}
-            <span className="ml-auto flex items-center gap-2">{actions}</span>
-          </div>
-        ) : null}
-        <div className="flex flex-1 min-h-0 flex-col">{children}</div>
-      </div>
-    );
+    return <div className="flex flex-1 min-h-0 flex-col">{children}</div>;
   return (
     <Page>
       <PageHeader
@@ -105,6 +98,7 @@ function DocumentFrame({
         crumb={crumb}
         actions={
           <>
+            {status}
             {actions}
             <OverflowMenu
               label={`Actions for ${path}`}
@@ -129,7 +123,6 @@ function DocumentFrame({
           </>
         }
       />
-      {toolbar ? <Toolbar>{toolbar}</Toolbar> : null}
       <PageBody variant="flush">{children}</PageBody>
       <PromptDialog
         open={renaming}
@@ -443,18 +436,12 @@ function TextDocument({
           </Button>
         </>
       }
-      toolbar={
-        <>
-          {loaded === null ? (
-            failed ? null : (
-              <Skeleton className="w-16" />
-            )
-          ) : (
-            <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
-          )}
-          {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
-        </>
+      size={
+        loaded === null
+          ? undefined
+          : formatBytes(new TextEncoder().encode(draft).length)
       }
+      status={dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
     >
       <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
         {saveError ? (
@@ -582,6 +569,7 @@ function MediaDocument({
     <DocumentFrame
       path={path}
       embedded={embedded}
+      size={state.status === "ready" ? formatBytes(state.size) : undefined}
       menuDisabled={state.status === "loading"}
     >
       <div className="flex flex-1 min-h-0 items-center justify-center p-8">

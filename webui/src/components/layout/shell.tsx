@@ -437,7 +437,7 @@ export function PageTransition({
   );
 }
 
-export type Crumb = { label: string; onSelect: () => void };
+export type Crumb = { label: string; onSelect: () => void; hint?: string };
 
 export function PageHeader({
   title,
@@ -466,7 +466,9 @@ export function PageHeader({
               >
                 {index > 0 ? <span aria-hidden="true">›</span> : null}
                 {index === crumb.length - 1 ? (
-                  <span aria-current="page">{item.label}</span>
+                  <span aria-current="page" title={item.hint}>
+                    {item.label}
+                  </span>
                 ) : (
                   <button
                     type="button"
