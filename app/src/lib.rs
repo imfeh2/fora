@@ -1,11 +1,17 @@
-use std::{fmt::Write as _, path::Path, process::Child, sync::Mutex};
+use std::{
+    fmt::Write as _,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 mod kernel;
+mod logging;
 
+use kernel::{KernelProcess, monitor_kernel, shutdown_kernel, spawn_kernel};
 pub use kernel::{Launcher, Ready, launcher, parse_ready};
-use kernel::{shutdown_kernel, spawn_kernel};
+use logging::AppLog;
 
 pub fn window_url(outcome: Result<&Ready, &str>) -> String {
     match outcome {
@@ -26,39 +32,81 @@ fn url_encode(value: &str) -> String {
     encoded
 }
 
-struct Kernel(Mutex<Option<Child>>);
+struct Kernel(Arc<Mutex<Option<KernelProcess>>>);
 
 pub fn run() {
+    let log = AppLog::start();
+    let instance_log = log.clone();
+    let setup_log = log.clone();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
-        .setup(|app| {
+        .plugin(tauri_plugin_single_instance::init(
+            move |app, _args, _cwd| {
+                instance_log.record("app.second_instance", "focusing the existing main window");
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
+        .setup(move |app| {
             let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core");
-            let launcher = launcher(tauri::is_dev(), &project, &app.path().resource_dir()?);
-            let (child, url) = match spawn_kernel(launcher) {
+            let resources = app.path().resource_dir().inspect_err(|error| {
+                setup_log.record("app.resources.failed", error.to_string());
+            })?;
+            setup_log.record(
+                "app.resources",
+                format!("directory={resources:?} development={}", tauri::is_dev()),
+            );
+            let launcher = launcher(tauri::is_dev(), &project, &resources);
+            let (child, url) = match spawn_kernel(launcher, setup_log.clone()) {
                 Ok((child, ready)) => (Some(child), window_url(Ok(&ready))),
                 Err(error) => (None, window_url(Err(&error))),
             };
-            app.manage(Kernel(Mutex::new(child)));
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
+            let child = Arc::new(Mutex::new(child));
+            monitor_kernel(child.clone(), setup_log.clone());
+            app.manage(Kernel(child.clone()));
+            setup_log.window_url(&url);
+            match WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
                 .disable_drag_drop_handler()
                 .title("Fora")
-                .build()?;
+                .build()
+            {
+                Ok(_) => setup_log.record("window.created", "label=main"),
+                Err(error) => {
+                    setup_log.record("window.failed", error.to_string());
+                    if let Some(mut child) = child.lock().unwrap().take() {
+                        shutdown_kernel(&mut child, &setup_log);
+                    }
+                    return Err(error.into());
+                }
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let RunEvent::Exit = event {
-                let kernel = app.state::<Kernel>();
-                if let Some(child) = kernel.0.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                    shutdown_kernel(child);
-                }
+        .run(move |app, event| match event {
+            RunEvent::ExitRequested { code, .. } => {
+                log.record("app.exit_requested", format!("code={code:?}"))
             }
+            RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { .. },
+                ..
+            } => log.record("window.close_requested", label),
+            RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } => log.record("window.destroyed", label),
+            RunEvent::Exit => {
+                log.record("app.exit", "closing sidecar");
+                let kernel = app.state::<Kernel>();
+                if let Some(mut child) = kernel.0.lock().unwrap().take() {
+                    shutdown_kernel(&mut child, &log);
+                }
+                log.record("app.exit.finished", "sidecar cleanup finished");
+            }
+            _ => {}
         });
 }
 
