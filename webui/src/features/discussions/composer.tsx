@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/index";
 import { ComposerAttachments } from "@/features/discussions/attachments";
 import {
+  pasteFiles,
   type SendComposer,
   useComposer,
 } from "@/features/discussions/composer-state";
@@ -975,13 +976,10 @@ export function Composer({
               maxHeight: "100%",
             }}
             onPaste={(event) => {
-              const images = Array.from(event.clipboardData.files).filter(
-                (file) => file.type.startsWith("image/"),
-              );
-              if (!images.length) return;
-              if (!event.clipboardData.getData("text/plain"))
-                event.preventDefault();
-              controller?.addFiles(images);
+              const { files, swallow } = pasteFiles(event.clipboardData);
+              if (!files.length) return;
+              if (swallow) event.preventDefault();
+              controller?.addFiles(files);
             }}
             rows={1}
             variant="composer"

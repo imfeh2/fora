@@ -45,6 +45,20 @@ export type SendComposer = (
   id: string,
 ) => Promise<boolean | "cancelled">;
 
+export function pasteFiles(clipboard: {
+  files: ArrayLike<File>;
+  getData: (type: string) => string;
+}): {
+  files: File[];
+  swallow: boolean;
+} {
+  const files = Array.from(clipboard.files);
+  return {
+    files,
+    swallow: files.length > 0 && !clipboard.getData("text/plain"),
+  };
+}
+
 export function fileProblem(
   file: File,
   existing: ComposerFile[],
