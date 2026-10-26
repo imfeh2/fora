@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { type Route, useNavigate, useRouter } from "@/app/router";
 import {
   type Crumb,
@@ -73,6 +74,7 @@ function DocumentFrame({
   actions,
   status,
   size,
+  actionsSlot,
   menuDisabled = false,
   children,
   embedded = false,
@@ -81,6 +83,7 @@ function DocumentFrame({
   actions?: ReactNode;
   status?: ReactNode;
   size?: string;
+  actionsSlot?: HTMLElement | null;
   menuDisabled?: boolean;
   children: ReactNode;
   embedded?: boolean;
@@ -90,7 +93,20 @@ function DocumentFrame({
   const [renaming, setRenaming] = useState(false);
   const [doomed, setDoomed] = useState(false);
   if (embedded)
-    return <div className="flex flex-1 min-h-0 flex-col">{children}</div>;
+    return (
+      <div className="flex flex-1 min-h-0 flex-col">
+        {actionsSlot
+          ? createPortal(
+              <>
+                {status}
+                {actions}
+              </>,
+              actionsSlot,
+            )
+          : null}
+        <div className="flex flex-1 min-h-0 flex-col">{children}</div>
+      </div>
+    );
   return (
     <Page>
       <PageHeader
@@ -175,21 +191,29 @@ export function DocumentUnavailable({
   );
 }
 
-export function DocumentBody({ path }: { path: string }) {
+export function DocumentBody({
+  path,
+  actionsSlot,
+}: {
+  path: string;
+  actionsSlot?: HTMLElement | null;
+}) {
   const kind = mediaKind(path);
   return kind === null ? (
-    <TextDocument path={path} embedded />
+    <TextDocument path={path} embedded actionsSlot={actionsSlot} />
   ) : (
-    <MediaDocument path={path} kind={kind} embedded />
+    <MediaDocument path={path} kind={kind} embedded actionsSlot={actionsSlot} />
   );
 }
 
 function TextDocument({
   path,
   embedded,
+  actionsSlot,
 }: {
   path: string;
   embedded?: boolean;
+  actionsSlot?: HTMLElement | null;
 }) {
   const navigate = useNavigate();
   const { registerNavigationBlocker } = useRouter();
@@ -416,6 +440,7 @@ function TextDocument({
     <DocumentFrame
       path={path}
       embedded={embedded}
+      actionsSlot={actionsSlot}
       menuDisabled={loaded === null || failed}
       actions={
         <>
@@ -525,10 +550,12 @@ function MediaDocument({
   path,
   kind,
   embedded,
+  actionsSlot,
 }: {
   path: string;
   kind: MediaKind;
   embedded?: boolean;
+  actionsSlot?: HTMLElement | null;
 }) {
   const [state, setState] = useState<MediaState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -569,6 +596,7 @@ function MediaDocument({
     <DocumentFrame
       path={path}
       embedded={embedded}
+      actionsSlot={actionsSlot}
       size={state.status === "ready" ? formatBytes(state.size) : undefined}
       menuDisabled={state.status === "loading"}
     >

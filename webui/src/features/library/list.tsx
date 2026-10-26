@@ -27,7 +27,6 @@ import { StatePanel } from "@/components/ui/state-panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { DocumentBody } from "@/features/library/document";
 import { FolderTree } from "@/features/library/folder-tree";
-import { mediaKind } from "@/features/library/media";
 import { expandedFolders } from "@/features/library/tree";
 import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
 import {
@@ -176,6 +175,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
   const [creating, setCreating] = useState<Creation | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
   const [doomed, setDoomed] = useState<LibraryEntry | null>(null);
+  const [actionsSlot, setActionsSlot] = useState<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     invalidate(true);
@@ -354,7 +354,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               {file ? (
                 <span className="flex min-w-0 items-center gap-1">
                   <ChevronRight size={14} className="flex-none text-fg-muted" />
-                  {fileEntry && mediaKind(file) !== null ? (
+                  {fileEntry ? (
                     <Tooltip label={formatBytes(fileEntry.size)}>
                       <span className="min-w-0 truncate text-fg">
                         {documentName(file)}
@@ -370,30 +370,36 @@ export function LibraryPage({ path = "" }: { path?: string }) {
             </nav>
             <span className="ml-auto flex flex-none items-center gap-2">
               {file ? (
-                <OverflowMenu
-                  label={`Actions for ${file}`}
-                  actions={[
-                    {
-                      id: "rename",
-                      label: "Rename",
-                      icon: <SquarePen size={15} />,
-                      disabled: !fileEntry,
-                      onSelect: () => {
-                        if (fileEntry) setRenaming(fileEntry);
+                <>
+                  <span
+                    ref={setActionsSlot}
+                    className="flex items-center gap-2"
+                  />
+                  <OverflowMenu
+                    label={`Actions for ${file}`}
+                    actions={[
+                      {
+                        id: "rename",
+                        label: "Rename",
+                        icon: <SquarePen size={15} />,
+                        disabled: !fileEntry,
+                        onSelect: () => {
+                          if (fileEntry) setRenaming(fileEntry);
+                        },
                       },
-                    },
-                    {
-                      id: "delete",
-                      label: "Delete",
-                      icon: <Trash2 size={15} />,
-                      tone: "danger",
-                      disabled: !fileEntry,
-                      onSelect: () => {
-                        if (fileEntry) setDoomed(fileEntry);
+                      {
+                        id: "delete",
+                        label: "Delete",
+                        icon: <Trash2 size={15} />,
+                        tone: "danger",
+                        disabled: !fileEntry,
+                        onSelect: () => {
+                          if (fileEntry) setDoomed(fileEntry);
+                        },
                       },
-                    },
-                  ]}
-                />
+                    ]}
+                  />
+                </>
               ) : (
                 <>
                   <Button
@@ -420,7 +426,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
             </span>
           </header>
           {file ? (
-            <DocumentBody path={file} />
+            <DocumentBody path={file} actionsSlot={actionsSlot} />
           ) : (
             <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 flex flex-col">
               {resource.error &&
