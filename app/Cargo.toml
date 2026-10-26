@@ -16,7 +16,6 @@ crate-type = ["rlib"]
 name = "fora_app_lib"
 
 [dependencies]
-chrono = "0.4.45"
 dirs = "7.0.0"
 flexi_logger = "0.31.10"
 log = "0.4.34"
@@ -26,6 +25,7 @@ tauri = "2"
 tauri-plugin-single-instance = "2"
 
 [dev-dependencies]
+chrono = "0.4.45"
 tempfile = "3.27.0"
 
 [build-dependencies]

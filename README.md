@@ -2,6 +2,21 @@
 
 Run your own organization of agents.
 
+## Desktop logs
+
+Desktop startup logs are stored beside the backend log in `~/.fora/logs/`, or in
+`<FORA_DATA_DIR>/logs/` when `FORA_DATA_DIR` is set. On Windows, open
+`%USERPROFILE%\.fora\logs` and collect the latest `app_r*.log` file together with
+the complete error message and startup time.
+
+App logs rotate daily and after exceeding 8 MiB, retaining the latest seven
+files including the active file. Names include the date and time, with a sequence
+suffix when needed. Each record is kept complete, so a file can exceed the size
+threshold by one record. Records are written and flushed synchronously. Sensitive
+values are redacted. If the directory cannot be resolved or a log file cannot be
+opened or written, file logging stops after one diagnostic on stderr; startup
+continues.
+
 ## Domain access
 
 A non-loopback listener accepts domain names without registration. For example:

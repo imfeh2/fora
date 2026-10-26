@@ -2,30 +2,47 @@ use std::{
     ffi::OsString,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use flexi_logger::{
     Age, Cleanup, Criterion, DeferredNow, FileSpec, Naming,
-    writers::{FileLogWriter, LogWriter},
+    writers::{ArcFileLogWriter, FileLogWriter, FileLogWriterHandle},
 };
 use regex::Regex;
 
+const LOG_SIZE_LIMIT: u64 = 8 * 1024 * 1024;
+
 pub(crate) struct AppLog {
-    directory: PathBuf,
-    writer: FileLogWriter,
+    directory: Option<PathBuf>,
+    writer: Option<(ArcFileLogWriter, FileLogWriterHandle)>,
+    disabled: AtomicBool,
     redactor: Redactor,
 }
 
 impl AppLog {
     pub(crate) fn start() -> Arc<Self> {
-        let home = dirs::home_dir().expect("the user home directory is available");
         let directory = data_directory(
             std::env::var_os("FORA_DATA_DIR"),
-            &home,
-            &std::env::current_dir().expect("the current directory is available"),
+            dirs::home_dir().as_deref(),
+            std::env::current_dir().ok().as_deref(),
         );
-        let logger = Self::open(&directory, std::env::vars_os());
+        let logger = match directory.as_deref() {
+            Some(directory) => Self::open(directory, std::env::vars_os()),
+            None => {
+                let logger = Arc::new(Self {
+                    directory: None,
+                    writer: None,
+                    disabled: AtomicBool::new(false),
+                    redactor: Redactor::new(std::env::vars_os()),
+                });
+                logger.disable("the app data directory could not be resolved");
+                logger
+            }
+        };
         logger.record(
             "app.start",
             format!(
@@ -58,46 +75,72 @@ impl AppLog {
         let writer = FileLogWriter::builder(
             FileSpec::default()
                 .directory(directory.join("logs"))
-                .suppress_basename()
+                .basename("app")
                 .suppress_timestamp(),
         )
         .append()
-        .format(format_record)
         .rotate(
-            Criterion::Age(Age::Day),
-            Naming::TimestampsCustomFormat {
-                current_infix: None,
-                format: "app-%Y-%m-%d",
-            },
+            Criterion::AgeOrSize(Age::Day, LOG_SIZE_LIMIT),
+            Naming::TimestampsDirect,
             Cleanup::KeepLogFiles(7),
         )
         .cleanup_in_background_thread(false)
-        .try_build()
-        .expect("the app log file can be opened");
-        Arc::new(Self {
-            directory: directory.to_path_buf(),
-            writer,
+        .try_build_with_handle();
+        let error = writer.as_ref().err().map(ToString::to_string);
+        let logger = Arc::new(Self {
+            directory: Some(directory.to_path_buf()),
+            writer: writer.ok(),
+            disabled: AtomicBool::new(false),
             redactor: Redactor::new(environment),
-        })
+        });
+        if let Some(error) = error {
+            logger.disable(error);
+        }
+        logger
     }
 
-    pub(crate) fn directory(&self) -> &Path {
-        &self.directory
+    pub(crate) fn directory(&self) -> Option<&Path> {
+        self.directory.as_deref()
+    }
+
+    fn disable(&self, error: impl std::fmt::Display) {
+        if !self.disabled.swap(true, Ordering::Relaxed) {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "app.log.failed pid={} {}",
+                std::process::id(),
+                self.redactor.clean(&error.to_string()),
+            );
+        }
     }
 
     pub(crate) fn record(&self, event: &str, message: impl AsRef<str>) {
+        if self.disabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(writer) = &self.writer else {
+            return;
+        };
         let message = self.redactor.clean(message.as_ref());
-        self.writer
-            .write(
-                &mut DeferredNow::new(),
-                &log::Record::builder()
-                    .level(log::Level::Info)
-                    .target(event)
-                    .args(format_args!("{message}"))
-                    .build(),
-            )
-            .expect("the app log record can be written");
-        self.writer.flush().expect("the app log can be flushed");
+        let mut buffer = Vec::new();
+        let result = format_record(
+            &mut buffer,
+            &mut DeferredNow::new(),
+            &log::Record::builder()
+                .level(log::Level::Info)
+                .target(event)
+                .args(format_args!("{message}"))
+                .build(),
+        )
+        .and_then(|()| {
+            buffer.push(b'\n');
+            let mut writer = writer.0.clone();
+            writer.write_all(&buffer)?;
+            writer.flush()
+        });
+        if let Err(error) = result {
+            self.disable(error);
+        }
     }
 
     pub(crate) fn window_url(&self, value: &str) {
@@ -129,22 +172,26 @@ fn format_record(
     )
 }
 
-fn data_directory(value: Option<OsString>, home: &Path, cwd: &Path) -> PathBuf {
+fn data_directory(
+    value: Option<OsString>,
+    home: Option<&Path>,
+    cwd: Option<&Path>,
+) -> Option<PathBuf> {
     let path = match value.filter(|value| !value.is_empty()) {
         Some(value) => {
             let path = PathBuf::from(value);
             match path.strip_prefix("~") {
-                Ok(rest) => home.join(rest),
+                Ok(rest) => home?.join(rest),
                 Err(_) => path,
             }
         }
-        None => home.join(".fora"),
+        None => home?.join(".fora"),
     };
-    if path.is_absolute() {
+    Some(if path.is_absolute() {
         path
     } else {
-        cwd.join(path)
-    }
+        cwd?.join(path)
+    })
 }
 
 struct Redactor {
@@ -198,26 +245,56 @@ impl Redactor {
 mod tests {
     use super::*;
 
+    fn log_files(directory: &Path) -> Vec<PathBuf> {
+        let mut files = std::fs::read_dir(directory.join("logs"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("app_r")
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        files
+    }
+
     #[test]
     fn data_directory_matches_default_relative_and_home_overrides() {
         let cwd = std::env::current_dir().unwrap();
         let home = cwd.join("home");
-        assert_eq!(data_directory(None, &home, &cwd), home.join(".fora"));
         assert_eq!(
-            data_directory(Some("".into()), &home, &cwd),
+            data_directory(None, Some(&home), Some(&cwd)).unwrap(),
             home.join(".fora")
         );
         assert_eq!(
-            data_directory(Some("demo".into()), &home, &cwd),
+            data_directory(Some("".into()), Some(&home), Some(&cwd)).unwrap(),
+            home.join(".fora")
+        );
+        assert_eq!(
+            data_directory(Some("demo".into()), Some(&home), Some(&cwd)).unwrap(),
             cwd.join("demo")
         );
         assert_eq!(
-            data_directory(Some("~/demo".into()), &home, &cwd),
+            data_directory(Some("~/demo".into()), Some(&home), Some(&cwd)).unwrap(),
             home.join("demo")
         );
         assert_eq!(
-            data_directory(Some(home.clone().into_os_string()), &home, &cwd),
+            data_directory(Some(home.clone().into_os_string()), Some(&home), Some(&cwd)).unwrap(),
             home
+        );
+    }
+
+    #[test]
+    fn unavailable_home_or_working_directory_is_optional() {
+        assert_eq!(data_directory(None, None, None), None);
+        assert_eq!(data_directory(Some("relative".into()), None, None), None);
+        assert_eq!(data_directory(Some("~/logs".into()), None, None), None);
+        let absolute = std::env::current_dir().unwrap().join("data");
+        assert_eq!(
+            data_directory(Some(absolute.clone().into_os_string()), None, None),
+            Some(absolute)
         );
     }
 
@@ -232,13 +309,7 @@ mod tests {
         logger.record("stderr", "warning: café 中文 hidden-service-value");
         logger.record("stdout", r#"{"token":"hidden token","password":"hidden password"} Bearer hidden-bearer https://user:hidden-userpass@localhost/?api_key=hidden-query"#);
         logger.window_url("index.html?error=token%3Dhidden-encoded&ws=ws://127.0.0.1:1234/ws");
-        let contents = std::fs::read_to_string(
-            directory
-                .path()
-                .join("logs")
-                .join(chrono::Local::now().format("app-%Y-%m-%d.log").to_string()),
-        )
-        .unwrap();
+        let contents = std::fs::read_to_string(&log_files(directory.path())[0]).unwrap();
         assert!(contents.contains(r#"{"type":"ready","port":1234}"#));
         assert!(contents.contains("warning: café 中文"));
         assert!(contents.contains("127.0.0.1%3A1234%2Fws"));
@@ -261,7 +332,11 @@ mod tests {
         let logs = directory.path().join("logs");
         std::fs::create_dir(&logs).unwrap();
         for day in 1..=10 {
-            std::fs::write(logs.join(format!("app-2020-01-{day:02}.log")), "old").unwrap();
+            std::fs::write(
+                logs.join(format!("app_r2020-01-{day:02}_00-00-00.log")),
+                "old",
+            )
+            .unwrap();
         }
         std::fs::write(logs.join("fora.log"), "backend").unwrap();
         std::fs::write(logs.join("notes.log"), "unrelated").unwrap();
@@ -274,7 +349,7 @@ mod tests {
         assert_eq!(
             files
                 .iter()
-                .filter(|name| name.to_string_lossy().starts_with("app-"))
+                .filter(|name| name.to_string_lossy().starts_with("app_r"))
                 .count(),
             7
         );
@@ -286,11 +361,63 @@ mod tests {
             std::fs::read_to_string(logs.join("notes.log")).unwrap(),
             "unrelated"
         );
-        let contents = std::fs::read_to_string(
-            logs.join(chrono::Local::now().format("app-%Y-%m-%d.log").to_string()),
-        )
-        .unwrap();
+        let contents = log_files(directory.path())
+            .into_iter()
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .collect::<String>();
         assert!(contents.contains("before restart"));
         assert!(contents.contains("after restart"));
+    }
+
+    #[test]
+    fn size_rotation_keeps_seven_files_and_preserves_complete_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let logger = AppLog::open(directory.path(), []);
+        let message = "x".repeat(LOG_SIZE_LIMIT as usize + 1);
+        for _ in 0..10 {
+            logger.record("large", &message);
+        }
+        logger.record("last", "tail record");
+        let files = log_files(directory.path());
+        assert_eq!(files.len(), 7);
+        let sizes = files
+            .iter()
+            .map(|path| path.metadata().unwrap().len())
+            .collect::<Vec<_>>();
+        assert!(sizes.iter().all(|size| *size <= LOG_SIZE_LIMIT + 128));
+        assert!(sizes.iter().filter(|size| **size > LOG_SIZE_LIMIT).count() >= 5);
+        assert!(files.iter().any(|path| {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("tail record")
+        }));
+        assert!(!logger.disabled.load(Ordering::Relaxed));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn full_disk_disables_logging_without_panicking_or_retrying() {
+        let directory = tempfile::tempdir().unwrap();
+        let logger = AppLog::open(directory.path(), []);
+        logger.record("first", "before the disk filled");
+        let path = &log_files(directory.path())[0];
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&chrono::Local::now().format("app_r%Y-%m-%d").to_string())
+        );
+        std::fs::remove_file(path).unwrap();
+        std::os::unix::fs::symlink("/dev/full", path).unwrap();
+        logger
+            .writer
+            .as_ref()
+            .unwrap()
+            .0
+            .reopen_outputfile()
+            .unwrap();
+        logger.record("second", "token=private-fixture");
+        assert!(logger.disabled.load(Ordering::Relaxed));
+        logger.record("third", "ignored after logging failed");
     }
 }

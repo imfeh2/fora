@@ -116,10 +116,12 @@ fn spawn_with_timeout(
     command
         .args(&launcher.args)
         .envs(launcher.env.iter().map(|(key, value)| (key, value)))
-        .env("FORA_DATA_DIR", log.directory())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(directory) = log.directory() {
+        command.env("FORA_DATA_DIR", directory);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -404,12 +406,49 @@ mod tests {
     }
 
     fn contents(directory: &Path) -> String {
-        std::fs::read_to_string(
-            directory
-                .join("logs")
-                .join(chrono::Local::now().format("app-%Y-%m-%d.log").to_string()),
-        )
-        .unwrap()
+        std::fs::read_dir(directory.join("logs"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn unavailable_log_directory_does_not_prevent_startup_or_shutdown() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("logs"), "occupied by a file").unwrap();
+        let log = AppLog::open(directory.path(), []);
+        let (mut child, ready) = fixture("noise", log.clone(), Duration::from_secs(5)).unwrap();
+        assert_eq!(ready.port, 4567);
+        shutdown_kernel(&mut child, &log);
+        assert!(child.child.try_wait().unwrap().unwrap().success());
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "kernel::tests::sidecar_fixture", "--nocapture"])
+            .env("FORA_APP_TEST_MODE", "logging-failure")
+            .env("FORA_DATA_DIR", directory.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"{\"method\":\"system.shutdown\"}\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), 1, "{stderr}");
+        assert!(stderr.contains("app.log.failed"));
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout
+                .lines()
+                .filter_map(|line| parse_ready(line).ok())
+                .any(|ready| ready.port == 4567)
+        );
+        assert!(stdout.contains("shutdown received"));
     }
 
     #[test]
@@ -575,8 +614,13 @@ mod tests {
         let Ok(mode) = std::env::var("FORA_APP_TEST_MODE") else {
             return;
         };
+        if mode == "logging-failure" {
+            let log = AppLog::start();
+            log.record("fixture", "recording after log initialization failed");
+        } else {
+            eprintln!("stderr notice");
+        }
         println!("bootloader notice\nnot json\n{{\"type\":\"log\"}}");
-        eprintln!("stderr notice");
         if mode == "eof" {
             return;
         }
