@@ -35,7 +35,7 @@ import { type MediaKind, mediaKind } from "@/features/library/media";
 import { MarkdownContent } from "@/features/markdown";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend } from "@/lib/backend";
-import { documentName, formatBytes } from "@/lib/format";
+import { documentName } from "@/lib/format";
 
 type Loaded = { content: string; hash: string };
 
@@ -49,14 +49,12 @@ const conflictDescription =
 export function documentCrumbs(
   path: string,
   navigate: (route: Route) => void,
-  size?: string,
 ): Crumb[] {
   const parts = path.split("/");
   return [
     { label: "Library", onSelect: () => navigate({ name: "library" }) },
     ...parts.map((label, index) => ({
       label,
-      hint: index === parts.length - 1 ? size : undefined,
       onSelect: () =>
         navigate({
           name: "library",
@@ -73,7 +71,6 @@ function DocumentFrame({
   path,
   actions,
   status,
-  size,
   actionsSlot,
   menuDisabled = false,
   children,
@@ -82,14 +79,13 @@ function DocumentFrame({
   path: string;
   actions?: ReactNode;
   status?: ReactNode;
-  size?: string;
   actionsSlot?: HTMLElement | null;
   menuDisabled?: boolean;
   children: ReactNode;
   embedded?: boolean;
 }) {
   const navigate = useNavigate();
-  const crumb = documentCrumbs(path, navigate, size);
+  const crumb = documentCrumbs(path, navigate);
   const [renaming, setRenaming] = useState(false);
   const [doomed, setDoomed] = useState(false);
   if (embedded)
@@ -461,11 +457,6 @@ function TextDocument({
           </Button>
         </>
       }
-      size={
-        loaded === null
-          ? undefined
-          : formatBytes(new TextEncoder().encode(draft).length)
-      }
       status={dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
     >
       <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
@@ -597,7 +588,6 @@ function MediaDocument({
       path={path}
       embedded={embedded}
       actionsSlot={actionsSlot}
-      size={state.status === "ready" ? formatBytes(state.size) : undefined}
       menuDisabled={state.status === "loading"}
     >
       <div className="flex flex-1 min-h-0 items-center justify-center p-8">
