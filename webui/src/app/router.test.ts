@@ -1,10 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { cleanup, render } from "@testing-library/react";
+import { createElement, useEffect } from "react";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   documentPath,
   pageKeyOf,
+  RouterProvider,
   routeFromPath,
   routePath,
 } from "@/app/router";
+import { connectionFrom } from "@/lib/backend";
+
+afterEach(() => {
+  cleanup();
+  history.replaceState(null, "", "/");
+});
 
 describe("page keys", () => {
   it("keeps the library mounted while the open file changes", () => {
@@ -19,6 +28,31 @@ describe("page keys", () => {
     );
   });
 });
+
+it.each(["/index.html", "/", "/discussions"])(
+  "keeps startup parameters available to the connection effect at %s",
+  (path) => {
+    for (const search of [
+      "?error=Failed%20to%20start%20Fora%3A%20fixture",
+      "?ws=ws%3A%2F%2F127.0.0.1%3A4567%2Fws&token=fixture-token",
+    ]) {
+      history.replaceState(null, "", path + search);
+      let observed: ReturnType<typeof connectionFrom> | undefined;
+      function ReadConnection() {
+        useEffect(() => {
+          observed = connectionFrom(location.search, location.origin);
+        }, []);
+        return null;
+      }
+      render(
+        createElement(RouterProvider, null, createElement(ReadConnection)),
+      );
+      expect(observed).toEqual(connectionFrom(search, location.origin));
+      expect(location.pathname).toBe("/discussions");
+      cleanup();
+    }
+  },
+);
 
 describe("route paths", () => {
   it("encodes every library segment", () => {

@@ -142,12 +142,12 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => {
     const initial = routeFromPath(location.pathname);
     if (initial === null) {
-      history.replaceState(history.state, "", LIST_PATH);
+      history.replaceState(history.state, "", LIST_PATH + location.search);
       return { name: "discussions" };
     }
     const path = routePath(initial);
-    if (`${location.pathname}${location.search}` !== path)
-      history.replaceState(history.state, "", path);
+    if (location.pathname !== path)
+      history.replaceState(history.state, "", path + location.search);
     return initial;
   });
 
