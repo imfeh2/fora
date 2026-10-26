@@ -171,7 +171,7 @@ export function FolderTree({
         }}
         className={({ isFocusVisible }) =>
           clsx(
-            "group relative flex items-center rounded-xs pr-1 transition-[background-color] duration-(--duration-fast) ease-linear",
+            "group relative flex items-center cursor-pointer rounded-xs pr-1 transition-[background-color] duration-(--duration-fast) ease-linear",
             directory ? "h-[34px]" : "h-[30px]",
             current ? "bg-surface-raised" : "hover:bg-surface-raised/60",
             isFocusVisible && "outline-1 -outline-offset-1 outline-line-hover",
