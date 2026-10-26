@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { documentPath, routeFromPath, routePath } from "@/app/router";
+import {
+  documentPath,
+  pageKeyOf,
+  routeFromPath,
+  routePath,
+} from "@/app/router";
+
+describe("page keys", () => {
+  it("keeps the library mounted while the open file changes", () => {
+    expect(pageKeyOf({ name: "library", path: "a/b.md" })).toBe(
+      pageKeyOf({ name: "library" }),
+    );
+  });
+
+  it("remounts when the open discussion changes", () => {
+    expect(pageKeyOf({ name: "discussion", id: 1 })).not.toBe(
+      pageKeyOf({ name: "discussion", id: 2 }),
+    );
+  });
+});
 
 describe("route paths", () => {
   it("encodes every library segment", () => {

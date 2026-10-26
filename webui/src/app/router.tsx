@@ -47,7 +47,6 @@ export function navIdOf(route: Route): NavId {
 
 export function pageKeyOf(route: Route): string {
   if ("id" in route) return `${route.name}:${route.id}`;
-  if ("path" in route && route.path) return `${route.name}:${route.path}`;
   return route.name;
 }
 
