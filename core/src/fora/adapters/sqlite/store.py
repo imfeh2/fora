@@ -15,7 +15,8 @@ from types import TracebackType
 from typing import Any, Self, cast
 
 from fora.core.attachment import (
-    MIB,
+    MAX_FILES,
+    MAX_MESSAGE_BYTES,
     Attachment,
     Upload,
     identifier,
@@ -32,6 +33,13 @@ from fora.ports.store import (
     ReadSummary,
     UnreadCounts,
 )
+
+# Upload reservations are counted before any bytes arrive, so the pool has to hold a
+# whole message: one owner may reserve MAX_MESSAGE_BYTES at once, the shared pool keeps
+# room for a few messages in flight, and the count cap is a few messages' worth of files.
+UPLOAD_OWNER_BYTES = MAX_MESSAGE_BYTES
+UPLOAD_TOTAL_BYTES = 3 * MAX_MESSAGE_BYTES
+UPLOAD_COUNT = 4 * MAX_FILES
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -689,9 +697,9 @@ class SqliteStore:
             )
             assert usage is not None
             if (
-                usage["count"] >= 40
-                or usage["total"] + size > 200 * MIB
-                or usage["owned"] + size > 100 * MIB
+                usage["count"] >= UPLOAD_COUNT
+                or usage["total"] + size > UPLOAD_TOTAL_BYTES
+                or usage["owned"] + size > UPLOAD_OWNER_BYTES
             ):
                 raise DomainError(
                     ErrorCode.UPLOAD_CAPACITY,
