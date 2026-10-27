@@ -8,8 +8,8 @@ from fora.core.errors import DomainError
 
 MIB = 1024 * 1024
 MAX_FILES = 10
-MAX_FILE_BYTES = 20 * MIB
-MAX_MESSAGE_BYTES = 50 * MIB
+MAX_FILE_BYTES = 200 * MIB
+MAX_MESSAGE_BYTES = 500 * MIB
 MAX_IMAGE_BYTES = 5 * MIB
 MAX_IMAGE_SIDE = 8192
 MAX_IMAGE_PIXELS = 20_000_000
@@ -80,11 +80,17 @@ def validate_upload(name: object, size: object, media_type: object) -> None:
             ErrorCode.INVALID_FILENAME, "Choose a filename of 1–255 characters"
         )
     if type(size) is not int or not 0 <= size <= MAX_FILE_BYTES:
-        raise DomainError(ErrorCode.FILE_TOO_LARGE, "Files must be at most 20 MiB")
+        raise DomainError(
+            ErrorCode.FILE_TOO_LARGE,
+            f"Files must be at most {MAX_FILE_BYTES // MIB} MiB",
+        )
     if not isinstance(media_type, str) or len(media_type) > 127:
         raise DomainError(ErrorCode.INVALID_MEDIA_TYPE, "Invalid file media type")
     if media_type in IMAGE_TYPES and size > MAX_IMAGE_BYTES:
-        raise DomainError(ErrorCode.IMAGE_TOO_LARGE, "Images must be at most 5 MiB")
+        raise DomainError(
+            ErrorCode.IMAGE_TOO_LARGE,
+            f"Images must be at most {MAX_IMAGE_BYTES // MIB} MiB",
+        )
 
 
 def validate_attachments(attachments: tuple[Attachment, ...]) -> None:
@@ -94,5 +100,6 @@ def validate_attachments(attachments: tuple[Attachment, ...]) -> None:
         )
     if sum(item.size for item in attachments) > MAX_MESSAGE_BYTES:
         raise DomainError(
-            ErrorCode.ATTACHMENTS_TOO_LARGE, "Message files must total at most 50 MiB"
+            ErrorCode.ATTACHMENTS_TOO_LARGE,
+            f"Message files must total at most {MAX_MESSAGE_BYTES // MIB} MiB",
         )

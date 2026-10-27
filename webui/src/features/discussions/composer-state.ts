@@ -1,6 +1,13 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { backend, type UploadRecord } from "@/lib/backend";
+import {
+  MAX_FILE_BYTES,
+  MAX_FILES,
+  MAX_IMAGE_BYTES,
+  MAX_MESSAGE_BYTES,
+  mib,
+} from "@/lib/limits";
 
 export type ComposerFile = {
   id: string;
@@ -43,16 +50,17 @@ export function fileProblem(
   existing: ComposerFile[],
 ): string | null {
   const images = ["image/png", "image/jpeg", "image/webp"];
-  if (existing.length >= 10) return "A message can contain at most 10 files.";
-  if (file.size > 20 * 1024 * 1024)
-    return `${file.name}: files must be at most 20 MiB.`;
-  if (images.includes(file.type) && file.size > 5 * 1024 * 1024)
-    return `${file.name}: images must be at most 5 MiB.`;
+  if (existing.length >= MAX_FILES)
+    return `A message can contain at most ${MAX_FILES} files.`;
+  if (file.size > MAX_FILE_BYTES)
+    return `${file.name}: files must be at most ${mib(MAX_FILE_BYTES)} MiB.`;
+  if (images.includes(file.type) && file.size > MAX_IMAGE_BYTES)
+    return `${file.name}: images must be at most ${mib(MAX_IMAGE_BYTES)} MiB.`;
   if (
     existing.reduce((sum, item) => sum + item.file.size, file.size) >
-    50 * 1024 * 1024
+    MAX_MESSAGE_BYTES
   )
-    return "Message files must total at most 50 MiB.";
+    return `Message files must total at most ${mib(MAX_MESSAGE_BYTES)} MiB.`;
   if (
     !file.name.trim() ||
     file.name.length > 255 ||

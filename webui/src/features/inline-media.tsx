@@ -16,10 +16,11 @@ import { libraryPathFromHref } from "@/features/library/path";
 import { libraryEntry } from "@/features/library/preview";
 import { backend } from "@/lib/backend";
 import { documentName, formatBytes } from "@/lib/format";
+import { MAX_FILE_BYTES } from "@/lib/limits";
 
 const SYNTAX = /!\[([^\]\n]*)\]\(\s*([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g;
 export const VIDEO_LIMIT = 2;
-const VIDEO_BYTES_LIMIT = 20 * 1024 * 1024;
+const VIDEO_BYTES_LIMIT = MAX_FILE_BYTES;
 const VIDEO_CACHE_LIMIT = 2;
 const IMAGE_SIZE_LIMIT = 512;
 const IMAGE_LIST_LIMIT = 9;

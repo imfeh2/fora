@@ -33,7 +33,7 @@ from fora.adapters.websocket.address import (
 )
 from fora.adapters.websocket.local_names import REFRESH_INTERVAL, collect_names
 from fora.adapters.websocket.origin_error import origin_error_page
-from fora.core.attachment import Upload
+from fora.core.attachment import MAX_FILE_BYTES, Upload
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.usage import usage_session
@@ -322,7 +322,12 @@ CONTENT_TYPES = {
     ".woff2": "font/woff2",
 }
 
-LIBRARY_MAX_BYTES = 20 * 1024 * 1024
+LIBRARY_MAX_BYTES = MAX_FILE_BYTES
+
+# The request body is the file itself, so the transport limit sits one step above
+# the attachment limit: a file one byte over must reach the domain check and get
+# its "Files must be at most …" message instead of a bare 413 from the server.
+CLIENT_MAX_BYTES = MAX_FILE_BYTES + 16 * 1024 * 1024
 
 SPA_PREFIXES = ("/discussions", "/members", "/usage", "/library", "/settings")
 
@@ -458,7 +463,7 @@ class WebServer:
             )
             resources.callback(self._executor.shutdown, wait=True, cancel_futures=True)
             self._app = web.Application(
-                middlewares=[self._boundary], client_max_size=20 * 1024 * 1024
+                middlewares=[self._boundary], client_max_size=CLIENT_MAX_BYTES
             )
             self._thread = threading.Thread(target=self._run, name="fora-web")
             self._names: frozenset[str] = frozenset()
