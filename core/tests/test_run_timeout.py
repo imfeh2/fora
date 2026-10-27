@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,9 @@ def test_rejects_a_timeout_past_the_maximum(tmp_path: Path, timeout: int) -> Non
 def test_accepts_the_maximum_timeout(tmp_path: Path) -> None:
     execution = LocalExecution([str(tmp_path)])
     try:
-        result = execution.run(["true"], cwd=str(tmp_path), timeout=MAX_TIMEOUT)
+        result = execution.run(
+            [sys.executable, "-c", "pass"], cwd=str(tmp_path), timeout=MAX_TIMEOUT
+        )
     finally:
         execution.close()
 
@@ -49,7 +52,10 @@ def test_falls_back_to_the_default_timeout(
     execution = LocalExecution([str(tmp_path)])
     try:
         with pytest.raises(DomainError) as raised:
-            execution.run(["sleep", "5"], cwd=str(tmp_path))
+            execution.run(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                cwd=str(tmp_path),
+            )
     finally:
         execution.close()
 
