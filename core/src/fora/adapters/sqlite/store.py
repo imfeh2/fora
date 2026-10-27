@@ -34,9 +34,6 @@ from fora.ports.store import (
     UnreadCounts,
 )
 
-# Upload reservations are counted before any bytes arrive, so the pool has to hold a
-# whole message: one owner may reserve MAX_MESSAGE_BYTES at once, the shared pool keeps
-# room for a few messages in flight, and the count cap is a few messages' worth of files.
 UPLOAD_OWNER_BYTES = MAX_MESSAGE_BYTES
 UPLOAD_TOTAL_BYTES = 3 * MAX_MESSAGE_BYTES
 UPLOAD_COUNT = 4 * MAX_FILES

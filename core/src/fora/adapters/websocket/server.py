@@ -324,9 +324,6 @@ CONTENT_TYPES = {
 
 LIBRARY_MAX_BYTES = MAX_FILE_BYTES
 
-# The request body is the file itself, so the transport limit sits one step above
-# the attachment limit: a file one byte over must reach the domain check and get
-# its "Files must be at most …" message instead of a bare 413 from the server.
 CLIENT_MAX_BYTES = MAX_FILE_BYTES + 16 * 1024 * 1024
 
 SPA_PREFIXES = ("/discussions", "/members", "/usage", "/library", "/settings")
