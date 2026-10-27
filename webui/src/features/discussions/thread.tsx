@@ -252,6 +252,11 @@ function ThreadSession({
     paddingEnd: composerSize + keyboardOffset + 24,
     scrollEndThreshold: 40,
     useAnimationFrameWithResizeObserver: true,
+    measureElement: (element, entry) =>
+      Math.round(
+        entry?.borderBoxSize?.[0]?.blockSize ??
+          element.getBoundingClientRect().height,
+      ),
   });
   const resizeComposer = useCallback(
     (height: number) => {
@@ -355,6 +360,10 @@ function ThreadSession({
   }, [virtual]);
 
   const endPositioning = useCallback(() => {
+    for (const element of listRef.current?.querySelectorAll<HTMLElement>(
+      "li[data-index]",
+    ) ?? [])
+      virtual.measureElement(element);
     cancelAnimationFrame(frame.current);
     cancelAnimationFrame(monitorFrame.current);
     positioning.current = false;
@@ -860,7 +869,10 @@ function ThreadSession({
                 ref={listRef}
                 className="relative transition-none"
                 hidden={units.length === 0}
-                style={{ height: virtual.getTotalSize() }}
+                style={{
+                  height: virtual.getTotalSize(),
+                  paddingTop: items[0]?.start ?? 0,
+                }}
               >
                 {items.map((item) => {
                   const unit = units[item.index];
@@ -876,11 +888,8 @@ function ThreadSession({
                       key={item.key}
                       ref={virtual.measureElement}
                       data-index={item.index}
-                      className="absolute top-0 left-0 w-full"
-                      style={{
-                        transform: `translateY(${item.start}px)`,
-                        paddingTop: compact ? 4 : 16,
-                      }}
+                      className="flow-root w-full"
+                      style={{ paddingTop: compact ? 4 : 16 }}
                     >
                       {divider ? (
                         <div

@@ -10,7 +10,8 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "tsc --noEmit",
-    "test": "vitest run --maxWorkers=4"
+    "test": "vitest run --maxWorkers=4",
+    "test:browser": "pnpm build && playwright test"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
@@ -47,6 +48,7 @@
     "yet-another-react-lightbox": "3.32.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

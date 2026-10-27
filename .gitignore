@@ -10,6 +10,7 @@ dist
 dist-debug
 dist-ssr
 node_modules
+test-results
 
 *.py[cod]
 __pycache__/
