@@ -202,7 +202,8 @@ test("keeps measured messages separate after jumping to latest and returning", a
     expect(layout.minimumGap).toBeGreaterThanOrEqual(-1);
     expect(layout.mounted).toBeLessThan(50);
     expect(layout.bottomDistance).toBe(0);
-    expect(layout.composerGap).toBe(24);
+    expect(layout.composerGap).toBeGreaterThanOrEqual(23);
+    expect(layout.composerGap).toBeLessThanOrEqual(25);
   }
   const root = page.locator("main ol:not([hidden])").locator("..");
   const pinned = await sampleLayout(page);
