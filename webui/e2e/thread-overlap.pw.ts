@@ -167,7 +167,11 @@ async function sampleLayout(page: Page) {
         ? [row.top - previous.bottom]
         : [];
     });
+    const composer = document.querySelector('[aria-label="Message composer"]');
+    if (!composer) throw new Error("Message composer is missing");
     return {
+      composerGap:
+        composer.getBoundingClientRect().top - rows[rows.length - 1].bottom,
       top: root.scrollTop,
       bottomDistance: root.scrollHeight - root.clientHeight - root.scrollTop,
       minimumGap: Math.min(...gaps),
@@ -198,6 +202,7 @@ test("keeps measured messages separate after jumping to latest and returning", a
     expect(layout.minimumGap).toBeGreaterThanOrEqual(-1);
     expect(layout.mounted).toBeLessThan(50);
     expect(layout.bottomDistance).toBe(0);
+    expect(layout.composerGap).toBe(24);
   }
   const root = page.locator("main ol:not([hidden])").locator("..");
   const pinned = await sampleLayout(page);

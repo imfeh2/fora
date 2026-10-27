@@ -252,11 +252,6 @@ function ThreadSession({
     paddingEnd: composerSize + keyboardOffset + 24,
     scrollEndThreshold: 40,
     useAnimationFrameWithResizeObserver: true,
-    measureElement: (element, entry) =>
-      Math.round(
-        entry?.borderBoxSize?.[0]?.blockSize ??
-          element.getBoundingClientRect().height,
-      ),
   });
   const resizeComposer = useCallback(
     (height: number) => {
