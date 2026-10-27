@@ -184,6 +184,12 @@ describe("folder tree levels", () => {
     const rows = [...document.querySelectorAll<HTMLElement>('[role="row"]')];
     expect(rows.map((row) => row.dataset.key)).toEqual(["media", "README.md"]);
     expect(rows[0].textContent).toBe("media");
+
+    const tree = document.querySelector<HTMLElement>('[role="treegrid"]');
+    if (!tree) throw new Error("no tree");
+    const frame = tree.parentElement;
+    if (!frame) throw new Error("no tree frame");
+    expect(frame.textContent).not.toContain("Library");
   });
 
   it("indents a child one step deeper than the first level", () => {
