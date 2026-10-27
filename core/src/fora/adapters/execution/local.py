@@ -17,6 +17,7 @@ from fora.ports.execution import EditResult, RunResult
 
 MAX_OUTPUT = 200_000
 DEFAULT_TIMEOUT = 120
+MAX_TIMEOUT = 600
 _READ_FILE_CODES = frozenset(
     {
         "not_found",
@@ -174,6 +175,12 @@ class LocalExecution:
         if timeout is not None and (type(timeout) is not int or timeout <= 0):
             raise DomainError(
                 ErrorCode.INVALID_TIMEOUT, "timeout must be a positive integer"
+            )
+        if timeout is not None and timeout > MAX_TIMEOUT:
+            raise DomainError(
+                ErrorCode.INVALID_TIMEOUT,
+                f"timeout is measured in seconds: the default is {DEFAULT_TIMEOUT} "
+                f"and the maximum is {MAX_TIMEOUT}. Pass {MAX_TIMEOUT} or less.",
             )
         directory = self._resolve_cwd(cwd)
         try:

@@ -22,7 +22,14 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from functools import wraps
 from traceback import walk_tb
-from typing import Any, Literal, NotRequired, TypedDict, cast, get_type_hints
+from typing import (
+    Any,
+    Literal,
+    NotRequired,
+    TypedDict,
+    cast,
+    get_type_hints,
+)
 
 import pydantic_ai
 from pydantic import StrictInt, TypeAdapter
@@ -96,6 +103,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
 
+from fora.adapters.execution.local import DEFAULT_TIMEOUT, MAX_TIMEOUT
 from fora.adapters.model.config import (
     AgentModelConfig,
     ModelCatalog,
@@ -315,6 +323,19 @@ def _web_search_tool() -> Any:
         description=tool.description,
         takes_ctx=tool.takes_ctx,
     )
+
+
+def _bound_timeout(_ctx: RunContext[Any], tool_def: ToolDefinition) -> ToolDefinition:
+    properties = tool_def.parameters_json_schema.get("properties")
+    timeout = properties.get("timeout") if isinstance(properties, dict) else None
+    if isinstance(timeout, dict):
+        branches = timeout.get("anyOf")
+        targets = branches if isinstance(branches, list) else [timeout]
+        for branch in targets:
+            if isinstance(branch, dict) and branch.get("type") == "integer":
+                branch["minimum"] = 1
+                branch["maximum"] = MAX_TIMEOUT
+    return tool_def
 
 
 _EXECUTION_ERRORS = {
@@ -1263,7 +1284,16 @@ class PydanticModelRunner:
             result = _guard(lambda: ctx.deps.view_image(path))
             return image_result(result)
 
-        @tool(sequential=True)
+        @tool(
+            sequential=True,
+            prepare=_bound_timeout,
+            description=(
+                "Run one command in the execution environment. "
+                f"timeout is measured in seconds: the default is {DEFAULT_TIMEOUT} "
+                f"and the maximum is {MAX_TIMEOUT}. "
+                "A larger timeout is rejected rather than shortened."
+            ),
+        )
         def run(
             ctx: RunContext[AgentTools],
             argv: list[str],
