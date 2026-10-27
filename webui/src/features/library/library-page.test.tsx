@@ -177,6 +177,25 @@ describe("folder tree clicks", () => {
   });
 });
 
+describe("folder tree levels", () => {
+  it("starts the tree at the top-level folders, without a library root row", () => {
+    render(<Harness open="" />);
+
+    const rows = [...document.querySelectorAll<HTMLElement>('[role="row"]')];
+    expect(rows.map((row) => row.dataset.key)).toEqual(["media", "README.md"]);
+    expect(rows[0].textContent).toBe("media");
+  });
+
+  it("indents a child one step deeper than the first level", () => {
+    render(<Harness open="" />);
+
+    fireEvent.click(iconIn(rowFor("media")), { detail: 1 });
+
+    expect(rowFor("media").style.paddingLeft).toBe("0px");
+    expect(rowFor("media/demo.mp4").style.paddingLeft).toBe("14px");
+  });
+});
+
 describe("creationDestination", () => {
   it("puts a new entry under the picked folder", () => {
     expect(

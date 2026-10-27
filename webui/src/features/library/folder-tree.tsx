@@ -177,7 +177,7 @@ export function FolderTree({
             isFocusVisible && "outline-1 -outline-offset-1 outline-line-hover",
           )
         }
-        style={({ level }) => ({ paddingLeft: level * 14 })}
+        style={({ level }) => ({ paddingLeft: (level - 1) * 14 })}
       >
         <TreeItemContent>
           {({ isExpanded, hasChildItems }) => (
@@ -240,10 +240,6 @@ export function FolderTree({
 
   return (
     <div ref={container} className="flex flex-col gap-px">
-      <div className="flex h-[34px] items-center gap-2 pl-6 pr-2 text-sm text-fg-muted">
-        <Folder size={16} className="flex-none" />
-        <span className="min-w-0 truncate">Library</span>
-      </div>
       <Tree
         aria-label="Library"
         className="flex flex-col gap-px"
