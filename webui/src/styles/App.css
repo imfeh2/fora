@@ -600,8 +600,8 @@
   background: var(--color-fg-muted);
 }
 
-.library-resize {
-  left: calc(var(--library-width) - 1px);
+.column-resize {
+  left: calc(var(--column-width) - 1px);
 }
 
 body.sidebar-resizing {

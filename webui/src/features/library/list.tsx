@@ -299,7 +299,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
     <Page>
       <div
         className="relative flex flex-1 min-h-0 min-w-0"
-        style={{ "--library-width": `${column.width}px` } as CSSProperties}
+        style={{ "--column-width": `${column.width}px` } as CSSProperties}
       >
         <aside
           style={{ width: column.width }}
@@ -335,10 +335,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               ]}
             />
           </div>
-          <div
-            id="library-tree"
-            className="flex-1 min-h-0 overflow-y-auto px-2 pb-6"
-          >
+          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-6">
             {needle && (shown ?? []).length === 0 ? (
               <p className="px-2 py-2 text-sm text-fg-muted">
                 No documents match
@@ -355,7 +352,7 @@ export function LibraryPage({ path = "" }: { path?: string }) {
           max={480}
           width={column.width}
           resizing={column.resizing}
-          className="sidebar-resize library-resize max-[900px]:hidden"
+          className="sidebar-resize column-resize max-[900px]:hidden"
           onPointerDown={column.startResize}
           onKeyDown={column.resizeWithKeys}
           onDoubleClick={column.reset}

@@ -8,6 +8,7 @@ import {
   Settings,
 } from "lucide-react";
 import {
+  type CSSProperties,
   type FormEventHandler,
   type ReactNode,
   useCallback,
@@ -17,6 +18,10 @@ import {
   useState,
 } from "react";
 import { useRouter } from "@/app/router";
+import {
+  ColumnResizeHandle,
+  useColumnWidth,
+} from "@/components/layout/column-resize";
 import { LoadError } from "@/components/ui/access-error";
 import { Choices } from "@/components/ui/choices";
 import { Combobox } from "@/components/ui/combobox";
@@ -325,6 +330,12 @@ export function ModelPanel({
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [editProvider, setEditProvider] = useState(false);
+  const column = useColumnWidth({
+    storageKey: "fora.providers-width",
+    initial: 248,
+    min: 200,
+    max: 480,
+  });
   const [deleteProvider, setDeleteProvider] = useState<ProviderConfig | null>(
     null,
   );
@@ -908,10 +919,16 @@ export function ModelPanel({
                   />
                 </div>
               ) : (
-                <div className="flex min-h-0 min-w-0 flex-1">
+                <div
+                  className="relative flex min-h-0 min-w-0 flex-1"
+                  style={
+                    { "--column-width": `${column.width}px` } as CSSProperties
+                  }
+                >
                   <div
+                    id="provider-list"
                     data-provider-list
-                    className={`min-w-0 flex-col gap-3 border-line p-3 md:w-[280px] md:shrink-0 md:border-r ${open ? "hidden md:flex" : "flex w-full"}`}
+                    className={`min-w-0 flex-col gap-3 border-line p-3 border-r md:w-[var(--column-width)] md:shrink-0 ${open ? "hidden md:flex" : "flex w-full"}`}
                   >
                     <div className="shrink-0">
                       <SearchField
@@ -1032,6 +1049,18 @@ export function ModelPanel({
                       Add
                     </Button>
                   </div>
+                  <ColumnResizeHandle
+                    label="Resize provider list"
+                    controls="provider-list"
+                    min={200}
+                    max={480}
+                    width={column.width}
+                    resizing={column.resizing}
+                    className="sidebar-resize column-resize max-[900px]:hidden"
+                    onPointerDown={column.startResize}
+                    onKeyDown={column.resizeWithKeys}
+                    onDoubleClick={column.reset}
+                  />
                   <div
                     className={`min-w-0 flex-1 p-6 ${open ? "block" : "hidden md:block"}`}
                   >
