@@ -24,10 +24,15 @@ function Panel({ section }: { section: SettingsSection }) {
 }
 
 function SettingsPageContent({ section }: { section: SettingsSection }) {
+  const split = section === "providers";
   return (
     <Page>
-      <PageBody>
-        <div className="settings-layout pt-6 narrow:pt-3">
+      <PageBody variant={split ? "flush" : "scroll"}>
+        <div
+          className={
+            split ? "settings-layout" : "settings-layout pt-6 narrow:pt-3"
+          }
+        >
           <Panel section={section} />
         </div>
       </PageBody>

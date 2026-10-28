@@ -926,9 +926,8 @@ export function ModelPanel({
                   }
                 >
                   <div
-                    id="provider-list"
                     data-provider-list
-                    className={`min-w-0 flex-col gap-3 border-line p-3 border-r md:w-[var(--column-width)] md:shrink-0 ${open ? "hidden md:flex" : "flex w-full"}`}
+                    className={`min-w-0 flex-col gap-3 border-line px-2 pt-2 pb-3 border-r md:w-[var(--column-width)] md:shrink-0 ${open ? "hidden md:flex" : "flex w-full"}`}
                   >
                     <div className="shrink-0">
                       <SearchField
@@ -1074,7 +1073,9 @@ export function ModelPanel({
                         {content}
                       </>
                     ) : (
-                      <EmptyState title="Select a provider" />
+                      <div className="flex h-full items-center justify-center">
+                        <EmptyState title="Select a provider" />
+                      </div>
                     )}
                   </div>
                 </div>
