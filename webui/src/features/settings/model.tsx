@@ -949,9 +949,11 @@ export function ModelPanel({
                               : "Disabled providers"
                           }
                         >
-                          <h3 className="py-2 text-xs text-fg-muted">
-                            {group.enabled ? "Enabled" : "Disabled"}
-                          </h3>
+                          {group.enabled ? null : (
+                            <h3 className="py-2 text-xs text-fg-muted">
+                              Disabled
+                            </h3>
+                          )}
                           {group.items.map((item) => {
                             const modelCount = catalog.models.filter(
                               (model) => model.provider_id === item.id,
