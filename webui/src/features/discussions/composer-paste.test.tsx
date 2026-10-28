@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "@/features/discussions/composer";
+import { MIB } from "@/lib/limits";
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -102,11 +103,20 @@ describe("composer paste", () => {
     expect(notCancelled).toBe(false);
   });
 
-  it("leaves a pasted file over 20 MiB out of the attachments", () => {
+  it("puts a pasted file over 20 MiB into the attachments", () => {
     render(scene());
-    const huge = new File([new Uint8Array(21 * 1024 * 1024)], "huge.pdf", {
-      type: "application/pdf",
-    });
+    const clip = new File(["report"], "clip.mp4", { type: "video/mp4" });
+    Object.defineProperty(clip, "size", { value: 21 * MIB });
+
+    fireEvent.paste(screen.getByRole("combobox"), clipboard([clip]));
+
+    expect(pasted("clip.mp4")).toBe(true);
+  });
+
+  it("leaves a pasted file over 200 MiB out of the attachments", () => {
+    render(scene());
+    const huge = new File(["report"], "huge.pdf", { type: "application/pdf" });
+    Object.defineProperty(huge, "size", { value: 200 * MIB + 1 });
 
     fireEvent.paste(screen.getByRole("combobox"), clipboard([huge]));
 

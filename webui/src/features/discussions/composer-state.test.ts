@@ -3,6 +3,7 @@ import {
   ComposerController,
   pasteFiles,
 } from "@/features/discussions/composer-state";
+import { MAX_FILE_BYTES, MIB, mib } from "@/lib/limits";
 
 function clipboard(files: File[], text = "") {
   return {
@@ -59,18 +60,31 @@ describe("ComposerController.addFiles", () => {
     expect(controller.snapshot().error).toBeNull();
   });
 
-  it("rejects a pasted file over 20 MiB", () => {
+  it("accepts a pasted file over 20 MiB", () => {
     const controller = new ComposerController(1);
-    const huge = new File([new Uint8Array(21 * 1024 * 1024)], "huge.pdf", {
-      type: "application/pdf",
-    });
+    const clip = new File(["report"], "clip.mp4", { type: "video/mp4" });
+    Object.defineProperty(clip, "size", { value: 21 * MIB });
+
+    controller.addFiles(pasteFiles(clipboard([clip])).files);
+
+    expect(
+      controller.snapshot().draft.files.map((item) => item.file.name),
+    ).toEqual(["clip.mp4"]);
+    expect(controller.snapshot().error).toBeNull();
+    expect(mib(MAX_FILE_BYTES)).toBe(200);
+  });
+
+  it("rejects a pasted file over 200 MiB", () => {
+    const controller = new ComposerController(1);
+    const huge = new File(["report"], "huge.pdf", { type: "application/pdf" });
+    Object.defineProperty(huge, "size", { value: 200 * MIB + 1 });
 
     controller.addFiles(pasteFiles(clipboard([huge])).files);
 
     expect(controller.snapshot().draft.files).toEqual([]);
     expect(controller.snapshot().error?.kind).toBe("rejected");
     expect(controller.snapshot().error?.message).toBe(
-      "huge.pdf: files must be at most 20 MiB.",
+      "huge.pdf: files must be at most 200 MiB.",
     );
   });
 });
