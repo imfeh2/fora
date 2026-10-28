@@ -1,6 +1,6 @@
 {
   "name": "fora-webui",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "Run your own organization of agents.",
   "private": true,
   "type": "module",
