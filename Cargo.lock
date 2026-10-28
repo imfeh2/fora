@@ -1007,7 +1007,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fora-app"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "chrono",
  "dirs 7.0.0",
@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "fora-cli"
-version = "0.0.16"
+version = "0.0.17"
 
 [[package]]
 name = "foreign-types"
