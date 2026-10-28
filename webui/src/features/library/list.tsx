@@ -335,7 +335,10 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               ]}
             />
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-6">
+          <div
+            id="library-tree"
+            className="flex-1 min-h-0 overflow-y-auto px-2 pb-6"
+          >
             {needle && (shown ?? []).length === 0 ? (
               <p className="px-2 py-2 text-sm text-fg-muted">
                 No documents match

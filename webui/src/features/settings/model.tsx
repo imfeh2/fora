@@ -926,6 +926,7 @@ export function ModelPanel({
                   }
                 >
                   <div
+                    id="provider-list"
                     data-provider-list
                     className={`min-w-0 flex-col gap-3 border-line px-2 pt-2 pb-3 border-r md:w-[var(--column-width)] md:shrink-0 ${open ? "hidden md:flex" : "flex w-full"}`}
                   >
