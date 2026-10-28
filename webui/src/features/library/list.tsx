@@ -9,9 +9,20 @@ import {
   SquarePen,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useResource } from "@/app/organization";
 import { useNavigate } from "@/app/router";
+import {
+  ColumnResizeHandle,
+  useColumnWidth,
+} from "@/components/layout/column-resize";
 import { Page } from "@/components/layout/shell";
 import { LoadError } from "@/components/ui/access-error";
 import { ConfirmDialog, Modal, PromptDialog } from "@/components/ui/dialog";
@@ -167,6 +178,12 @@ export function LibraryPage({ path = "" }: { path?: string }) {
   const entries = resource.data;
   const failed = resource.error !== null;
   const [query, setQuery] = useState("");
+  const column = useColumnWidth({
+    storageKey: "fora.library-width",
+    initial: 248,
+    min: 200,
+    max: 480,
+  });
   const [expanded, setExpanded] = useState(() => expandedFolders(path));
   const browsing = useRef<Set<string> | null>(null);
   const [treeOpen, setTreeOpen] = useState(
@@ -280,8 +297,14 @@ export function LibraryPage({ path = "" }: { path?: string }) {
 
   return (
     <Page>
-      <div className="flex flex-1 min-h-0 min-w-0">
-        <aside className="flex flex-none flex-col w-[248px] min-h-0 border-r border-line max-[900px]:hidden">
+      <div
+        className="relative flex flex-1 min-h-0 min-w-0"
+        style={{ "--library-width": `${column.width}px` } as CSSProperties}
+      >
+        <aside
+          style={{ width: column.width }}
+          className="flex flex-none flex-col min-h-0 border-r border-line max-[900px]:hidden"
+        >
           <div className="flex flex-none items-center gap-2 p-2">
             <SearchField
               icon={<Search size={15} />}
@@ -312,7 +335,10 @@ export function LibraryPage({ path = "" }: { path?: string }) {
               ]}
             />
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-6">
+          <div
+            id="library-tree"
+            className="flex-1 min-h-0 overflow-y-auto px-2 pb-6"
+          >
             {needle && (shown ?? []).length === 0 ? (
               <p className="px-2 py-2 text-sm text-fg-muted">
                 No documents match
@@ -322,6 +348,18 @@ export function LibraryPage({ path = "" }: { path?: string }) {
             )}
           </div>
         </aside>
+        <ColumnResizeHandle
+          label="Resize library column"
+          controls="library-tree"
+          min={200}
+          max={480}
+          width={column.width}
+          resizing={column.resizing}
+          className="sidebar-resize library-resize max-[900px]:hidden"
+          onPointerDown={column.startResize}
+          onKeyDown={column.resizeWithKeys}
+          onDoubleClick={column.reset}
+        />
         <div className="flex flex-1 min-w-0 min-h-0 flex-col">
           <header className="flex flex-none items-center gap-2 border-b border-line px-6 py-2">
             <span className="hidden max-[900px]:inline-flex">
