@@ -859,11 +859,9 @@ class LiveModel(WrapperModel):
             self._response_version = version
             self._live_observer.response(
                 handle,
-                _encode_json(response.usage),
                 tuple(self._tools.values()),
                 _encode_history([response]),
                 version,
-                _encode_json((response.metadata or {}).get("fora_usage", {})),
                 response.timestamp.isoformat(),
             )
 

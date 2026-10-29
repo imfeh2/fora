@@ -26,7 +26,6 @@ import {
   Button,
   Chip,
   LoadingSkeleton,
-  Meter,
   SearchField,
   Skeleton,
   StateDot,
@@ -38,7 +37,6 @@ import { StatePanel } from "@/components/ui/state-panel";
 import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
 import { backend, type Member } from "@/lib/backend";
-import { formatInteger } from "@/lib/format";
 
 type Filter = "all" | "agents" | "humans";
 
@@ -79,7 +77,7 @@ export function memberActions(
   ];
 }
 
-export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
+export function MembersPage() {
   const { members, refresh, organizationError, connectionError, retry } =
     useOrganization();
   const [query, setQuery] = useState("");
@@ -189,7 +187,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
               <MemberCard
                 key={member.id}
                 member={member}
-                tokenLimit={tokenLimit}
                 onToggle={async () => {
                   await (canResume(member)
                     ? backend.resumeAgent(member.id)
@@ -210,7 +207,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
               <MemberRow
                 key={member.id}
                 member={member}
-                tokenLimit={tokenLimit}
                 onToggle={async () => {
                   await (canResume(member)
                     ? backend.resumeAgent(member.id)
@@ -262,23 +258,16 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
 
 export function MemberCard({
   member,
-  tokenLimit,
   onToggle,
   onRename,
   onDelete,
 }: {
   member: Member;
-  tokenLimit: number | null;
   onToggle: () => void;
   onRename: () => void;
   onDelete: () => void;
 }) {
   const agent = member.type === "agent";
-  const tokens = member.usage_metrics
-    ? member.usage_metrics.total_tokens
-    : member.tokens === undefined
-      ? 0
-      : member.tokens;
 
   return (
     <div className="relative flex flex-col gap-2.5 p-3 border border-line rounded-md bg-surface transition-[background-color] duration-(--duration-fast) hover:bg-surface-hover/50">
@@ -335,35 +324,6 @@ export function MemberCard({
             <span className="text-warning wrap-anywhere">Pause requested</span>
           ) : null}
         </div>
-
-        {agent ? (
-          <div className="flex flex-col items-end gap-1">
-            <span className="tabular-nums text-fg-muted">
-              {formatInteger(tokens)}
-              {tokenLimit !== null && tokenLimit > 0 ? (
-                <span> / {tokenLimit.toLocaleString()}</span>
-              ) : null}
-            </span>
-            {member.usage_index_ready === false ? (
-              <span className="text-xs text-fg-muted">
-                Indexing saved usage
-              </span>
-            ) : null}
-            {member.usage_metrics &&
-            member.usage_metrics.total_known < member.usage_metrics.records ? (
-              <span className="text-xs text-fg-muted">Partial usage</span>
-            ) : null}
-            {tokenLimit !== null && tokenLimit > 0 && tokens !== null ? (
-              <div className="w-20">
-                <Meter
-                  value={Math.min(Number(tokens), tokenLimit)}
-                  max={tokenLimit}
-                  label={`Token spend for ${member.name}`}
-                />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -371,13 +331,11 @@ export function MemberCard({
 
 export function MemberRow({
   member,
-  tokenLimit,
   onToggle,
   onRename,
   onDelete,
 }: {
   member: Member;
-  tokenLimit: number | null;
   onToggle: () => void | Promise<void>;
   onRename: () => void;
   onDelete: () => void;
@@ -401,9 +359,6 @@ export function MemberRow({
       setPending(false);
     }
   };
-  const tokens = member.usage_metrics
-    ? member.usage_metrics.total_tokens
-    : member.tokens;
 
   return (
     <li className="relative flex min-w-0 min-h-12 flex-wrap items-center gap-3 px-4 py-2 hover:bg-surface-hover [@media(max-width:640px)]:grid [@media(max-width:640px)]:grid-cols-[auto_minmax(0,1fr)]">
@@ -437,24 +392,6 @@ export function MemberRow({
           ) : null}
           {agent && member.pause_requested && member.state === "running" ? (
             <span className="text-warning wrap-anywhere">Pause requested</span>
-          ) : null}
-          {agent ? (
-            <span className="text-fg-muted tabular-nums wrap-anywhere">
-              {tokens === undefined
-                ? "Token usage unavailable"
-                : `${formatInteger(tokens)} tokens`}
-              {tokenLimit !== null && tokenLimit > 0
-                ? ` / ${tokenLimit.toLocaleString()}`
-                : ""}
-            </span>
-          ) : null}
-          {agent && member.usage_index_ready === false ? (
-            <span className="text-fg-muted">Indexing saved usage</span>
-          ) : null}
-          {agent &&
-          member.usage_metrics &&
-          member.usage_metrics.total_known < member.usage_metrics.records ? (
-            <span className="text-fg-muted">Partial usage</span>
           ) : null}
         </div>
       </div>

@@ -93,18 +93,6 @@ async function installThread(page: Page) {
           readThrough = Math.max(readThrough, params.message_id);
           result = { read_through: readThrough };
           break;
-        case "usage.advance":
-          result = {
-            version: 1,
-            ready: 1,
-            revision: 0,
-            request_checkpoint: 0,
-            turn_checkpoint: 0,
-            processed_requests: 0,
-            processed_turns: 0,
-            error: null,
-          };
-          break;
         case "settings.get":
           result = {};
           break;

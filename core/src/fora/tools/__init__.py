@@ -20,7 +20,6 @@ from fora.ports.agent import HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
 from fora.ports.files import FileTree
 from fora.ports.store import OrganizationStore, UnreadCounts
-from fora.ports.usage import UsageCache, UsageObservation
 from fora.services.history import History
 from fora.services.library import Library
 from fora.services.uploads import Uploads
@@ -103,42 +102,6 @@ class AgentTools:
                 ErrorCode.NOT_A_MEMBER,
                 f"You do not belong to Discussion {discussion_id}",
             )
-
-    def _authorize_usage(self) -> None:
-        if self._actor.is_agent:
-            raise DomainError(
-                ErrorCode.NOT_PERMITTED, "Agent history is restricted to Humans"
-            )
-        for member in self._deps.store.list_members(include_deleted=True):
-            if member.is_agent:
-                self.authorize_agent_history(member.id, include_deleted=True)
-
-    def usage_query(
-        self,
-        params: dict[str, Any],
-        observation: UsageObservation | None = None,
-        cache: UsageCache | None = None,
-    ) -> dict[str, Any]:
-        self._authorize_usage()
-        if observation is not None:
-            return self._deps.history.usage_observe(params, observation, cache)
-        return self._deps.history.usage_query(params)
-
-    def usage_advance(
-        self, limit: int = 100, *, initialization_version: int | None = None
-    ) -> dict[str, Any]:
-        self._authorize_usage()
-        return self._deps.history.usage_advance(
-            limit, initialization_version=initialization_version
-        )
-
-    def usage_read(
-        self, record_id: str, observation: UsageObservation | None = None
-    ) -> dict[str, Any]:
-        with self._deps.reading():
-            record = self._deps.history.usage_read(record_id, observation)
-            self.authorize_agent_history(record["agent_id"], include_deleted=True)
-            return record
 
     def authorize_agent_history(
         self, agent_id: int, *, include_deleted: bool = False

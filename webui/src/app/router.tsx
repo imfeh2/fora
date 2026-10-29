@@ -21,22 +21,15 @@ export type Route =
   | { name: "discussions" }
   | { name: "discussion"; id: number }
   | { name: "members" }
-  | { name: "usage" }
   | { name: "library"; path?: string }
   | { name: "settings"; section: SettingsSection };
 
-export type NavId =
-  | "discussions"
-  | "members"
-  | "usage"
-  | "library"
-  | "settings";
+export type NavId = "discussions" | "members" | "library" | "settings";
 
 const NAV_OF: Record<Route["name"], NavId> = {
   discussions: "discussions",
   discussion: "discussions",
   members: "members",
-  usage: "usage",
   library: "library",
   settings: "settings",
 };
@@ -91,8 +84,6 @@ export function routePath(route: Route): string {
       return `/discussions/${route.id}`;
     case "members":
       return "/members";
-    case "usage":
-      return "/usage";
     case "library":
       return route.path ? documentPath(route.path) : "/library";
     case "settings":
@@ -125,7 +116,6 @@ export function routeFromPath(pathname: string): Route | null {
     return null;
   }
   if (head === "members" && segments.length === 1) return { name: "members" };
-  if (head === "usage" && segments.length === 1) return { name: "usage" };
   if (head === "library") {
     if (segments.length === 1) return { name: "library" };
     return { name: "library", path: segments.slice(1).join("/") };

@@ -1,11 +1,4 @@
-import {
-  BookText,
-  ChartNoAxesCombined,
-  MessagesSquare,
-  Plus,
-  Settings,
-  Users,
-} from "lucide-react";
+import { BookText, MessagesSquare, Plus, Settings, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { OrganizationProvider, useResource } from "@/app/organization";
 import {
@@ -55,7 +48,6 @@ import {
   SettingsSaveProvider,
   useSettingsSaving,
 } from "@/features/settings/saver";
-import { UsagePage } from "@/features/usage";
 import { BackendError, backend } from "@/lib/backend";
 import "@/styles/App.css";
 
@@ -63,15 +55,11 @@ type ApplicationResource = "organization" | "discussions";
 
 function View({
   route,
-  tokenLimit,
-  usageEntrySignal,
   focusDiscussionId,
   onComposerFocused,
   onDiscussionCreated,
 }: {
   route: Route;
-  tokenLimit: number | null;
-  usageEntrySignal: number;
   focusDiscussionId: number | null;
   onComposerFocused: () => void;
   onDiscussionCreated: (id: number) => void;
@@ -88,9 +76,7 @@ function View({
         />
       );
     case "members":
-      return <MembersPage tokenLimit={tokenLimit} />;
-    case "usage":
-      return <UsagePage entrySignal={usageEntrySignal} />;
+      return <MembersPage />;
     case "library":
       return <LibraryPage path={route.path} />;
     case "settings":
@@ -99,7 +85,6 @@ function View({
 }
 
 const CONNECTION_TOAST = "connection";
-const REGION_READ_OPERATIONS = new Set(["usage.query", "usage.read"]);
 const COMPOSER_OPERATIONS = new Set([
   "discussion.send",
   "upload.create",
@@ -155,7 +140,6 @@ function Chrome({
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [usageEntrySignal, setUsageEntrySignal] = useState(0);
   const [focusDiscussionId, setFocusDiscussionId] = useState<number | null>(
     null,
   );
@@ -206,7 +190,6 @@ function Chrome({
   const selectRoute = (next: Route) => {
     if (!settingsSaving)
       closeThen(() => {
-        if (next.name === "usage") setUsageEntrySignal((value) => value + 1);
         navigate(next);
       });
   };
@@ -329,12 +312,6 @@ function Chrome({
                 onSelect={() => selectRoute({ name: "members" })}
               />
               <NavItem
-                icon={<ChartNoAxesCombined size={16} />}
-                label="Usage"
-                active={active === "usage"}
-                onSelect={() => selectRoute({ name: "usage" })}
-              />
-              <NavItem
                 icon={<BookText size={16} />}
                 label="Library"
                 active={active === "library"}
@@ -365,8 +342,6 @@ function Chrome({
         >
           <View
             route={route}
-            tokenLimit={organization.data?.token_limit ?? null}
-            usageEntrySignal={usageEntrySignal}
             focusDiscussionId={focusDiscussionId}
             onComposerFocused={onComposerFocused}
             onDiscussionCreated={onDiscussionCreated}
@@ -406,7 +381,6 @@ export function useApplication() {
   } = useResource(discussionsRead);
   const [failure, setFailure] = useState<BackendError | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
-  const [indexError, setIndexError] = useState<BackendError | null>(null);
   const booted = useRef(false);
   const live = useRef(false);
   const generation = useRef(0);
@@ -504,7 +478,6 @@ export function useApplication() {
   const retryResource = useCallback(
     (resource: ApplicationResource) => {
       if (backend.disconnected) return retry();
-      if (resource === "organization") setIndexError(null);
       return refreshResource(resource);
     },
     [refreshResource, retry],
@@ -534,10 +507,8 @@ export function useApplication() {
       if (
         error.code === "timeout" &&
         error.operation !== null &&
-        (REGION_READ_OPERATIONS.has(error.operation) ||
-          error.operation === "organization.get" ||
-          error.operation === "discussion.list" ||
-          error.operation === "usage.advance")
+        (error.operation === "organization.get" ||
+          error.operation === "discussion.list")
       )
         return;
       if (
@@ -579,7 +550,6 @@ export function useApplication() {
         dismissToast(CONNECTION_TOAST);
         setReconnecting(false);
         setFailure(null);
-        setIndexError(null);
         invalidateOrganization(true);
         invalidateDiscussions(true);
         void refresh();
@@ -591,8 +561,6 @@ export function useApplication() {
         event.type === "organization.changed" ||
         event.type === "settings.updated" ||
         event.type.startsWith("member.") ||
-        event.type === "usage.updated" ||
-        event.type === "usage.index_updated" ||
         event.type === "turn.started" ||
         event.type === "turn.finished"
       )
@@ -650,44 +618,8 @@ export function useApplication() {
     };
   }, [refresh, refreshResource, invalidateOrganization, invalidateDiscussions]);
 
-  useEffect(() => {
-    if (
-      !organization.data?.usage_version ||
-      organization.data.usage_version.index.ready ||
-      organization.error ||
-      indexError ||
-      backend.disconnected
-    )
-      return;
-    let active = true;
-    const epoch = generation.current;
-    void backend.usageAdvance().then(
-      () => {
-        if (active && live.current && epoch === generation.current)
-          void refreshResource("organization", true);
-      },
-      (error: unknown) => {
-        if (active && live.current && epoch === generation.current)
-          setIndexError(
-            error instanceof BackendError
-              ? error
-              : new BackendError(
-                  "request_failed",
-                  error instanceof Error ? error.message : String(error),
-                ),
-          );
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [organization.data, organization.error, indexError, refreshResource]);
-
   return {
-    organization:
-      indexError && organization.status === "ready"
-        ? { ...organization, error: organization.error ?? indexError }
-        : organization,
+    organization,
     discussions,
     failure,
     reconnecting,

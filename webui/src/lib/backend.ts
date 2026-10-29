@@ -1,137 +1,3 @@
-export type UsageFilters = {
-  contributions_only?: boolean;
-  agent_id?: number | null;
-  model_key?: string | null;
-  coverage?: string | null;
-  start_at?: string | null;
-  end_at?: string | null;
-};
-
-export type UsageMetrics = {
-  records: number;
-  input_tokens: string | null;
-  output_tokens: string | null;
-  total_tokens: string | null;
-  requests: string | null;
-  input_known: number;
-  output_known: number;
-  total_known: number;
-  requests_known: number;
-  cache_read_tokens: string | null;
-  cache_write_tokens: string | null;
-  cache_read_known: number;
-  cache_write_known: number;
-  estimated_cost: string | null;
-  cost_known: number;
-  last_active: string | null;
-  model_count: number;
-};
-
-export type UsageVersion = {
-  runtime_epoch?: string | null;
-  live_versions?: [number, number, number][];
-};
-
-export type UsageRecord = {
-  record_id: string;
-  source_kind: "request" | "turn_summary";
-  agent_id: number;
-  agent_name: string;
-  agent_name_source: string;
-  agent_deleted: boolean;
-  sequence: number;
-  ordinal: number | null;
-  request_id: string | null;
-  started_at: string;
-  completed_at: string | null;
-  status: string;
-  coverage: string;
-  model_key: string;
-  model: Record<string, string | number | null>;
-  model_identity_source: string;
-  field_source: string;
-  input_tokens: string | null;
-  output_tokens: string | null;
-  total_tokens: string | null;
-  requests: string | null;
-  cost: string | null;
-  cost_source: string;
-  currency: string;
-  partial_history: boolean;
-  saved?: boolean;
-  observation_source?: "runtime" | "persisted";
-};
-
-export type UsageQuery = UsageFilters &
-  UsageVersion & {
-    limit?: number;
-    cursor?: string | null;
-    dataset_revision?: number;
-    initialization_version?: number;
-    anchor?: string;
-  };
-
-export type UsageIndexState = {
-  version: number;
-  ready: number;
-  revision: number;
-  request_checkpoint: number;
-  turn_checkpoint: number;
-  processed_requests: number;
-  processed_turns: number;
-  error: string | null;
-};
-
-export type UsageInitialization = {
-  status: "initializing";
-  filters: UsageFilters;
-  index: UsageIndexState;
-};
-
-export type UsageQueryResult = UsageInitialization | UsageResult;
-
-export type UsageResult = UsageVersion & {
-  status: "ready";
-  filters: UsageFilters;
-  dataset_revision: number;
-  index: UsageIndexState;
-  summary: UsageMetrics;
-  daily: (Pick<
-    UsageMetrics,
-    | "records"
-    | "input_tokens"
-    | "output_tokens"
-    | "total_tokens"
-    | "requests"
-    | "input_known"
-    | "output_known"
-    | "total_known"
-    | "requests_known"
-  > & { date: string })[];
-  coverage: Record<string, number>;
-  groups: {
-    agent_id: (UsageMetrics & { agent_id: number })[];
-    model_key: (UsageMetrics & { model_key: string })[];
-  };
-  records: UsageRecord[];
-  has_more: boolean;
-  next_cursor: string | null;
-  previous_cursor: string | null;
-  agents: { id: number; name: string; deleted: number }[];
-  models: { key: string; model: UsageRecord["model"] }[];
-};
-
-export type UsageDetail = UsageRecord &
-  UsageVersion & {
-    dataset_revision: number;
-    usage_json: string;
-    turn_summary: Record<string, unknown> | null;
-    turn_summary_json: string | null;
-    summary_mismatch: boolean;
-    traceable_requests: number;
-    provider_field_presence: string;
-  };
-
 export type Thinking =
   | "default"
   | "none"
@@ -189,9 +55,6 @@ export type Member = AgentStatus & {
   id: number;
   type: "human" | "agent";
   name: string;
-  tokens?: number | null;
-  usage_metrics?: UsageMetrics | null;
-  usage_index_ready?: boolean;
 };
 
 export type DiscussionSummary = {
@@ -377,14 +240,6 @@ export type HistoryValue =
   | HistoryValue[]
   | { [key: string]: HistoryValue };
 
-export type Usage = {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  requests: number;
-  total_tokens: number;
-};
-
 export type FoundMessage = {
   discussion_id: number;
   id: number;
@@ -456,8 +311,6 @@ const READ_METHODS = new Set([
   "discussion.list",
   "discussion.page",
   "discussion.search",
-  "usage.query",
-  "usage.read",
   "library.list",
   "library.read",
   "workspace.list",
@@ -636,14 +489,6 @@ export class Backend {
   #closed: BackendError | null = null;
   #rejectConnection: ((error: BackendError) => void) | null = null;
   #failures = new Set<(error: BackendError) => void>();
-  #usageIndex: { generation: number; value: UsageIndexState } | null = null;
-  #usageAdvancing = new Map<
-    number | undefined,
-    {
-      generation: number;
-      operation: Promise<UsageIndexState>;
-    }
-  >();
 
   constructor(
     locate: () => Connection = pageConnection,
@@ -948,11 +793,6 @@ export class Backend {
       uuid: string;
       members: Member[];
       human_id: number;
-      token_limit: number | null;
-      usage_version?: UsageVersion & {
-        dataset_revision: number;
-        index: UsageIndexState;
-      };
     }>("organization.get");
   }
 
@@ -1220,45 +1060,6 @@ export class Backend {
 
   searchMessages(query: string) {
     return this.call<FoundMessage[]>("discussion.search", { query });
-  }
-
-  usageAdvance(initialization_version?: number): Promise<UsageIndexState> {
-    const generation = this.#generation;
-    if (
-      this.#usageIndex?.generation === generation &&
-      this.#usageIndex.value.ready &&
-      (initialization_version === undefined ||
-        this.#usageIndex.value.version === initialization_version)
-    )
-      return Promise.resolve(this.#usageIndex.value);
-    const advancing = this.#usageAdvancing.get(initialization_version);
-    if (advancing?.generation === generation) return advancing.operation;
-    const operation = this.call<UsageIndexState>(
-      "usage.advance",
-      initialization_version === undefined ? {} : { initialization_version },
-    )
-      .then((value) => {
-        if (generation === this.#generation)
-          this.#usageIndex = { generation, value };
-        return value;
-      })
-      .finally(() => {
-        if (
-          this.#usageAdvancing.get(initialization_version)?.operation ===
-          operation
-        )
-          this.#usageAdvancing.delete(initialization_version);
-      });
-    this.#usageAdvancing.set(initialization_version, { generation, operation });
-    return operation;
-  }
-
-  usageQuery(params: UsageQuery) {
-    return this.call<UsageQueryResult>("usage.query", params);
-  }
-
-  usageRead(record_id: string) {
-    return this.call<UsageDetail>("usage.read", { record_id });
   }
 
   library(path?: string) {

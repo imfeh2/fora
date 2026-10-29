@@ -7,7 +7,6 @@ from dataclasses import replace
 
 from fora.ports.agent import AgentRun, ModelRequestHandle
 from fora.ports.live import LiveRequest, LiveRequestCoverage, LiveTool, LiveTurn
-from fora.ports.usage import UsageObservation, UsageRequest, UsageTurn
 
 
 class LiveSnapshots:
@@ -26,47 +25,6 @@ class LiveSnapshots:
                 if agent_id is None or turn.agent_id == agent_id
             )
 
-    def usage_capture(
-        self,
-        agent_id: int | None = None,
-        *,
-        turns: tuple[LiveTurn, ...] | None = None,
-    ) -> UsageObservation:
-        turns = (
-            self.capture(agent_id)
-            if turns is None
-            else tuple(
-                turn for turn in turns if agent_id is None or turn.agent_id == agent_id
-            )
-        )
-        if any(turn.runtime_epoch != self.runtime_epoch for turn in turns):
-            raise RuntimeError("Live capture belongs to a different runtime")
-        return UsageObservation(
-            self.runtime_epoch,
-            tuple(
-                UsageTurn(
-                    turn.agent_id,
-                    turn.sequence,
-                    turn.live_revision,
-                    turn.status,
-                    tuple(
-                        UsageRequest(
-                            request.ordinal,
-                            request.request_id,
-                            request.started_at,
-                            request.model_json,
-                            request.usage_json,
-                            request.usage_metadata_json,
-                            request.completed_at,
-                            request.response_saved,
-                        )
-                        for request in turn.requests
-                    ),
-                )
-                for turn in turns
-            ),
-        )
-
     def begin(self, run: AgentRun) -> BoundLiveTurn:
         with self._lock:
             if self._closed:
@@ -83,16 +41,6 @@ class LiveSnapshots:
                 run.run_id,
                 run.started_at,
             )
-        if current is not None:
-            self._emit(
-                "usage.updated",
-                {
-                    "runtime_epoch": self.runtime_epoch,
-                    "agent_id": run.agent_id,
-                    "sequence": run.sequence,
-                    "live_revision": 0,
-                },
-            )
         return BoundLiveTurn(self, run.agent_id, run.sequence)
 
     def _update(
@@ -100,7 +48,7 @@ class LiveSnapshots:
         agent_id: int,
         sequence: int,
         transform: Callable[[LiveTurn], LiveTurn],
-        event: str,
+        event: str | None,
         handle: ModelRequestHandle | None = None,
         part_index: int | None = None,
         saved: bool = False,
@@ -128,7 +76,8 @@ class LiveSnapshots:
             payload.update(request_id=handle.request_id, ordinal=handle.ordinal)
         if part_index is not None:
             payload["part_index"] = part_index
-        self._emit(event, payload)
+        if event is not None:
+            self._emit(event, payload)
 
     def failed(self, agent_id: int, sequence: int, error: str) -> None:
         self._update(
@@ -171,17 +120,6 @@ class LiveSnapshots:
             ):
                 return
             del self._turns[agent_id]
-        if current.requests:
-            self._emit(
-                "usage.updated",
-                {
-                    "runtime_epoch": self.runtime_epoch,
-                    "agent_id": agent_id,
-                    "sequence": current.sequence,
-                    "live_revision": current.live_revision + 1,
-                    "saved": saved,
-                },
-            )
 
     def close(self) -> None:
         with self._lock:
@@ -199,7 +137,7 @@ class BoundLiveTurn:
         self,
         handle: ModelRequestHandle,
         transform: Callable[[LiveRequest], LiveRequest],
-        event: str,
+        event: str | None,
         part_index: int | None = None,
         saved: bool = False,
     ) -> None:
@@ -252,11 +190,9 @@ class BoundLiveTurn:
     def response(
         self,
         handle: ModelRequestHandle,
-        usage_json: str,
         tools: tuple[LiveTool, ...],
         response_json: str | None = None,
         response_version: str | None = None,
-        usage_metadata_json: str = "{}",
         completed_at: str | None = None,
     ) -> None:
         if len({tool.part_index for tool in tools}) != len(tools):
@@ -265,15 +201,13 @@ class BoundLiveTurn:
             handle,
             lambda request: replace(
                 request,
-                usage_json=usage_json,
                 tools=tools,
                 response_json=response_json,
                 response_version=response_version,
                 response_saved=False,
-                usage_metadata_json=usage_metadata_json,
                 completed_at=completed_at,
             ),
-            "usage.updated",
+            None,
         )
 
     def tool(self, handle: ModelRequestHandle, tool: LiveTool) -> None:

@@ -14,7 +14,6 @@ from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.parameters import agent_parameters
 from fora.ports.agent import SettingsStore
-from fora.ports.usage import UsageCache
 from fora.runtime.scheduler import Scheduler
 from fora.runtime_info import RuntimeInfo
 from fora.tools import AgentTools
@@ -50,13 +49,6 @@ def _required_integer(params: dict[str, Any], name: str) -> int:
     if value is None:
         raise DomainError(ErrorCode.INVALID_PARAMS, f"{name} is required")
     return value
-
-
-def _usage_version(result: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: result[key]
-        for key in ("dataset_revision", "runtime_epoch", "live_versions", "index")
-    }
 
 
 def _required_string(params: dict[str, Any], name: str) -> str:
@@ -367,30 +359,6 @@ class Api:
         )
 
         register(
-            "usage.query",
-            partial(usage_query, context),
-            scope=lambda params: RequestScope(
-                reads=(context.member_set, Resource("history"))
-            ),
-        )
-
-        register(
-            "usage.read",
-            partial(usage_read, context),
-            scope=lambda params: RequestScope(
-                reads=(context.member_set, Resource("history"))
-            ),
-        )
-
-        register(
-            "usage.advance",
-            partial(usage_advance, context),
-            scope=lambda params: RequestScope(
-                reads=(context.member_set,), writes=(Resource("history"),)
-            ),
-        )
-
-        register(
             "settings.get",
             partial(settings_get, context),
             scope=partial(setting_query, context),
@@ -431,27 +399,8 @@ def info_get(context: _Context, params: dict[str, Any]) -> Any:
 
 def organization_get(context: _Context, params: dict[str, Any]) -> Any:
     del params
-    observation = context.api._scheduler.live.usage_capture()
     with context.api._reading():
         members = context.api._human().list_member_records()
-        usage_data = context.api._scheduler.history.usage_display(
-            observation, cache=UsageCache.current("organization")
-        )
-        grouped = {
-            group["agent_id"]: group for group in usage_data["groups"]["agent_id"]
-        }
-        for member in members:
-            if member["type"] == "agent":
-                metrics = grouped.get(int(member["id"]))
-                member["usage_metrics"] = metrics
-                member["usage_index_ready"] = bool(usage_data["index"]["ready"])
-                member["tokens"] = (
-                    int(metrics["total_tokens"])
-                    if metrics is not None and metrics["total_tokens"] is not None
-                    else None
-                    if metrics is not None
-                    else 0
-                )
         organization_uuid = context.api._human().organization_uuid()
         statistics = context.api._scheduler.statistics()
     for member in members:
@@ -462,7 +411,6 @@ def organization_get(context: _Context, params: dict[str, Any]) -> Any:
         "uuid": organization_uuid,
         "members": members,
         "human_id": HUMAN_ID,
-        "usage_version": _usage_version(usage_data),
         **statistics,
     }
 
@@ -749,40 +697,6 @@ def library_move(context: _Context, params: dict[str, Any]) -> Any:
     return context.api._human().move_library(
         str(params["path"]), str(params["destination"])
     )
-
-
-def usage_query(context: _Context, params: dict[str, Any]) -> Any:
-    observation = context.api._scheduler.live.usage_capture()
-    with context.api._reading():
-        return context.api._human().usage_query(
-            params, observation, UsageCache.current("usage")
-        )
-
-
-def usage_read(context: _Context, params: dict[str, Any]) -> Any:
-    observation = context.api._scheduler.live.usage_capture()
-    with context.api._reading():
-        return context.api._human().usage_read(params["record_id"], observation)
-
-
-def usage_advance(context: _Context, params: dict[str, Any]) -> Any:
-    if (
-        "initialization_version" in params
-        and type(params["initialization_version"]) is not int
-    ):
-        raise DomainError(
-            ErrorCode.INVALID_PARAMS,
-            "Initialization version must be an integer",
-        )
-    result = context.api._human().usage_advance(
-        params.get("limit", 100),
-        initialization_version=params.get("initialization_version"),
-    )
-    context.api._dispatcher.emit(
-        "usage.index_updated",
-        {"dataset_revision": result["revision"], "ready": result["ready"]},
-    )
-    return result
 
 
 def settings_get(context: _Context, params: dict[str, Any]) -> Any:

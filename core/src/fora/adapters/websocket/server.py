@@ -36,7 +36,6 @@ from fora.adapters.websocket.origin_error import origin_error_page
 from fora.core.attachment import MAX_FILE_BYTES, Upload
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.ports.usage import usage_session
 from fora.services.uploads import Uploads
 
 SocketHandler = Callable[[web.WebSocketResponse], Awaitable[None]]
@@ -326,7 +325,7 @@ LIBRARY_MAX_BYTES = MAX_FILE_BYTES
 
 CLIENT_MAX_BYTES = MAX_FILE_BYTES + 16 * 1024 * 1024
 
-SPA_PREFIXES = ("/discussions", "/members", "/usage", "/library", "/settings")
+SPA_PREFIXES = ("/discussions", "/members", "/library", "/settings")
 
 log = logging.getLogger(__name__)
 
@@ -832,8 +831,7 @@ class WebServer:
             transport.abort()
 
     async def _control(self, connection: web.WebSocketResponse) -> None:
-        with usage_session():
-            await self._control_session(connection)
+        await self._control_session(connection)
 
     async def _control_session(self, connection: web.WebSocketResponse) -> None:
         outbox = ControlOutbox()

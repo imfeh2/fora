@@ -133,12 +133,6 @@ const avatarSizes = {
   lg: "size-10 rounded-md text-sm",
 };
 
-const meterTones = {
-  normal: "bg-blue-300",
-  warning: "bg-yellow-200",
-  danger: "bg-red-300",
-};
-
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
@@ -596,37 +590,6 @@ export function AvatarStack({
         </span>
       ) : null}
     </span>
-  );
-}
-
-export function Meter({
-  value,
-  max,
-  label,
-}: {
-  value: number;
-  max: number;
-  label: string;
-}) {
-  const ratio = max > 0 ? Math.min(1, value / max) : 0;
-  const tone = ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "normal";
-  return (
-    <div className="w-full h-1 rounded-full bg-app overflow-hidden">
-      <meter
-        className="absolute size-px opacity-0 pointer-events-none"
-        aria-label={label}
-        value={value}
-        min={0}
-        max={max}
-      />
-      <span
-        className={clsx(
-          "block h-full rounded-full transition-[width] duration-(--duration-slow) ease-standard",
-          meterTones[tone],
-        )}
-        style={{ width: `${ratio * 100}%` }}
-      />
-    </div>
   );
 }
 

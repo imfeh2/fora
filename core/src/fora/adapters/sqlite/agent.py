@@ -6,7 +6,6 @@ import sqlite3
 import uuid
 from collections.abc import Sequence
 from dataclasses import asdict
-from typing import Any
 
 from pydantic import ValidationError
 
@@ -22,7 +21,6 @@ from fora.adapters.sqlite.store import (
     first,
     reading,
 )
-from fora.adapters.sqlite.usage import UsageIndex
 from fora.adapters.voice.config import VoiceConfig
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
@@ -41,7 +39,6 @@ from fora.ports.agent import (
     TurnEffect,
     WindowState,
 )
-from fora.ports.usage import UsageCache, UsageObservation
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_safety (
@@ -216,42 +213,6 @@ class SqliteAgentStore:
             self.set_settings(
                 "model", ModelCatalog.restore(self.get_settings("model")).model_dump()
             )
-        self._usage = UsageIndex(db)
-
-    def usage_query(self, params: dict[str, Any]) -> dict[str, Any]:
-        return self._usage.query(params)
-
-    def usage_advance(
-        self, limit: int = 100, *, initialization_version: int | None = None
-    ) -> dict[str, Any]:
-        return self._usage.advance(limit, initialization_version=initialization_version)
-
-    def usage_observe(
-        self,
-        params: dict[str, Any],
-        observation: UsageObservation,
-        cache: UsageCache | None = None,
-    ) -> dict[str, Any]:
-        return self._usage.query(
-            params, observation=observation, cache=cache, advance=False
-        )
-
-    def usage_display(
-        self,
-        observation: UsageObservation,
-        *,
-        agent_id: int | None = None,
-        sequences: Sequence[int] = (),
-        cache: UsageCache | None = None,
-    ) -> dict[str, Any]:
-        return self._usage.display(
-            observation, agent_id=agent_id, sequences=sequences, cache=cache
-        )
-
-    def usage_read(
-        self, record_id: str, observation: UsageObservation | None = None
-    ) -> dict[str, Any]:
-        return self._usage.read(record_id, observation=observation)
 
     def transaction(self) -> LockedConnection:
         return self._db
@@ -584,7 +545,6 @@ class SqliteAgentStore:
                     for discussion_id, message_id in reminded
                 ],
             )
-            self._usage.sync_turn(agent_id, sequence)
         return AgentRun(
             agent_id=agent_id,
             sequence=sequence,
@@ -640,15 +600,6 @@ class SqliteAgentStore:
                     " AND status = 'pending'",
                     (self._now(), agent_id, sequence),
                 )
-                for row in self._db.execute(
-                    "SELECT ordinal FROM agent_model_requests WHERE agent_id = ? AND sequence = ?",
-                    (agent_id, sequence),
-                ):
-                    self._usage.sync_request(agent_id, sequence, row["ordinal"])
-            self._usage.sync_turn(agent_id, sequence)
-            self._db.execute(
-                "UPDATE usage_index_state SET revision = revision + 1 WHERE id = 1"
-            )
 
     def _store_message_refs(
         self,
@@ -731,7 +682,6 @@ class SqliteAgentStore:
                     *field_lengths,
                 ),
             )
-            self._usage.sync_request(agent_id, sequence, ordinal)
         return ModelRequestHandle(ordinal, request_id)
 
     def _require_model_request(
@@ -767,7 +717,7 @@ class SqliteAgentStore:
                 )
                 if existing.messages != incoming:
                     raise DomainError(
-                        ErrorCode.USAGE_CONFLICT, "Model response is already saved"
+                        ErrorCode.MESSAGE_CONFLICT, "Model response is already saved"
                     )
                 return
             response_count, response_length = self._store_message_refs(
@@ -790,7 +740,6 @@ class SqliteAgentStore:
             )
             if cursor.rowcount != 1:
                 raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
-            self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
     def complete_model_request(
         self, agent_id: int, sequence: int, handle: ModelRequestHandle
@@ -806,7 +755,6 @@ class SqliteAgentStore:
                 raise DomainError(
                     ErrorCode.INVALID_STATE, "Model request has no successful response"
                 )
-            self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
     def link_model_request(
         self,
@@ -859,7 +807,6 @@ class SqliteAgentStore:
             )
             if cursor.rowcount != 1:
                 raise DomainError(ErrorCode.NOT_FOUND, "Model request does not exist")
-            self._usage.sync_request(agent_id, sequence, handle.ordinal)
 
     def _model_request_summary(self, row: sqlite3.Row) -> AgentModelRequestSummary:
         return AgentModelRequestSummary(
@@ -1217,12 +1164,6 @@ class SqliteAgentStore:
     def mark_interrupted(self) -> int:
         completed = self._now()
         with self._db:
-            interrupted = self._db.execute(
-                "SELECT agent_id, sequence, ordinal FROM agent_model_requests WHERE status = 'pending'"
-            )
-            turns = self._db.execute(
-                "SELECT agent_id, sequence FROM agent_runs WHERE status = 'running'"
-            )
             cursor = self._db.execute_cursor(
                 "UPDATE agent_runs SET status = 'interrupted', completed_at = ?,"
                 " last_saved_at = COALESCE(last_saved_at, ?) WHERE status = 'running'",
@@ -1233,12 +1174,6 @@ class SqliteAgentStore:
                 " WHERE status = 'pending'",
                 (completed,),
             )
-            for row in interrupted:
-                self._usage.sync_request(
-                    row["agent_id"], row["sequence"], row["ordinal"]
-                )
-            for row in turns:
-                self._usage.sync_turn(row["agent_id"], row["sequence"])
         return cursor.rowcount
 
     def mark_session_start(self) -> int:

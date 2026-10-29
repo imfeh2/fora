@@ -82,7 +82,6 @@ describe("route paths", () => {
       id: 12,
     });
     expect(routeFromPath("/members")).toEqual({ name: "members" });
-    expect(routeFromPath("/usage")).toEqual({ name: "usage" });
     expect(routeFromPath("/library")).toEqual({ name: "library" });
     expect(routeFromPath("/settings/voice")).toEqual({
       name: "settings",
@@ -96,6 +95,7 @@ describe("route paths", () => {
 
   it("rejects unknown and malformed paths", () => {
     expect(routeFromPath("/unknown")).toBeNull();
+    expect(routeFromPath("/usage")).toBeNull();
     expect(routeFromPath("/discussions/abc")).toBeNull();
     expect(routeFromPath("/discussions/12/extra")).toBeNull();
     expect(routeFromPath("/settings/nope")).toBeNull();
@@ -107,7 +107,6 @@ describe("route paths", () => {
     expect(routePath({ name: "discussions" })).toBe("/discussions");
     expect(routePath({ name: "discussion", id: 7 })).toBe("/discussions/7");
     expect(routePath({ name: "members" })).toBe("/members");
-    expect(routePath({ name: "usage" })).toBe("/usage");
     expect(routePath({ name: "library" })).toBe("/library");
     expect(routePath({ name: "settings", section: "agent" })).toBe(
       "/settings/agent",

@@ -3,9 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any, Protocol
-
-from fora.ports.usage import UsageCache, UsageObservation
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -173,32 +171,6 @@ class ModelRequestRecorder(Protocol):
 
 
 class HistoryStore(Protocol):
-    def usage_query(self, params: dict[str, Any]) -> dict[str, Any]: ...
-
-    def usage_advance(
-        self, limit: int = 100, *, initialization_version: int | None = None
-    ) -> dict[str, Any]: ...
-
-    def usage_observe(
-        self,
-        params: dict[str, Any],
-        observation: UsageObservation,
-        cache: UsageCache | None = None,
-    ) -> dict[str, Any]: ...
-
-    def usage_display(
-        self,
-        observation: UsageObservation,
-        *,
-        agent_id: int | None = None,
-        sequences: Sequence[int] = (),
-        cache: UsageCache | None = None,
-    ) -> dict[str, Any]: ...
-
-    def usage_read(
-        self, record_id: str, observation: UsageObservation | None = None
-    ) -> dict[str, Any]: ...
-
     def transaction(self) -> AbstractContextManager[object]: ...
 
     def pending_revision(self, agent_id: int) -> int: ...

@@ -27,12 +27,10 @@ class LiveRequest:
     request_id: str
     started_at: str
     model_json: str
-    usage_json: str | None = None
     tools: tuple[LiveTool, ...] = ()
     response_json: str | None = None
     response_version: str | None = None
     response_saved: bool = False
-    usage_metadata_json: str = "{}"
     completed_at: str | None = None
 
 
@@ -64,11 +62,9 @@ class LiveTurnObserver(Protocol):
     def response(
         self,
         handle: ModelRequestHandle,
-        usage_json: str,
         tools: tuple[LiveTool, ...],
         response_json: str | None = None,
         response_version: str | None = None,
-        usage_metadata_json: str = "{}",
         completed_at: str | None = None,
     ) -> None: ...
 
