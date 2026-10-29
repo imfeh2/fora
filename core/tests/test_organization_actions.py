@@ -140,11 +140,13 @@ def call_action(deps: Dependencies, actor_id: int, action: str, **arguments: Any
 
 def returned(part: Any) -> Any:
     assert isinstance(part, ToolReturnPart), part
+    assert part.outcome != "failed", part
     return part.content
 
 
 def rejected(part: Any) -> str:
-    assert isinstance(part, RetryPromptPart), part
+    assert isinstance(part, ToolReturnPart), part
+    assert part.outcome == "failed", part
     assert isinstance(part.content, str), part.content
     return part.content
 

@@ -39,7 +39,6 @@ from pydantic_ai import (
     CallToolsNode,
     ModelMessagesTypeAdapter,
     ModelRequestNode,
-    ModelRetry,
     RunContext,
     Tool,
     ToolReturn,
@@ -351,7 +350,7 @@ _tool_call: ContextVar[tuple[int, int, ToolCallPart]] = ContextVar("fora_tool_ca
 def _tool_errors() -> Iterator[None]:
     try:
         yield
-    except (ModelRetry, ToolFailed, SkipToolExecution, CallDeferred, ApprovalRequired):
+    except (ToolFailed, SkipToolExecution, CallDeferred, ApprovalRequired):
         raise
     except Exception as error:
         agent_id, sequence, call = _tool_call.get()
@@ -407,7 +406,7 @@ def _tool_boundary(function: Callable[..., Any]) -> Callable[..., Any]:
 
 def _required(value: Any, name: str, action: str) -> Any:
     if value is None:
-        raise ModelRetry(f"{name} is required when action is {action}")
+        raise ToolFailed(f"{name} is required when action is {action}")
     return value
 
 
@@ -417,7 +416,7 @@ def _guard(call: Any) -> Any:
     except DomainError as error:
         if error.code in _EXECUTION_ERRORS:
             raise
-        raise ModelRetry(f"{error.code}: {error}") from error
+        raise ToolFailed(f"{error.code}: {error}") from error
 
 
 def _result(value: Any) -> Any:
@@ -1044,7 +1043,6 @@ class PydanticModelRunner:
             deps_type=AgentTools,
             name="fora_agent",
             instructions=SYSTEM_PROMPT,
-            retries=2,
             tools=[_web_search_tool()],
         )
         self._register()
@@ -1129,7 +1127,7 @@ class PydanticModelRunner:
                         _required(member_id, "member_id", action)
                     )
                 )
-            raise ModelRetry(f"organization has no action {action}")
+            raise ToolFailed(f"organization has no action {action}")
 
         @tool(
             sequential=True,
@@ -1268,7 +1266,7 @@ class PydanticModelRunner:
                         action == "archive",
                     )
                 )
-            raise ModelRetry(f"discussion has no action {action}")
+            raise ToolFailed(f"discussion has no action {action}")
 
         @tool(
             sequential=True,
@@ -1341,7 +1339,7 @@ class PydanticModelRunner:
                         )
                     )
                 )
-            raise ModelRetry(f"history has no action {action}")
+            raise ToolFailed(f"history has no action {action}")
 
         for tool in (
             organization,
