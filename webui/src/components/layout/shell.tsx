@@ -213,7 +213,7 @@ export function SidebarBrand() {
       <img
         src={brandIcon}
         alt=""
-        className="size-6 flex-none -translate-y-0.5"
+        className="size-6 flex-none -translate-y-[0.67px]"
       />
       <span className="text-lg font-semibold truncate">Fora</span>
     </div>
