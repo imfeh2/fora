@@ -85,7 +85,7 @@ export function ThreadHeader({
             type="search"
             value={search.query}
             placeholder="在这条讨论里搜"
-            aria-label="Search this discussion"
+            aria-label="Search messages in this discussion"
             className="w-[320px]! max-w-full shrink-0 focus:border-blue-300! focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-blue-300)_18%,transparent)]! narrow:w-auto! narrow:max-w-none narrow:min-w-0 narrow:flex-1"
             onChange={(event) =>
               search.onChange(
