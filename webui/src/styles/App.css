@@ -124,6 +124,22 @@
   border-color: var(--color-primary);
 }
 
+.markdown-content [data-streamdown="table-wrapper"] {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-color: var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.markdown-content [data-streamdown="table-wrapper"] > div {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+}
+
 :where(.markdown-content) table {
   width: max-content;
   min-width: 100%;
