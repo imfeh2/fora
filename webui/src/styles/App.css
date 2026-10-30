@@ -54,6 +54,7 @@
   font-size: 12px;
   line-height: 12px;
   text-transform: lowercase;
+  white-space: nowrap;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--duration-base) linear;
@@ -105,9 +106,13 @@
 }
 
 @media (hover: none) {
-  .markdown-content [data-streamdown="code-block-header"],
+  .markdown-content [data-streamdown="code-block-header"] {
+    opacity: 1;
+  }
+
   .markdown-content [data-streamdown="code-block-actions"] {
     opacity: 1;
+    pointer-events: auto;
   }
 }
 
