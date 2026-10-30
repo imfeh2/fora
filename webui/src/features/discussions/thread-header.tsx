@@ -5,7 +5,7 @@ import { Button, IconButton, Input, Skeleton } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 
 const headerIconClass =
-  "inline-flex size-7 flex-none items-center justify-center rounded-sm border-0 bg-transparent p-0 text-fg-muted cursor-pointer transition-[background-color,color] duration-[120ms] ease-linear hover:bg-surface-hover hover:text-fg focus-visible:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 touch:size-11 touch:min-w-11 touch:min-h-11";
+  "relative inline-flex size-7 flex-none items-center justify-center rounded-sm border-0 bg-transparent p-0 text-fg-muted cursor-pointer transition-[background-color,color] duration-[120ms] ease-linear hover:bg-surface-hover hover:text-fg focus-visible:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 touch:after:absolute touch:after:-inset-2 touch:after:content-['']";
 
 function SearchIcon() {
   return (
