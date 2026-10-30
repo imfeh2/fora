@@ -5,7 +5,7 @@ import { Button, IconButton, Input, Skeleton } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 
 const headerIconClass =
-  "relative inline-flex size-7 flex-none items-center justify-center rounded-sm border-0 bg-transparent p-0 text-fg-muted cursor-pointer transition-[background-color,color] duration-[120ms] ease-linear hover:bg-surface-hover hover:text-fg focus-visible:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 touch:after:absolute touch:after:-inset-y-2 touch:after:-inset-x-0.5 touch:after:content-['']";
+  "relative inline-flex size-7 flex-none items-center justify-center rounded-sm border-0 bg-transparent p-0 text-fg-muted cursor-pointer transition-[background-color,color] duration-[120ms] ease-linear hover:bg-surface-hover hover:text-fg focus-visible:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 touch:after:absolute touch:after:-inset-2 touch:after:content-['']";
 
 function SearchIcon() {
   return (
@@ -134,7 +134,7 @@ export function ThreadHeader({
       {missing ? (
         <Button onClick={onBack}>Back to Discussions</Button>
       ) : menu && search ? (
-        <div className="flex flex-none items-center gap-1">
+        <div className="flex flex-none items-center gap-1 touch:gap-4">
           <button
             ref={search.buttonRef}
             type="button"

@@ -1133,7 +1133,8 @@ export const MessageRow = memo(function MessageRow({
       className={clsx(
         "message-row flex scroll-m-6 items-start gap-3",
         fresh && "animate-rise-in [animation-duration:var(--duration-slow)]",
-        searchHighlight === "hit" && "rounded-sm bg-surface-hover",
+        searchHighlight === "hit" &&
+          "rounded-sm bg-surface-hover shadow-[inset_2px_0_0_var(--color-fg-muted)]",
         searchHighlight === "current" &&
           "rounded-sm bg-surface-pressed shadow-[inset_2px_0_0_var(--color-blue-300)]",
       )}
