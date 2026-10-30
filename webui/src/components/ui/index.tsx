@@ -204,8 +204,10 @@ export function IconButton({
 
 export function Input({
   type,
+  className,
   ...rest
 }: Omit<InputHTMLAttributes<HTMLInputElement>, "className"> & {
+  className?: string;
   ref?: Ref<HTMLInputElement>;
 }) {
   return (
@@ -215,7 +217,7 @@ export function Input({
       className={
         type === "checkbox"
           ? "appearance-none inline-grid place-content-center size-[14px] flex-none m-0 border border-line-interactive rounded-xs bg-app cursor-pointer checked:border-line-focus checked:bg-line-focus checked:after:content-[''] checked:after:w-1 checked:after:h-2 checked:after:border-fg checked:after:border-r-2 checked:after:border-b-2 checked:after:[transform:translateY(-1px)_rotate(45deg)] disabled:opacity-50 disabled:cursor-not-allowed"
-          : clsx(inputClasses, "h-8 px-3 py-0")
+          : clsx(inputClasses, "h-8 px-3 py-0", className)
       }
     />
   );

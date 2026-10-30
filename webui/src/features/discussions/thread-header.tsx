@@ -1,4 +1,7 @@
-import { Button, Skeleton } from "@/components/ui/index";
+import { clsx } from "clsx";
+import { ChevronDown, ChevronUp } from "lucide-react";
+import type { Ref } from "react";
+import { Button, IconButton, Input, Skeleton } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 
 const headerIconClass =
@@ -37,19 +40,34 @@ function MoreIcon() {
   );
 }
 
+export type ThreadSearchControls = {
+  open: boolean;
+  query: string;
+  count: number;
+  position: number;
+  inputRef: Ref<HTMLInputElement>;
+  buttonRef: Ref<HTMLButtonElement>;
+  onToggle: () => void;
+  onChange: (value: string, composing: boolean) => void;
+  onCommit: (value: string) => void;
+  onStep: (delta: number) => void;
+};
+
 export function ThreadHeader({
   title,
   missing = false,
   onBack,
-  actions,
+  menu,
+  search,
 }: {
   title: string | null;
   missing?: boolean;
   onBack?: () => void;
-  actions?: MenuAction[];
+  menu?: MenuAction[];
+  search?: ThreadSearchControls;
 }) {
   return (
-    <header className="flex flex-none items-start gap-2 px-6 pt-5 pb-3 narrow:px-3 narrow:pt-3 narrow:pb-[10px]">
+    <header className="flex flex-none items-start gap-2 px-6 pt-5 pb-3 narrow:flex-wrap narrow:px-3 narrow:pt-3 narrow:pb-[10px]">
       {title === null ? (
         <Skeleton className="h-7 w-44 max-w-full" />
       ) : (
@@ -60,14 +78,73 @@ export function ThreadHeader({
           {title}
         </h1>
       )}
+      {search?.open ? (
+        <div className="flex min-w-0 items-center gap-2 narrow:order-last narrow:basis-full">
+          <Input
+            ref={search.inputRef}
+            type="search"
+            value={search.query}
+            placeholder="在这条讨论里搜"
+            aria-label="Search this discussion"
+            className="w-[320px]! max-w-full shrink-0 focus:border-blue-300! focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-blue-300)_18%,transparent)]! narrow:w-auto! narrow:max-w-none narrow:min-w-0 narrow:flex-1"
+            onChange={(event) =>
+              search.onChange(
+                event.currentTarget.value,
+                (event.nativeEvent as InputEvent).isComposing,
+              )
+            }
+            onCompositionEnd={(event) =>
+              search.onCommit(event.currentTarget.value)
+            }
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              search.onStep(event.shiftKey ? -1 : 1);
+            }}
+          />
+          <span
+            aria-live="polite"
+            className="flex-none text-xs leading-4 text-fg-muted"
+          >
+            {search.count > 0
+              ? `第 ${search.position + 1} / ${search.count} 条`
+              : "没有匹配"}
+          </span>
+          <IconButton
+            label="Previous match"
+            size="sm"
+            className="size-7!"
+            disabled={search.count === 0}
+            onClick={() => search.onStep(-1)}
+          >
+            <ChevronUp size={14} />
+          </IconButton>
+          <IconButton
+            label="Next match"
+            size="sm"
+            className="size-7!"
+            disabled={search.count === 0}
+            onClick={() => search.onStep(1)}
+          >
+            <ChevronDown size={14} />
+          </IconButton>
+        </div>
+      ) : null}
       {missing ? (
         <Button onClick={onBack}>Back to Discussions</Button>
-      ) : actions ? (
+      ) : menu && search ? (
         <div className="flex flex-none items-center gap-1">
           <button
+            ref={search.buttonRef}
             type="button"
             aria-label="Search this discussion"
-            className={headerIconClass}
+            aria-expanded={search.open}
+            onClick={search.onToggle}
+            className={clsx(
+              headerIconClass,
+              search.open && "bg-surface-pressed text-fg",
+            )}
           >
             <SearchIcon />
           </button>
@@ -75,7 +152,7 @@ export function ThreadHeader({
             label="Discussion actions"
             triggerClassName={headerIconClass}
             icon={<MoreIcon />}
-            actions={actions}
+            actions={menu}
           />
         </div>
       ) : null}

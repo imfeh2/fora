@@ -38,11 +38,19 @@ import { MessageAttachment } from "@/features/discussions/attachments";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionMembersDialog } from "@/features/discussions/members";
 import { useThreadData } from "@/features/discussions/thread-data";
-import { ThreadHeader } from "@/features/discussions/thread-header";
+import {
+  ThreadHeader,
+  type ThreadSearchControls,
+} from "@/features/discussions/thread-header";
 import {
   centeredScrollTop,
   shouldStopPositioningForKey,
 } from "@/features/discussions/thread-position";
+import {
+  clampSearchIndex,
+  matchMessageIds,
+  stepSearchIndex,
+} from "@/features/discussions/thread-search";
 import {
   combineThreadUnits,
   type ThreadUnit,
@@ -255,6 +263,69 @@ function ThreadSession({
   const listRef = useRef<HTMLOListElement | null>(null);
   const unitsRef = useRef(units);
   unitsRef.current = units;
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchApplied, setSearchApplied] = useState("");
+  const [searchIndex, setSearchIndex] = useState(0);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchHits = useMemo(
+    () => matchMessageIds(detail?.messages ?? [], searchApplied),
+    [detail?.messages, searchApplied],
+  );
+  const searchHitSet = useMemo(() => new Set(searchHits), [searchHits]);
+  const searchPosition = clampSearchIndex(searchIndex, searchHits.length);
+  const currentHitId =
+    searchHits.length > 0 ? searchHits[searchPosition] : null;
+
+  useEffect(() => {
+    setSearchIndex(0);
+  }, [searchApplied]);
+
+  useEffect(() => {
+    setSearchIndex((index) => clampSearchIndex(index, searchHits.length));
+  }, [searchHits.length]);
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!searchOpen || currentHitId === null) return;
+    const index = unitsRef.current.findIndex(
+      (unit) => unit.message?.id === currentHitId,
+    );
+    if (index < 0) return;
+    virtual.scrollToIndex(index, { align: "center" });
+  }, [searchOpen, currentHitId, virtual]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchApplied("");
+    setSearchIndex(0);
+    searchButtonRef.current?.focus();
+  }, []);
+
+  const stepSearch = useCallback(
+    (delta: number) => {
+      setSearchIndex((index) =>
+        stepSearchIndex(index, searchHits.length, delta),
+      );
+    },
+    [searchHits.length],
+  );
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const handle = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      closeSearch();
+    };
+    window.addEventListener("keydown", handle);
+    return () => window.removeEventListener("keydown", handle);
+  }, [searchOpen, closeSearch]);
   const threadRef = useRef(thread);
   threadRef.current = thread;
   const backendRef = useRef(backend);
@@ -747,6 +818,25 @@ function ThreadSession({
     ? "Discussion not found"
     : topic || (loadFailed ? "Unavailable" : null);
 
+  const headerSearch: ThreadSearchControls = {
+    open: searchOpen,
+    query: searchQuery,
+    count: searchHits.length,
+    position: searchPosition,
+    inputRef: searchInputRef,
+    buttonRef: searchButtonRef,
+    onToggle: () => {
+      if (searchOpen) closeSearch();
+      else setSearchOpen(true);
+    },
+    onChange: (value, composing) => {
+      setSearchQuery(value);
+      if (!composing) setSearchApplied(value);
+    },
+    onCommit: (value) => setSearchApplied(value),
+    onStep: stepSearch,
+  };
+
   return (
     <MentionInsert.Provider value={insertMention}>
       <Page>
@@ -754,7 +844,8 @@ function ThreadSession({
           title={headerTitle}
           missing={missing}
           onBack={() => navigate({ name: "discussions" })}
-          actions={
+          search={headerSearch}
+          menu={
             detail
               ? [
                   {
@@ -866,6 +957,13 @@ function ThreadSession({
                         identity={unit.key}
                         compact={compact}
                         fresh={false}
+                        searchHighlight={
+                          currentHitId === message.id
+                            ? "current"
+                            : searchHitSet.has(message.id)
+                              ? "hit"
+                              : undefined
+                        }
                       />
                     </li>
                   );
@@ -999,12 +1097,14 @@ export const MessageRow = memo(function MessageRow({
   identity,
   compact,
   fresh,
+  searchHighlight,
 }: {
   discussionId: number;
   message: Message;
   identity?: string;
   compact: boolean;
   fresh: boolean;
+  searchHighlight?: "hit" | "current";
 }) {
   const { members, humanId } = useOrganization();
   const insertMention = useContext(MentionInsert);
@@ -1033,6 +1133,9 @@ export const MessageRow = memo(function MessageRow({
       className={clsx(
         "message-row flex scroll-m-6 items-start gap-3",
         fresh && "animate-rise-in [animation-duration:var(--duration-slow)]",
+        searchHighlight === "hit" && "rounded-sm bg-surface-hover",
+        searchHighlight === "current" &&
+          "rounded-sm bg-surface-pressed shadow-[inset_2px_0_0_var(--color-blue-300)]",
       )}
     >
       <div className="w-[26px] flex-none">
