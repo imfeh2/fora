@@ -105,7 +105,7 @@ export function ThreadHeader({
           />
           <span
             aria-live="polite"
-            className="flex-none text-xs leading-4 text-fg-muted"
+            className="min-w-14 flex-none text-right text-xs leading-4 text-fg-muted"
           >
             {search.count > 0
               ? `第 ${search.position + 1} / ${search.count} 条`
