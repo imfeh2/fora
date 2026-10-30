@@ -23,13 +23,11 @@ import {
 } from "react";
 import { useOrganization } from "@/app/organization";
 import { useNavigate } from "@/app/router";
-import { Page, PageBody, PageHeader } from "@/components/layout/shell";
+import { Page, PageBody } from "@/components/layout/shell";
 import { ContextMenuArea } from "@/components/ui/context-menu";
 import {
   Avatar,
-  AvatarStack,
   Button,
-  Chip,
   dismissToast,
   LoadingSkeleton,
   Skeleton,
@@ -61,6 +59,9 @@ import {
 import { formatTime, relativeTime } from "@/lib/format";
 
 const MentionInsert = createContext<((name: string) => void) | null>(null);
+
+const headerIconClass =
+  "inline-flex size-7! flex-none items-center justify-center rounded-sm border-0 bg-transparent p-0 text-fg-muted cursor-pointer transition-[background-color,color] duration-[120ms] ease-linear hover:bg-surface-hover hover:border-transparent! hover:text-fg focus-visible:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-300 narrow:size-7! narrow:min-w-0! narrow:min-h-0! touch:size-7! touch:min-w-0! touch:min-h-0! aria-expanded:border-transparent! aria-expanded:bg-surface-hover! aria-expanded:text-fg!";
 
 type PositioningKind = "none" | "entry" | "latest" | "follow";
 
@@ -127,15 +128,17 @@ export function ThreadPage(props: ThreadPageProps) {
   if (members === null || humanId === null)
     return (
       <Page>
-        <PageHeader
-          title={
-            pending ? (
-              <Skeleton className="h-6 w-44 max-w-full" />
+        <header className="flex flex-none items-start gap-2 px-6 pt-5 pb-3 narrow:px-3 narrow:pt-3 narrow:pb-[10px]">
+          <div className="flex min-w-0 flex-1 flex-col">
+            {pending ? (
+              <Skeleton className="h-[26px] w-44 max-w-full" />
             ) : (
-              "Discussion"
-            )
-          }
-        />
+              <h1 className="line-clamp-2 min-w-0 max-w-full text-[20px] leading-[26px] font-semibold tracking-[-0.02em] wrap-anywhere">
+                Discussion
+              </h1>
+            )}
+          </div>
+        </header>
         <PageBody variant="flush">
           <div className="@container relative flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6">
@@ -726,7 +729,6 @@ function ThreadSession({
     }
   };
 
-  const names = (detail?.members ?? []).map((member) => member.name);
   const topic =
     discussions?.find((item) => item.id === id)?.topic ?? detail?.topic ?? "";
 
@@ -758,64 +760,98 @@ function ThreadSession({
   return (
     <MentionInsert.Provider value={insertMention}>
       <Page>
-        <PageHeader
-          title={
-            missing
-              ? "Discussion not found"
-              : topic ||
-                (loadFailed ? (
-                  "Unavailable"
-                ) : (
-                  <Skeleton className="h-6 w-44 max-w-full" />
-                ))
-          }
-          status={detail?.archived ? <Chip>Archived</Chip> : undefined}
-          actions={
-            missing ? (
+        <header className="flex flex-none items-start gap-2 px-6 pt-5 pb-3 narrow:px-3 narrow:pt-3 narrow:pb-[10px]">
+          <div className="flex min-w-0 flex-1 flex-col">
+            {missing || loadFailed || topic ? (
+              <h1
+                className="line-clamp-2 min-w-0 max-w-full text-[20px] leading-[26px] font-semibold tracking-[-0.02em] wrap-anywhere"
+                title={
+                  missing
+                    ? "Discussion not found"
+                    : loadFailed
+                      ? "Unavailable"
+                      : topic
+                }
+              >
+                {missing
+                  ? "Discussion not found"
+                  : loadFailed
+                    ? "Unavailable"
+                    : topic}
+              </h1>
+            ) : (
+              <Skeleton className="h-[26px] w-44 max-w-full" />
+            )}
+          </div>
+          {missing ? (
+            <div className="flex flex-none items-center gap-1">
               <Button onClick={() => navigate({ name: "discussions" })}>
                 Back to Discussions
               </Button>
-            ) : detail ? (
-              <>
-                <Tooltip label={names.join("\n")}>
-                  <Button
-                    variant="ghost"
-                    aria-label="Members"
-                    onClick={() => setEditingMembers(true)}
+            </div>
+          ) : detail ? (
+            <div className="flex flex-none items-center gap-1">
+              <button
+                type="button"
+                aria-label="Search this discussion"
+                className={headerIconClass}
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  className="size-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="7" cy="7" r="4.75" />
+                  <path d="M10.6 10.6 14 14" />
+                </svg>
+              </button>
+              <OverflowMenu
+                label="Discussion actions"
+                triggerClassName={headerIconClass}
+                icon={
+                  <svg
+                    viewBox="0 0 16 16"
+                    className="size-4"
+                    fill="currentColor"
+                    aria-hidden="true"
                   >
-                    <AvatarStack members={detail.members} />
-                  </Button>
-                </Tooltip>
-                <OverflowMenu
-                  label="Discussion actions"
-                  actions={[
-                    {
-                      id: "members",
-                      label: "Members",
-                      icon: <Users size={15} />,
-                      onSelect: () => setEditingMembers(true),
-                    },
-                    detail.archived
-                      ? {
-                          id: "unarchive",
-                          label: "Unarchive",
-                          icon: <ArchiveRestore size={15} />,
-                          disabled: archiveBusy,
-                          onSelect: () => void archive(false),
-                        }
-                      : {
-                          id: "archive",
-                          label: "Archive",
-                          icon: <Archive size={15} />,
-                          disabled: archiveBusy,
-                          onSelect: () => void archive(true),
-                        },
-                  ]}
-                />
-              </>
-            ) : undefined
-          }
-        />
+                    <circle cx="3" cy="8" r="1.5" />
+                    <circle cx="8" cy="8" r="1.5" />
+                    <circle cx="13" cy="8" r="1.5" />
+                  </svg>
+                }
+                actions={[
+                  {
+                    id: "members",
+                    label: "Members",
+                    icon: <Users size={15} />,
+                    onSelect: () => setEditingMembers(true),
+                  },
+                  detail.archived
+                    ? {
+                        id: "unarchive",
+                        label: "Unarchive",
+                        icon: <ArchiveRestore size={15} />,
+                        disabled: archiveBusy,
+                        onSelect: () => void archive(false),
+                      }
+                    : {
+                        id: "archive",
+                        label: "Archive",
+                        icon: <Archive size={15} />,
+                        disabled: archiveBusy,
+                        onSelect: () => void archive(true),
+                      },
+                ]}
+              />
+            </div>
+          ) : null}
+        </header>
 
         <PageBody variant="flush">
           <div className="@container relative flex min-h-0 flex-1 flex-col">
