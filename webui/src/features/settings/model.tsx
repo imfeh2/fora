@@ -1891,7 +1891,7 @@ function ProviderTest({
             <button
               type="button"
               aria-label="About testing this provider"
-              className="inline-flex cursor-help p-1.5 -m-1.5"
+              className="inline-flex cursor-help p-1.5"
             >
               <CircleHelp size={14} />
             </button>
