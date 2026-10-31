@@ -514,10 +514,15 @@ class ModelCatalog(ConfigurationRecord):
                 if record_id is not None:
                     provider = updated.provider(record_id)
                     merged = provider.model_dump()
-                    # The web UI no longer sends clear_key; older builds still do, so
-                    # keep accepting it.
-                    if values.pop("clear_key", False):
-                        values["api_key"] = ""
+                    # The web UI no longer sends clear_key. Older builds send it on
+                    # every provider edit together with an empty api_key when the field
+                    # was untouched, so its presence selects the legacy rule: an empty
+                    # api_key keeps the stored key and clear_key empties it.
+                    if "clear_key" in values:
+                        if values.pop("clear_key"):
+                            values["api_key"] = ""
+                        elif values.get("api_key") == "":
+                            values.pop("api_key")
                     merged.update(values)
                     merged["id"] = record_id
                     updated.providers[updated.providers.index(provider)] = (
