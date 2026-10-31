@@ -936,18 +936,7 @@ export function ModelPanel({
                     </div>
                     <div className="flex-1">
                       {visibleProviderRows.map((item) => {
-                        const modelCount = catalog.models.filter(
-                          (model) => model.provider_id === item.id,
-                        ).length;
                         const rowDisabled = busy || uncertain || !connected;
-                        const reason = !connected
-                          ? "Reconnecting"
-                          : uncertain
-                            ? "Waiting for the server"
-                            : "Saving…";
-                        const subtitle = rowDisabled
-                          ? reason
-                          : `${item.api_key_set ? "key set" : "no key"}, ${item.api_type}, ${modelCount} ${modelCount === 1 ? "model" : "models"}`;
                         return (
                           <div
                             key={item.id}
@@ -960,16 +949,6 @@ export function ModelPanel({
                                 "bg-surface-hover shadow-[inset_2px_0_0_var(--color-blue-300)]",
                             )}
                           >
-                            <Switch
-                              aria-label={`Enable ${item.name}`}
-                              checked={item.enabled}
-                              disabled={rowDisabled}
-                              onCheckedChange={(checked) =>
-                                void save("save_provider", item.id, {
-                                  enabled: checked,
-                                })
-                              }
-                            />
                             <button
                               type="button"
                               data-provider-target
@@ -992,15 +971,8 @@ export function ModelPanel({
                               >
                                 {item.name}
                               </span>
-                              <span
-                                className="block truncate text-xs leading-4 text-fg-subtle"
-                                title={subtitle}
-                              >
-                                {subtitle}
-                              </span>
                             </button>
                             <OverflowMenu
-                              compact
                               className={rowDisabled ? "opacity-45" : undefined}
                               label={`Actions for ${item.name}`}
                               actions={[
