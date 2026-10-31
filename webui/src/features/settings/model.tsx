@@ -1483,7 +1483,7 @@ function ProviderForm({
       }
     >
       {provider ? (
-        <span className="inline-flex items-center gap-1">
+        <span className="inline-flex items-center gap-2">
           <Button
             disabled={busy || unavailable || modelCount > 0}
             onClick={() => setConfirmDelete(true)}
@@ -1632,7 +1632,7 @@ function ProviderForm({
             <IconButton
               label="Advanced settings"
               size="sm"
-              className={iconHitArea}
+              className={iconHitAreaAfterField}
               onClick={() => setAdvanced((value) => !value)}
             >
               <Settings size={16} />
@@ -1851,6 +1851,8 @@ const iconHitArea =
   "relative after:absolute after:-inset-[10px] after:content-['']";
 const iconHitAreaPair =
   "relative after:absolute after:-inset-y-[10px] after:-inset-x-[5px] after:content-['']";
+const iconHitAreaAfterField =
+  "relative after:absolute after:-inset-y-[10px] after:left-[-9px] after:right-[-10px] after:content-['']";
 
 function ProviderTest({
   provider,
