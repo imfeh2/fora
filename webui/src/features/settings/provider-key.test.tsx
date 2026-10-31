@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RouterProvider } from "@/app/router";
@@ -76,7 +77,13 @@ describe("provider key", () => {
     expect(container.textContent).not.toContain("Key stored");
     expect(container.textContent).not.toContain("Clear stored key");
     expect(container.textContent).not.toContain("Leave blank");
-    expect(container.querySelector('button[aria-label="Delete"]')).toBeNull();
+    const footer = container.querySelector(".provider-form .dialog-actions");
+    expect(footer).not.toBeNull();
+    expect(
+      within(footer as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent?.trim()),
+    ).toEqual(["Cancel", "Save"]);
   });
 
   it("saves an emptied field as an empty key", async () => {
