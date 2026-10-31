@@ -329,6 +329,25 @@ describe("videos", () => {
     await waitFor(() => expect(libraryFile).toHaveBeenCalledTimes(1));
   });
 
+  it("keeps the play control before the observer reports", () => {
+    class Silent {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", Silent);
+    pending();
+    try {
+      const { container } = renderMessage("![演示](/tasks/demo.mp4)");
+      expect(container.querySelector(".inline-media-video")).not.toBeNull();
+      expect(
+        container.querySelector('button[aria-label="Play 演示"]'),
+      ).not.toBeNull();
+    } finally {
+      vi.stubGlobal("IntersectionObserver", Observer);
+    }
+  });
+
   it("shows the poster of the video before it plays", async () => {
     pending();
     const { container } = renderMessage("![演示](/tasks/demo.mp4)");
@@ -663,6 +682,34 @@ describe("single image", () => {
       ".inline-media-single",
     ) as HTMLElement;
     expect(frame.style.aspectRatio).toBe("800 / 500");
+  });
+
+  it("keeps the card absent while a cached image decodes", async () => {
+    vi.spyOn(backend, "libraryFile").mockResolvedValue(new Blob(["image"]));
+    stubImage({ width: 800, height: 500 });
+    const first = renderMessage("![返回](/tasks/resumed.png)");
+    await waitFor(() => {
+      expect(
+        first.container.querySelector(".inline-media-single"),
+      ).not.toBeNull();
+    });
+    first.unmount();
+    const appendChild = vi.spyOn(Node.prototype, "appendChild");
+    const insertBefore = vi.spyOn(Node.prototype, "insertBefore");
+    const second = renderMessage("![返回](/tasks/resumed.png)");
+    const inserted = [...appendChild.mock.calls, ...insertBefore.mock.calls]
+      .map((call) => call[0])
+      .filter((node) => node instanceof HTMLElement);
+    expect(
+      inserted.filter((node) =>
+        node.classList.contains("inline-media-pending"),
+      ),
+    ).toEqual([]);
+    await waitFor(() => {
+      expect(
+        second.container.querySelector(".inline-media-single"),
+      ).not.toBeNull();
+    });
   });
 
   it("shows the failure card when the image bytes cannot be decoded", async () => {

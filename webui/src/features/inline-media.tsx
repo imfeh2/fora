@@ -400,7 +400,7 @@ export function InlineMediaImage({
   const [failure, setFailure] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [cached, setCached] = useState(false);
+  const [cached, setCached] = useState(() => takeImage(path) !== null);
   const [size, setSize] = useState<{
     width: number;
     height: number;
@@ -708,30 +708,28 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
               <img src={poster} alt="" onError={() => setPosterFailed(true)} />
             </div>
           ) : null}
-          {visible ? (
-            <ContextMenuArea
-              asChild
-              label={`Actions for ${name}`}
-              actions={[
-                {
-                  id: "library",
-                  label: "Open in Library",
-                  icon: <FolderOpen size={15} />,
-                  onSelect: () => navigate({ name: "library", path }),
-                },
-              ]}
+          <ContextMenuArea
+            asChild
+            label={`Actions for ${name}`}
+            actions={[
+              {
+                id: "library",
+                label: "Open in Library",
+                icon: <FolderOpen size={15} />,
+                onSelect: () => navigate({ name: "library", path }),
+              },
+            ]}
+          >
+            <button
+              type="button"
+              className="inline-media-play"
+              aria-label={`Play ${name}`}
+              disabled={busy}
+              onClick={() => void start()}
             >
-              <button
-                type="button"
-                className="inline-media-play"
-                aria-label={`Play ${name}`}
-                disabled={busy}
-                onClick={() => void start()}
-              >
-                {busy ? <Spinner label="Loading video" /> : <Play size={22} />}
-              </button>
-            </ContextMenuArea>
-          ) : null}
+              {busy ? <Spinner label="Loading video" /> : <Play size={22} />}
+            </button>
+          </ContextMenuArea>
         </div>
       ) : (
         <ContextMenuArea
