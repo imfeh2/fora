@@ -1208,8 +1208,12 @@ function ProviderModelEditor({
             <p className="font-medium">{model.name}</p>
             <p className="text-xs text-fg-muted">{model.model}</p>
           </div>
-          <div className="flex items-center gap-2 text-sm">
+          <label
+            htmlFor={`${id}-enabled`}
+            className="flex items-center gap-2 text-sm"
+          >
             <Switch
+              id={`${id}-enabled`}
               aria-label={`Enable model ${model.name}`}
               checked={model.enabled}
               disabled={busy || unavailable}
@@ -1219,8 +1223,8 @@ function ProviderModelEditor({
                 })
               }
             />
-            <span>Enabled</span>
-          </div>
+            Enabled
+          </label>
           <Button size="sm" disabled={busy} onClick={() => setExpanded(true)}>
             Edit
           </Button>
@@ -1745,8 +1749,12 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
               <Pencil size={16} />
             </IconButton>
           </div>
-          <div className="flex items-center gap-2 text-sm">
+          <label
+            htmlFor={`${id}-enabled`}
+            className="flex items-center gap-2 text-sm"
+          >
             <Switch
+              id={`${id}-enabled`}
               aria-label={`Enable ${provider.name}`}
               checked={provider.enabled}
               disabled={busy || unavailable}
@@ -1756,8 +1764,8 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
                 })
               }
             />
-            <span>Enabled</span>
-          </div>
+            Enabled
+          </label>
         </div>
       ) : null}
       {editOpen ? (
