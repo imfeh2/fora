@@ -206,7 +206,7 @@
 }
 
 .inline-media-pending {
-  width: min(100%, var(--inline-single-width, 640px));
+  height: 112px;
 }
 
 .inline-media-placeholder {
@@ -346,8 +346,7 @@
 }
 
 @container message (max-width: 559px) {
-  .inline-media-single,
-  .inline-media-pending {
+  .inline-media-single {
     width: min(100%, var(--inline-single-narrow-width, 100%));
   }
 

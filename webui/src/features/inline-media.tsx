@@ -23,35 +23,46 @@ const SYNTAX = /!\[([^\]\n]*)\]\(\s*([^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g;
 export const VIDEO_LIMIT = 2;
 const VIDEO_BYTES_LIMIT = MAX_FILE_BYTES;
 const VIDEO_CACHE_LIMIT = 2;
-const IMAGE_SIZE_LIMIT = 512;
+const IMAGE_CACHE_LIMIT = 24;
 const IMAGE_LIST_LIMIT = 9;
 const SINGLE_WIDTH = 640;
 const SINGLE_HEIGHT = 400;
 const SINGLE_NARROW_HEIGHT = 320;
 const PLACEHOLDER_HEIGHT = 360;
 
-const imageSizes = new Map<string, { width: number; height: number }>();
+const imageObjects = new Map<string, string>();
 const videoObjects = new Map<string, string>();
 const videoHolders = new Map<string, number>();
 const videoRequests = new Map<string, VideoRequest>();
 
-export function rememberImageSize(
-  path: string,
-  size: { width: number; height: number },
-) {
-  imageSizes.delete(path);
-  imageSizes.set(path, size);
-  if (imageSizes.size <= IMAGE_SIZE_LIMIT) return;
-  const oldest = imageSizes.keys().next().value;
-  if (oldest !== undefined) imageSizes.delete(oldest);
+function dropImage(path: string) {
+  const url = imageObjects.get(path);
+  imageObjects.delete(path);
+  if (url !== undefined) URL.revokeObjectURL(url);
 }
 
-export function imageSizeOf(path: string) {
-  const size = imageSizes.get(path);
-  if (size === undefined) return null;
-  imageSizes.delete(path);
-  imageSizes.set(path, size);
-  return size;
+function touchImage(path: string) {
+  const url = imageObjects.get(path);
+  if (url === undefined) return;
+  imageObjects.delete(path);
+  imageObjects.set(path, url);
+}
+
+function takeImage(path: string) {
+  const url = imageObjects.get(path);
+  if (url === undefined) return null;
+  touchImage(path);
+  return url;
+}
+
+function cacheImage(path: string, url: string) {
+  dropImage(path);
+  imageObjects.set(path, url);
+  while (imageObjects.size > IMAGE_CACHE_LIMIT) {
+    const oldest = imageObjects.keys().next().value;
+    if (oldest === undefined) break;
+    dropImage(oldest);
+  }
 }
 
 type VideoRequest = {
@@ -193,8 +204,7 @@ function acquireVideoUrl(path: string): VideoHold {
   return { promise: request.promise, release };
 }
 
-async function rememberSize(
-  path: string,
+async function decodeSize(
   url: string,
 ): Promise<{ width: number; height: number } | null> {
   if (typeof Image === "undefined") return null;
@@ -207,9 +217,7 @@ async function rememberSize(
     return null;
   }
   if (probe.naturalWidth <= 0 || probe.naturalHeight <= 0) return null;
-  const size = { width: probe.naturalWidth, height: probe.naturalHeight };
-  rememberImageSize(path, size);
-  return size;
+  return { width: probe.naturalWidth, height: probe.naturalHeight };
 }
 
 export function mediaSingleBox(size: { width: number; height: number } | null) {
@@ -248,12 +256,14 @@ function MediaFailure({
   alt,
   message,
   details,
+  busy,
   onRetry,
 }: {
   path: string;
   alt: string;
   message: string;
   details: string;
+  busy: boolean;
   onRetry: () => void;
 }) {
   const [address, setAddress] = useState("Unavailable");
@@ -288,7 +298,7 @@ function MediaFailure({
         <p role="alert" className="m-0 text-danger">
           {message}
         </p>
-        <Button size="sm" onClick={onRetry}>
+        <Button size="sm" disabled={busy} onClick={onRetry}>
           Retry
         </Button>
         <details className="w-full min-w-0">
@@ -347,14 +357,18 @@ function ImageCell({ path, alt }: { path: string; alt: string }) {
   useEffect(() => {
     const abort = new AbortController();
     let objectUrl: string | null = null;
-    void backend.libraryFile(path, abort.signal).then(
-      (blob) => {
+    void (async () => {
+      try {
+        const blob = await backend.libraryFile(path, abort.signal);
         if (abort.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
+        const next = await decodeSize(objectUrl);
+        if (abort.signal.aborted || next === null) return;
         setUrl(objectUrl);
-      },
-      () => undefined,
-    );
+      } catch {
+        return;
+      }
+    })();
     return () => {
       abort.abort();
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
@@ -385,32 +399,76 @@ export function InlineMediaImage({
   const [url, setUrl] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [size, setSize] = useState(() => imageSizeOf(path));
+  const [busy, setBusy] = useState(false);
+  const [cached, setCached] = useState(false);
+  const [size, setSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     const abort = new AbortController();
-    let objectUrl: string | null = null;
-    setFailure(null);
-    setUrl(null);
-    void backend.libraryFile(path, abort.signal).then(
-      (blob) => {
+    let created: string | null = null;
+    setBusy(true);
+    const show = (source: string, next: { width: number; height: number }) => {
+      if (abort.signal.aborted) return;
+      setSize(next);
+      setUrl(source);
+      setFailure(null);
+      setBusy(false);
+    };
+    const fail = (details: string) => {
+      if (abort.signal.aborted) return;
+      setFailure(details);
+      setBusy(false);
+    };
+    const cached = takeImage(path);
+    setCached(cached !== null);
+    if (cached !== null) {
+      void decodeSize(cached).then((next) => {
+        if (next === null) {
+          dropImage(path);
+          fail(
+            "Stage: Image decoding\nMessage: The image could not be decoded.",
+          );
+          return;
+        }
+        show(cached, next);
+      });
+      return () => abort.abort();
+    }
+    void (async () => {
+      try {
+        const blob = await backend.libraryFile(path, abort.signal);
         if (abort.signal.aborted) return;
-        const nextUrl = URL.createObjectURL(blob);
-        objectUrl = nextUrl;
-        setUrl(nextUrl);
-        void rememberSize(path, nextUrl).then((next) => {
-          if (next !== null && !abort.signal.aborted) setSize(next);
-        });
-      },
-      (error) => {
-        if (!abort.signal.aborted) setFailure(fileFailure(error));
-      },
-    );
+        created = URL.createObjectURL(blob);
+        const next = await decodeSize(created);
+        if (abort.signal.aborted) {
+          URL.revokeObjectURL(created);
+          created = null;
+          return;
+        }
+        if (next === null) {
+          URL.revokeObjectURL(created);
+          created = null;
+          fail(
+            "Stage: Image decoding\nMessage: The image could not be decoded.",
+          );
+          return;
+        }
+        const source = created;
+        cacheImage(path, source);
+        created = null;
+        show(source, next);
+      } catch (error) {
+        if (!abort.signal.aborted) fail(fileFailure(error));
+      }
+    })();
     return () => {
       abort.abort();
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+      if (created !== null) URL.revokeObjectURL(created);
     };
   }, [path, attempt]);
 
@@ -424,18 +482,13 @@ export function InlineMediaImage({
           alt={alt}
           message="Image could not be loaded."
           details={failure}
+          busy={busy}
           onRetry={() => setAttempt((value) => value + 1)}
         />
-      ) : url === null ? (
-        <div
-          className="inline-media inline-media-single inline-media-pending"
-          style={mediaSingleBox(size)}
-        >
-          <div className="inline-media-placeholder">
-            <Spinner label="Loading image" />
-            <span>Loading image…</span>
-          </div>
-        </div>
+      ) : url === null || size === null ? (
+        cached ? null : (
+          <div className="inline-media inline-media-pending" />
+        )
       ) : (
         <ContextMenuArea
           asChild
@@ -489,6 +542,8 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   const root = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const hold = useRef<VideoHold | null>(null);
+  const ready = useRef<Promise<void>>(Promise.resolve());
+  const entryBytes = useRef<number | null>(null);
   const [visible, setVisible] = useState(false);
   const [entrySize, setEntrySize] = useState<number | null>(null);
   const [entryVersion, setEntryVersion] = useState<string | null>(null);
@@ -503,18 +558,25 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
 
   useEffect(() => {
     const abort = new AbortController();
+    let release = () => {};
+    ready.current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     setEntryReady(false);
     void libraryEntry(path).then(
       (entry) => {
         if (abort.signal.aborted) return;
+        entryBytes.current = entry?.size ?? null;
         setEntrySize(entry?.size ?? null);
         setEntryVersion(
           entry === null ? null : `${entry.size}-${entry.modified_at}`,
         );
         setEntryReady(true);
+        release();
       },
       () => {
         if (!abort.signal.aborted) setEntryReady(true);
+        release();
       },
     );
     return () => abort.abort();
@@ -559,13 +621,22 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
 
   const start = async () => {
     setBusy(true);
-    setFailure(null);
     hold.current?.release();
+    hold.current = null;
+    await ready.current;
+    const bytes = entryBytes.current;
+    if (bytes !== null && bytes > VIDEO_BYTES_LIMIT) {
+      setBusy(false);
+      return;
+    }
     const next = acquireVideoUrl(path);
     hold.current = next;
     try {
       const objectUrl = await next.promise;
-      if (hold.current === next) setUrl(objectUrl);
+      if (hold.current === next) {
+        setFailure(null);
+        setUrl(objectUrl);
+      }
     } catch (error) {
       if (hold.current === next) {
         hold.current = null;
@@ -623,6 +694,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
         alt={alt}
         message="Video could not be played."
         details={failure}
+        busy={busy}
         onRetry={() => void start()}
       />
     );
@@ -636,7 +708,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
               <img src={poster} alt="" onError={() => setPosterFailed(true)} />
             </div>
           ) : null}
-          {present ? (
+          {visible ? (
             <ContextMenuArea
               asChild
               label={`Actions for ${name}`}

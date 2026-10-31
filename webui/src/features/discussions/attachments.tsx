@@ -2,7 +2,7 @@ import { Download, FileIcon, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenuArea } from "@/components/ui/context-menu";
 import { ImageViewer } from "@/components/ui/image-viewer";
-import { Button, Spinner } from "@/components/ui/index";
+import { Button } from "@/components/ui/index";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ComposerFile } from "@/features/discussions/composer-state";
 import { mediaGridBox, mediaSingleBox } from "@/features/inline-media";
@@ -277,14 +277,9 @@ function AttachmentImages({
           </div>
         ) : sources[single.id] === undefined ? (
           <div
-            className="inline-media inline-media-single inline-media-pending"
+            className="inline-media inline-media-single"
             style={mediaSingleBox(imageSize(single))}
-          >
-            <div className="inline-media-placeholder">
-              <Spinner label="Loading image" />
-              <span>Loading image…</span>
-            </div>
-          </div>
+          />
         ) : (
           <div
             className="inline-media inline-media-single"
@@ -335,9 +330,7 @@ function AttachmentImages({
                       onClick={() => setOpen(image.id)}
                     >
                       {sources[image.id] === undefined ? (
-                        failures[image.id] === undefined ? (
-                          <Spinner label="Loading image" />
-                        ) : (
+                        failures[image.id] === undefined ? null : (
                           <span role="alert" className="text-xs text-danger">
                             {failures[image.id]}
                           </span>

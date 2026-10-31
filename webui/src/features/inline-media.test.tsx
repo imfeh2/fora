@@ -4,12 +4,23 @@ import { RouterProvider } from "@/app/router";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   estimateInlineMediaSize,
-  imageSizeOf,
-  rememberImageSize,
+  mediaSingleBox,
   scanInlineMedia,
 } from "@/features/inline-media";
 import { MarkdownContent } from "@/features/markdown";
 import { backend } from "@/lib/backend";
+
+const entry = vi.hoisted(() => ({
+  current: async (
+    _path: string,
+  ): Promise<{ size: number; modified_at: string } | null> => null,
+}));
+
+vi.mock("@/features/library/preview", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/features/library/preview")>();
+  return { ...actual, libraryEntry: (path: string) => entry.current(path) };
+});
 
 class Observer {
   static live: Observer[] = [];
@@ -56,6 +67,8 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
+  entry.current = async () => null;
   vi.spyOn(backend, "library").mockResolvedValue([]);
   vi.spyOn(backend, "libraryFileUrl").mockImplementation(
     async (path) =>
@@ -111,7 +124,7 @@ describe("inline media scope", () => {
     pending();
     const { container } = renderMessage("![图](/tasks/a.png)");
     expect(container.querySelectorAll(".inline-media").length).toBe(1);
-    expect(container.textContent).toContain("Loading image…");
+    expect(container.textContent).toBe("");
     expect(container.querySelector('a[href="/tasks/a.png"]')).toBeNull();
   });
 
@@ -292,6 +305,28 @@ describe("videos", () => {
     expect(container.querySelector(".inline-media-video")).not.toBeNull();
     expect(container.querySelector("video")).toBeNull();
     expect(libraryFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps the play control before the size check and requests nothing", async () => {
+    const libraryFile = pending();
+    let release: (value: null) => void = () => {};
+    entry.current = () =>
+      new Promise((resolve) => {
+        release = resolve;
+      });
+    const { container } = renderMessage("![演示](/tasks/big.mp4)");
+    const button = await waitFor(() => {
+      const element = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Play 演示"]',
+      );
+      if (element === null) throw new Error("play button is missing");
+      return element;
+    });
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(libraryFile).not.toHaveBeenCalled();
+    release(null);
+    await waitFor(() => expect(libraryFile).toHaveBeenCalledTimes(1));
   });
 
   it("shows the poster of the video before it plays", async () => {
@@ -517,75 +552,135 @@ describe("video lifecycle", () => {
   });
 });
 
-describe("image size cache", () => {
-  it("keeps the most recent sizes and drops the oldest beyond the limit", () => {
-    for (let index = 0; index < 512; index += 1)
-      rememberImageSize(`tasks/size-${index}.png`, {
-        width: index + 1,
-        height: index + 2,
-      });
-    expect(imageSizeOf("tasks/size-0.png")).toEqual({ width: 1, height: 2 });
-    rememberImageSize("tasks/size-extra.png", { width: 7, height: 9 });
-    expect(imageSizeOf("tasks/size-0.png")).toEqual({ width: 1, height: 2 });
-    expect(imageSizeOf("tasks/size-1.png")).toBeNull();
-    expect(imageSizeOf("tasks/size-extra.png")).toEqual({
-      width: 7,
-      height: 9,
-    });
+function stubImage({
+  width,
+  height,
+  decode,
+}: {
+  width: number;
+  height: number;
+  decode?: () => Promise<void>;
+}) {
+  Object.defineProperty(HTMLImageElement.prototype, "decode", {
+    configurable: true,
+    value: decode ?? (() => Promise.resolve()),
   });
-});
+  vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(
+    width,
+  );
+  vi.spyOn(HTMLImageElement.prototype, "naturalHeight", "get").mockReturnValue(
+    height,
+  );
+}
 
 describe("single image", () => {
-  it("sizes the frame from the image ratio in both tiers", () => {
-    pending();
-    rememberImageSize("tasks/portrait.png", { width: 480, height: 640 });
-    rememberImageSize("tasks/square.png", { width: 1200, height: 1200 });
-    rememberImageSize("tasks/landscape.png", { width: 1600, height: 533 });
-    rememberImageSize("tasks/wide.png", { width: 800, height: 500 });
-    const portrait = renderMessage("![竖图](/tasks/portrait.png)");
-    const square = renderMessage("![方图](/tasks/square.png)");
-    const landscape = renderMessage("![横图](/tasks/landscape.png)");
-    const wide = renderMessage("![宽图](/tasks/wide.png)");
-    const frame = (element: HTMLElement) =>
-      element.querySelector(".inline-media-single") as HTMLElement;
-    const width = (element: HTMLElement, name: string) =>
-      frame(element).style.getPropertyValue(name);
-    expect(width(portrait.container, "--inline-single-width")).toBe("300px");
-    expect(width(portrait.container, "--inline-single-narrow-width")).toBe(
-      "240px",
-    );
-    expect(frame(portrait.container).style.aspectRatio).toBe("480 / 640");
-    expect(width(square.container, "--inline-single-width")).toBe("400px");
-    expect(width(square.container, "--inline-single-narrow-width")).toBe(
-      "320px",
-    );
-    expect(width(landscape.container, "--inline-single-width")).toBe("640px");
-    expect(width(landscape.container, "--inline-single-narrow-width")).toBe(
-      "961px",
-    );
-    expect(width(wide.container, "--inline-single-width")).toBe("640px");
-    expect(width(wide.container, "--inline-single-narrow-width")).toBe("512px");
+  it("derives the frame from the decoded ratio in both tiers", () => {
+    const box = (width: number, height: number) =>
+      mediaSingleBox({ width, height }) as Record<string, string>;
+    expect(box(480, 640)["--inline-single-width"]).toBe("300px");
+    expect(box(480, 640)["--inline-single-narrow-width"]).toBe("240px");
+    expect(box(480, 640).aspectRatio).toBe("480 / 640");
+    expect(box(1200, 1200)["--inline-single-width"]).toBe("400px");
+    expect(box(1200, 1200)["--inline-single-narrow-width"]).toBe("320px");
+    expect(box(1600, 533)["--inline-single-width"]).toBe("640px");
+    expect(box(1600, 533)["--inline-single-narrow-width"]).toBe("961px");
+    expect(box(800, 500)["--inline-single-width"]).toBe("640px");
+    expect(box(800, 500)["--inline-single-narrow-width"]).toBe("512px");
   });
 
-  it("shows the failure card when the image bytes cannot be decoded", async () => {
-    const libraryFile = vi
-      .spyOn(backend, "libraryFile")
-      .mockResolvedValue(new Blob(["broken"]));
-    URL.createObjectURL = vi.fn(() => "blob:broken");
-    const { container } = renderMessage("![坏图](/tasks/broken.png)");
+  it("keeps an empty placeholder card until the image decodes", async () => {
+    pending();
+    const { container } = renderMessage("![竖图](/tasks/portrait.png)");
+    const frame = container.querySelector(
+      ".inline-media-pending",
+    ) as HTMLElement;
+    expect(frame).not.toBeNull();
+    expect(frame.className).not.toContain("inline-media-single");
+    expect(frame.getAttribute("style")).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(container.querySelector("[role=status]")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("swaps the placeholder for the sized image after decode", async () => {
+    vi.spyOn(backend, "libraryFile").mockResolvedValue(new Blob(["image"]));
+    let release: () => void = () => {};
+    stubImage({
+      width: 800,
+      height: 500,
+      decode: () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    });
+    const { container } = renderMessage("![宽图](/tasks/loaded.png)");
+    await waitFor(() => expect(container.querySelector("img")).toBeNull());
+    expect(container.querySelector(".inline-media-pending")).not.toBeNull();
+    release();
     const image = await waitFor(() => {
       const element = container.querySelector("img");
       if (element === null) throw new Error("image is missing");
       return element;
     });
-    fireEvent.error(image);
+    const frame = container.querySelector(
+      ".inline-media-single",
+    ) as HTMLElement;
+    expect(container.querySelector(".inline-media-pending")).toBeNull();
+    expect(frame.style.aspectRatio).toBe("800 / 500");
+    expect(frame.style.getPropertyValue("--inline-single-width")).toBe("640px");
+    expect(image.getAttribute("src")).toMatch(/^blob:/);
+  });
+
+  it("reuses cached bytes without a placeholder when a message returns", async () => {
+    vi.spyOn(backend, "libraryFile").mockResolvedValue(new Blob(["image"]));
+    stubImage({ width: 800, height: 500 });
+    const first = renderMessage("![返回](/tasks/returned.png)");
+    await waitFor(() => {
+      expect(first.container.querySelector("img")).not.toBeNull();
+    });
+    first.unmount();
+    let release: () => void = () => {};
+    stubImage({
+      width: 800,
+      height: 500,
+      decode: () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    });
+    const second = renderMessage("![返回](/tasks/returned.png)");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(second.container.querySelector(".inline-media-pending")).toBeNull();
+    expect(second.container.querySelector("img")).toBeNull();
+    release();
+    const image = await waitFor(() => {
+      const element = second.container.querySelector("img");
+      if (element === null) throw new Error("image is missing");
+      return element;
+    });
+    expect(image.getAttribute("src")).toMatch(/^blob:/);
+    const frame = second.container.querySelector(
+      ".inline-media-single",
+    ) as HTMLElement;
+    expect(frame.style.aspectRatio).toBe("800 / 500");
+  });
+
+  it("shows the failure card when the image bytes cannot be decoded", async () => {
+    const libraryFile = vi
+      .spyOn(backend, "libraryFile")
+      .mockRejectedValueOnce(new Error("missing"))
+      .mockImplementation(() => new Promise(() => {}));
+    const { container } = renderMessage("![坏图](/tasks/broken.png)");
     await waitFor(() =>
       expect(container.textContent).toContain("Image could not be loaded."),
     );
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("details")?.textContent).toContain(
-      "Stage: Image decoding",
+      "Stage: File request",
     );
+    const frame = container.querySelector(".inline-media") as HTMLElement;
+    expect(frame.className).toContain("inline-media-fixed");
+    expect(frame.getAttribute("style")).toBeNull();
     const retry = await waitFor(() => {
       const button = [...container.querySelectorAll("button")].find(
         (node) => node.textContent === "Retry",
@@ -595,6 +690,9 @@ describe("single image", () => {
     });
     fireEvent.click(retry);
     await waitFor(() => expect(libraryFile).toHaveBeenCalledTimes(2));
+    expect(container.textContent).toContain("Image could not be loaded.");
+    expect(container.querySelector(".inline-media-pending")).toBeNull();
+    await waitFor(() => expect(retry).toHaveProperty("disabled", true));
   });
 });
 
