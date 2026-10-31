@@ -1852,7 +1852,7 @@ const iconHitArea =
 const iconHitAreaPair =
   "relative after:absolute after:-inset-y-[10px] after:-inset-x-[5px] after:content-['']";
 const iconHitAreaAfterField =
-  "relative after:absolute after:-inset-y-[10px] after:left-[-9px] after:right-[-10px] after:content-['']";
+  "relative after:absolute after:-inset-y-[10px] after:left-[-8px] after:right-[-10px] after:content-['']";
 
 function ProviderTest({
   provider,
