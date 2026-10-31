@@ -1750,24 +1750,19 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
               <Pencil size={16} />
             </IconButton>
           </div>
-          <label
-            htmlFor={`${id}-enabled`}
-            className="flex items-center gap-2 text-sm"
-          >
-            <Input
-              id={`${id}-enabled`}
-              type="checkbox"
+          <div className="flex items-center gap-2 text-sm">
+            <Switch
               aria-label={`Enable ${provider.name}`}
               checked={provider.enabled}
               disabled={busy || unavailable}
-              onChange={(event) =>
+              onCheckedChange={(checked) =>
                 void save("save_provider", provider.id, {
-                  enabled: event.target.checked,
+                  enabled: checked,
                 })
               }
             />
-            Enabled
-          </label>
+            <span>Enabled</span>
+          </div>
         </div>
       ) : null}
       {editOpen ? (
