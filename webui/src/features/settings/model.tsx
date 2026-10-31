@@ -972,6 +972,7 @@ export function ModelPanel({
                             <span className="absolute inset-y-0 right-2 flex items-center">
                               <OverflowMenu
                                 compact
+                                disabled={rowDisabled}
                                 className={
                                   rowDisabled
                                     ? "opacity-45 cursor-not-allowed"

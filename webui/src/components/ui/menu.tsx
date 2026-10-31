@@ -51,6 +51,7 @@ export function OverflowMenu({
   triggerClassName,
   className,
   compact = false,
+  disabled = false,
 }: {
   label: string;
   actions: MenuAction[];
@@ -60,6 +61,7 @@ export function OverflowMenu({
   triggerClassName?: string;
   className?: string;
   compact?: boolean;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -175,6 +177,7 @@ export function OverflowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        disabled={disabled}
         onPointerDown={
           stopPropagation ? (event) => event.stopPropagation() : undefined
         }
