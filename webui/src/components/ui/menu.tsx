@@ -38,6 +38,9 @@ export type MenuAction = {
 const triggerClasses =
   "inline-flex items-center justify-center size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg";
 
+const compactTriggerClasses =
+  "relative inline-flex items-center justify-center size-7 flex-none border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg after:absolute after:-inset-y-2 after:-left-2 after:right-0 after:content-['']";
+
 export function OverflowMenu({
   label,
   actions,
@@ -45,6 +48,8 @@ export function OverflowMenu({
   icon,
   stopPropagation = false,
   triggerClassName,
+  className,
+  compact = false,
 }: {
   label: string;
   actions: MenuAction[];
@@ -52,6 +57,8 @@ export function OverflowMenu({
   icon?: ReactNode;
   stopPropagation?: boolean;
   triggerClassName?: string;
+  className?: string;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -156,7 +163,11 @@ export function OverflowMenu({
       <button
         ref={trigger}
         type="button"
-        className={triggerClassName ?? triggerClasses}
+        className={clsx(
+          triggerClassName ??
+            (compact ? compactTriggerClasses : triggerClasses),
+          className,
+        )}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}

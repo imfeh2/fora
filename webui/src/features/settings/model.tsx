@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import {
   CircleHelp,
   Eye,
@@ -42,6 +43,7 @@ import {
   toast,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { parseRequestBody } from "@/features/settings/request-body";
 import {
@@ -644,18 +646,11 @@ export function ModelPanel({
     ...(catalog?.providers ?? []),
     ...(providerMissing && provider ? [provider] : []),
   ];
-  const providerGroups = [true, false]
-    .map((enabled) => ({
-      enabled,
-      items: visibleProviders.filter(
-        (item) =>
-          item.enabled === enabled &&
-          `${item.name} ${item.api_type}`
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-      ),
-    }))
-    .filter((group) => group.items.length > 0);
+  const visibleProviderRows = visibleProviders.filter((item) =>
+    `${item.name} ${item.api_type}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
   const closeMissingModel = (id: string) => {
     const proceed = () => {
       modelDraft(id, false);
@@ -940,95 +935,102 @@ export function ModelPanel({
                       />
                     </div>
                     <div className="flex-1">
-                      {providerGroups.map((group) => (
-                        <section
-                          key={String(group.enabled)}
-                          aria-label={
-                            group.enabled
-                              ? "Enabled providers"
-                              : "Disabled providers"
-                          }
-                        >
-                          {group.enabled ? null : (
-                            <h3 className="py-2 text-xs text-fg-muted">
-                              Disabled
-                            </h3>
-                          )}
-                          {group.items.map((item) => {
-                            const modelCount = catalog.models.filter(
-                              (model) => model.provider_id === item.id,
-                            ).length;
-                            return (
-                              <div
-                                key={item.id}
-                                className={`flex min-h-11 min-w-0 items-center gap-2 rounded px-2 hover:bg-surface-hover ${selected === item.id ? "bg-surface-hover" : ""}`}
+                      {visibleProviderRows.map((item) => {
+                        const modelCount = catalog.models.filter(
+                          (model) => model.provider_id === item.id,
+                        ).length;
+                        const rowDisabled = busy || uncertain || !connected;
+                        const reason = !connected
+                          ? "Reconnecting"
+                          : uncertain
+                            ? "Waiting for the server"
+                            : "Saving…";
+                        const subtitle = rowDisabled
+                          ? reason
+                          : `${item.api_key_set ? "key set" : "no key"}, ${item.api_type}, ${modelCount} ${modelCount === 1 ? "model" : "models"}`;
+                        return (
+                          <div
+                            key={item.id}
+                            className={clsx(
+                              "flex min-h-11 min-w-0 items-center gap-2 rounded-sm px-2 py-1 transition-[background-color] duration-[90ms] ease-linear",
+                              rowDisabled
+                                ? "cursor-not-allowed"
+                                : "hover:bg-surface-hover",
+                              selected === item.id &&
+                                "bg-surface-hover shadow-[inset_2px_0_0_var(--color-blue-300)]",
+                            )}
+                          >
+                            <Switch
+                              aria-label={`Enable ${item.name}`}
+                              checked={item.enabled}
+                              disabled={rowDisabled}
+                              onCheckedChange={(checked) =>
+                                void save("save_provider", item.id, {
+                                  enabled: checked,
+                                })
+                              }
+                            />
+                            <button
+                              type="button"
+                              data-provider-target
+                              className="min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-300"
+                              aria-current={
+                                selected === item.id ? "true" : undefined
+                              }
+                              disabled={rowDisabled}
+                              onKeyDown={navigateList}
+                              onClick={(event) =>
+                                activate(item.id, event.currentTarget)
+                              }
+                            >
+                              <span
+                                className={clsx(
+                                  "block truncate text-sm font-medium",
+                                  rowDisabled && "text-fg-muted",
+                                )}
+                                title={item.name}
                               >
-                                <button
-                                  type="button"
-                                  data-provider-target
-                                  className="min-w-0 flex-1 py-2 text-left text-sm wrap-anywhere"
-                                  aria-current={
-                                    selected === item.id ? "true" : undefined
-                                  }
-                                  disabled={busy || uncertain || !connected}
-                                  onKeyDown={navigateList}
-                                  onClick={(event) =>
-                                    activate(item.id, event.currentTarget)
-                                  }
-                                >
-                                  <span className="block font-medium">
-                                    {item.name}
-                                  </span>
-                                  <span className="text-xs text-fg-muted">
-                                    {item.api_type}, {modelCount}{" "}
-                                    {modelCount === 1 ? "model" : "models"},{" "}
-                                    {item.api_key_set ? "key set" : "no key"}
-                                  </span>
-                                </button>
-                                <Input
-                                  type="checkbox"
-                                  aria-label={`Enable ${item.name}`}
-                                  checked={item.enabled}
-                                  disabled={busy || uncertain || !connected}
-                                  onChange={(event) =>
-                                    void save("save_provider", item.id, {
-                                      enabled: event.target.checked,
-                                    })
-                                  }
-                                />
-                                <OverflowMenu
-                                  label={`Actions for ${item.name}`}
-                                  actions={[
-                                    {
-                                      id: "edit",
-                                      label: "Edit",
-                                      disabled: busy || uncertain || !connected,
-                                      onSelect: () => choose(item.id, true),
-                                    },
-                                    {
-                                      id: "delete",
-                                      label: "Delete",
-                                      tone: "danger",
-                                      disabled:
-                                        busy ||
-                                        uncertain ||
-                                        !connected ||
-                                        catalog.models.some(
-                                          (model) =>
-                                            model.provider_id === item.id,
-                                        ) ||
-                                        !catalog.providers.some(
-                                          (provider) => provider.id === item.id,
-                                        ),
-                                      onSelect: () => setDeleteProvider(item),
-                                    },
-                                  ]}
-                                />
-                              </div>
-                            );
-                          })}
-                        </section>
-                      ))}
+                                {item.name}
+                              </span>
+                              <span
+                                className="block truncate text-xs leading-4 text-fg-subtle"
+                                title={subtitle}
+                              >
+                                {subtitle}
+                              </span>
+                            </button>
+                            <OverflowMenu
+                              compact
+                              className={rowDisabled ? "opacity-45" : undefined}
+                              label={`Actions for ${item.name}`}
+                              actions={[
+                                {
+                                  id: "edit",
+                                  label: "Edit",
+                                  disabled: busy || uncertain || !connected,
+                                  onSelect: () => choose(item.id, true),
+                                },
+                                {
+                                  id: "delete",
+                                  label: "Delete",
+                                  tone: "danger",
+                                  disabled:
+                                    busy ||
+                                    uncertain ||
+                                    !connected ||
+                                    catalog.models.some(
+                                      (model) => model.provider_id === item.id,
+                                    ) ||
+                                    !catalog.providers.some(
+                                      (provider) => provider.id === item.id,
+                                    ),
+                                  onSelect: () => setDeleteProvider(item),
+                                },
+                              ]}
+                            />
+                          </div>
+                        );
+                      })}
                       {!visibleProviders.some((item) =>
                         `${item.name} ${item.api_type}`
                           .toLowerCase()
