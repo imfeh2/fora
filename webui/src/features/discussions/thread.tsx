@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/index";
 import { StatePanel } from "@/components/ui/state-panel";
 import { Tooltip } from "@/components/ui/tooltip";
-import { MessageAttachment } from "@/features/discussions/attachments";
+import { MessageAttachments } from "@/features/discussions/attachments";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionMembersDialog } from "@/features/discussions/members";
 import { useThreadData } from "@/features/discussions/thread-data";
@@ -1191,14 +1191,13 @@ export const MessageRow = memo(function MessageRow({
           mentions={message.mentions}
           inlineMedia
         />
-        {message.attachments.map((attachment) => (
-          <MessageAttachment
-            key={attachment.id}
+        {message.attachments.length === 0 ? null : (
+          <MessageAttachments
             discussionId={discussionId}
             messageId={message.id}
-            attachment={attachment}
+            attachments={message.attachments}
           />
-        ))}
+        )}
       </div>
     </div>
   );

@@ -211,7 +211,7 @@ async function rememberSize(
   return size;
 }
 
-function singleBox(size: { width: number; height: number } | null) {
+export function mediaSingleBox(size: { width: number; height: number } | null) {
   if (size === null) return undefined;
   const wide = Math.min(
     SINGLE_WIDTH,
@@ -223,6 +223,13 @@ function singleBox(size: { width: number; height: number } | null) {
     "--inline-single-narrow-width": `${narrow}px`,
     aspectRatio: `${size.width} / ${size.height}`,
   } as CSSProperties;
+}
+
+export function mediaGridBox(total: number) {
+  return {
+    columns: total === 2 ? 2 : total === 4 ? 2 : 3,
+    height: total === 2 ? 200 : total === 4 ? 160 : 120,
+  };
 }
 
 function MediaFailure({
@@ -366,7 +373,7 @@ export function InlineMediaImage({
       ) : url === null ? (
         <div
           className="inline-media inline-media-single inline-media-pending"
-          style={singleBox(size)}
+          style={mediaSingleBox(size)}
         >
           <div className="inline-media-placeholder">
             <Spinner label="Loading image" />
@@ -388,7 +395,7 @@ export function InlineMediaImage({
         >
           <div
             className="inline-media inline-media-single"
-            style={singleBox(size)}
+            style={mediaSingleBox(size)}
           >
             <button
               type="button"
@@ -656,8 +663,7 @@ export function MediaGrid({
   const total = items.length;
   const shown =
     total > IMAGE_LIST_LIMIT ? items.slice(0, IMAGE_LIST_LIMIT) : items;
-  const columns = total === 2 ? 2 : total === 4 ? 2 : 3;
-  const height = total === 2 ? 200 : total === 4 ? 160 : 120;
+  const { columns, height } = mediaGridBox(total);
   const rows: GridItem[][] = [];
   for (let index = 0; index < shown.length; index += columns)
     rows.push(shown.slice(index, index + columns));

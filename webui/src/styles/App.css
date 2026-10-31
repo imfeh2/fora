@@ -170,6 +170,10 @@
   container: message / inline-size;
 }
 
+.attachment-images {
+  container: message / inline-size;
+}
+
 .inline-media {
   margin: 8px 0;
   width: min(100%, 640px);

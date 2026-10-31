@@ -1,10 +1,11 @@
 import { Download, FileIcon, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenuArea } from "@/components/ui/context-menu";
 import { ImageViewer } from "@/components/ui/image-viewer";
 import { Button, Spinner } from "@/components/ui/index";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ComposerFile } from "@/features/discussions/composer-state";
+import { mediaGridBox, mediaSingleBox } from "@/features/inline-media";
 import { type Attachment, backend } from "@/lib/backend";
 
 export function fileSize(size: number) {
@@ -76,28 +77,342 @@ export function ComposerAttachments({
   );
 }
 
+type ImageAttachment = Attachment & { width: number; height: number };
+
+function imageSize(image: ImageAttachment) {
+  return { width: image.width, height: image.height };
+}
+
+export function MessageAttachments({
+  discussionId,
+  messageId,
+  attachments,
+}: {
+  discussionId: number;
+  messageId: number;
+  attachments: Attachment[];
+}) {
+  const { images, files } = useMemo(() => {
+    const pictures: ImageAttachment[] = [];
+    const others: Attachment[] = [];
+    for (const attachment of attachments) {
+      if (attachment.width !== null && attachment.height !== null)
+        pictures.push(attachment as ImageAttachment);
+      else others.push(attachment);
+    }
+    return { images: pictures, files: others };
+  }, [attachments]);
+  return (
+    <>
+      {images.length === 0 ? null : (
+        <AttachmentImages
+          discussionId={discussionId}
+          messageId={messageId}
+          images={images}
+        />
+      )}
+      {files.map((attachment) => (
+        <MessageAttachment
+          key={attachment.id}
+          discussionId={discussionId}
+          messageId={messageId}
+          attachment={attachment}
+        />
+      ))}
+    </>
+  );
+}
+
+function AttachmentImages({
+  discussionId,
+  messageId,
+  images,
+}: {
+  discussionId: number;
+  messageId: number;
+  images: ImageAttachment[];
+}) {
+  const root = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [sources, setSources] = useState<Record<string, string>>({});
+  const [failures, setFailures] = useState<Record<string, string>>({});
+  const [attempt, setAttempt] = useState(0);
+  const [open, setOpen] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadUrls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
+    });
+    if (root.current) observer.observe(root.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    const abort = new AbortController();
+    const created: string[] = [];
+    const load = async (image: ImageAttachment) => {
+      try {
+        const blob = await backend.attachmentFile(
+          discussionId,
+          messageId,
+          image,
+          abort.signal,
+        );
+        if (abort.signal.aborted) return;
+        const url = URL.createObjectURL(blob);
+        created.push(url);
+        setSources((current) => ({ ...current, [image.id]: url }));
+      } catch (failure) {
+        if (abort.signal.aborted) return;
+        setFailures((current) => ({
+          ...current,
+          [image.id]:
+            failure instanceof Error ? failure.message : String(failure),
+        }));
+      }
+    };
+    for (const image of images) void load(image);
+    return () => {
+      abort.abort();
+      for (const url of created) URL.revokeObjectURL(url);
+      setSources({});
+      setFailures({});
+    };
+  }, [discussionId, messageId, images, visible, attempt]);
+
+  useEffect(
+    () => () => {
+      for (const [url, timer] of downloadUrls.current) {
+        clearTimeout(timer);
+        URL.revokeObjectURL(url);
+      }
+      downloadUrls.current.clear();
+    },
+    [],
+  );
+
+  const download = async (image: ImageAttachment) => {
+    if (downloading) return;
+    setDownloading(true);
+    setDownloadError(null);
+    const abort = new AbortController();
+    try {
+      const blob = await backend.attachmentFile(
+        discussionId,
+        messageId,
+        image,
+        abort.signal,
+      );
+      if (abort.signal.aborted) return;
+      const url = URL.createObjectURL(blob);
+      const timer = setTimeout(() => {
+        URL.revokeObjectURL(url);
+        downloadUrls.current.delete(url);
+      }, 30_000);
+      downloadUrls.current.set(url, timer);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = image.name;
+      document.body.append(link);
+      link.click();
+      link.remove();
+    } catch (failure) {
+      setDownloadError(
+        failure instanceof Error ? failure.message : String(failure),
+      );
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const gallery = useMemo(
+    () =>
+      images.flatMap((image) => {
+        const src = sources[image.id];
+        return src === undefined ? [] : [{ image, src }];
+      }),
+    [images, sources],
+  );
+  const actions = (image: ImageAttachment) => [
+    {
+      id: "download",
+      label: "Download",
+      icon: <Download size={15} />,
+      onSelect: () => void download(image),
+    },
+  ];
+  const fail = (image: ImageAttachment, message: string) =>
+    setFailures((current) => ({ ...current, [image.id]: message }));
+
+  const single = images.length === 1 ? images[0] : null;
+  const { columns, height } = mediaGridBox(images.length);
+  const rows: ImageAttachment[][] = [];
+  for (let index = 0; index < images.length; index += columns)
+    rows.push(images.slice(index, index + columns));
+
+  return (
+    <div ref={root} className="attachment-images my-2">
+      {single !== null ? (
+        failures[single.id] !== undefined ? (
+          <div
+            className="inline-media inline-media-single inline-media-fixed"
+            style={mediaSingleBox(imageSize(single))}
+          >
+            <div className="inline-media-failure">
+              <p className="m-0 text-fg">{single.name}</p>
+              <p role="alert" className="m-0 text-danger">
+                {failures[single.id]}
+              </p>
+              <Button
+                size="sm"
+                onClick={() => setAttempt((value) => value + 1)}
+              >
+                Retry
+              </Button>
+            </div>
+          </div>
+        ) : sources[single.id] === undefined ? (
+          <div
+            className="inline-media inline-media-single inline-media-pending"
+            style={mediaSingleBox(imageSize(single))}
+          >
+            <div className="inline-media-placeholder">
+              <Spinner label="Loading image" />
+              <span>Loading image…</span>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="inline-media inline-media-single"
+            style={mediaSingleBox(imageSize(single))}
+          >
+            <Tooltip label={single.name}>
+              <ContextMenuArea
+                asChild
+                label={`Actions for ${single.name}`}
+                actions={actions(single)}
+              >
+                <button
+                  type="button"
+                  className="inline-media-open"
+                  aria-label={`View ${single.name}`}
+                  onClick={() => setOpen(single.id)}
+                >
+                  <img
+                    src={sources[single.id]}
+                    alt={single.name}
+                    onError={() =>
+                      fail(single, "The image could not be displayed.")
+                    }
+                  />
+                </button>
+              </ContextMenuArea>
+            </Tooltip>
+          </div>
+        )
+      ) : (
+        <div className="inline-media inline-media-grid">
+          {rows.map((row, rowIndex) => (
+            <div
+              key={rowIndex}
+              className={`inline-media-row inline-media-row-${height}`}
+            >
+              {row.map((image) => (
+                <Tooltip key={image.id} label={image.name}>
+                  <ContextMenuArea
+                    asChild
+                    label={`Actions for ${image.name}`}
+                    actions={actions(image)}
+                  >
+                    <button
+                      type="button"
+                      className="inline-media-cell inline-media-open"
+                      aria-label={`View ${image.name}`}
+                      onClick={() => setOpen(image.id)}
+                    >
+                      {sources[image.id] === undefined ? (
+                        failures[image.id] === undefined ? (
+                          <Spinner label="Loading image" />
+                        ) : (
+                          <span role="alert" className="text-xs text-danger">
+                            {failures[image.id]}
+                          </span>
+                        )
+                      ) : (
+                        <img
+                          src={sources[image.id]}
+                          alt={image.name}
+                          onError={() =>
+                            fail(image, "The image could not be displayed.")
+                          }
+                        />
+                      )}
+                    </button>
+                  </ContextMenuArea>
+                </Tooltip>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {downloadError === null ? null : (
+        <div
+          role="alert"
+          className="flex items-center gap-2 pt-2 text-sm text-danger"
+        >
+          {downloadError}
+          <Button
+            size="sm"
+            disabled={downloading}
+            onClick={() => {
+              const item = gallery[0];
+              if (item) void download(item.image);
+            }}
+          >
+            Retry download
+          </Button>
+        </div>
+      )}
+      {open === null ? null : (
+        <ImageViewer
+          open
+          images={images.map((image) => ({
+            src: `attachment:${image.id}`,
+            name: image.name,
+            alt: image.name,
+            load: (signal: AbortSignal) =>
+              backend.attachmentFile(discussionId, messageId, image, signal),
+          }))}
+          index={Math.max(
+            0,
+            images.findIndex((image) => image.id === open),
+          )}
+          onIndex={(next) => setOpen(images[next]?.id ?? null)}
+          onClose={() => setOpen(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 export function MessageAttachment({
   discussionId,
   messageId,
   attachment,
-  thumbnail = false,
 }: {
   discussionId: number;
   messageId: number;
   attachment: Attachment;
-  thumbnail?: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-  const [url, setUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [opened, setOpened] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadRequest = useRef<AbortController | null>(null);
   const downloadUrls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const [attempt, setAttempt] = useState(0);
   useEffect(
     () => () => {
       downloadRequest.current?.abort();
@@ -109,50 +424,6 @@ export function MessageAttachment({
     },
     [],
   );
-  const image = attachment.width !== null && attachment.height !== null;
-  const shouldLoad = image && (thumbnail || visible || opened);
-  useEffect(() => {
-    if (thumbnail) return;
-    const observer = new IntersectionObserver((entries) =>
-      setVisible(entries.some((entry) => entry.isIntersecting)),
-    );
-    if (root.current) observer.observe(root.current);
-    return () => observer.disconnect();
-  }, [thumbnail]);
-  useEffect(() => {
-    if (!shouldLoad) {
-      setUrl(null);
-      setLoading(false);
-      return;
-    }
-    const abort = new AbortController();
-    let objectUrl: string | null = null;
-    setLoading(true);
-    setError(null);
-    void backend
-      .attachmentFile(discussionId, messageId, attachment, abort.signal)
-      .then(
-        (blob) => {
-          if (abort.signal.aborted) return;
-          objectUrl = URL.createObjectURL(blob);
-          setUrl(objectUrl);
-          setLoading(false);
-        },
-        (failure: unknown) => {
-          if (!abort.signal.aborted) {
-            setError(
-              failure instanceof Error ? failure.message : String(failure),
-            );
-            setLoading(false);
-          }
-        },
-      );
-    return () => {
-      abort.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [discussionId, messageId, attachment, shouldLoad, attempt]);
-
   const download = async () => {
     if (downloadRequest.current) return;
     const abort = new AbortController();
@@ -189,102 +460,6 @@ export function MessageAttachment({
       if (!abort.signal.aborted) setDownloading(false);
     }
   };
-
-  const previewFeedback =
-    error === null ? null : (
-      <div
-        role="alert"
-        className="flex items-center gap-2 pt-2 text-sm text-fg-muted"
-      >
-        <span className="text-danger">{error}</span>
-        <Button size="sm" onClick={() => setAttempt((value) => value + 1)}>
-          Retry preview
-        </Button>
-      </div>
-    );
-
-  if (image) {
-    return (
-      <div ref={root} className="my-2 max-w-sm">
-        {url !== null && error === null ? (
-          <Tooltip label={attachment.name}>
-            <ContextMenuArea
-              asChild
-              label={`Actions for ${attachment.name}`}
-              actions={[
-                {
-                  id: "download",
-                  label: "Download",
-                  icon: <Download size={15} />,
-                  onSelect: () => void download(),
-                },
-              ]}
-            >
-              <button
-                type="button"
-                aria-label={`View ${attachment.name}`}
-                onClick={() => setOpened(true)}
-                className={
-                  thumbnail
-                    ? "block w-full max-h-[200px] overflow-hidden rounded-lg bg-black/10"
-                    : "block w-full max-h-[280px] overflow-hidden rounded-lg bg-black/10"
-                }
-                style={{
-                  aspectRatio: `${attachment.width}/${attachment.height}`,
-                }}
-              >
-                <img
-                  src={url}
-                  alt={attachment.name}
-                  className="h-full w-full object-contain"
-                  onError={() => setError("The image could not be displayed.")}
-                />
-              </button>
-            </ContextMenuArea>
-          </Tooltip>
-        ) : (
-          <div
-            className="flex w-full items-center justify-center overflow-hidden rounded-lg bg-black/10"
-            style={{
-              aspectRatio: `${attachment.width}/${attachment.height}`,
-              maxHeight: thumbnail ? "200px" : "280px",
-            }}
-          >
-            {loading ? <Spinner label="Loading image" /> : null}
-          </div>
-        )}
-        {opened ? null : previewFeedback}
-        {downloadError === null ? null : (
-          <div
-            role="alert"
-            className="flex items-center gap-2 pt-2 text-sm text-danger"
-          >
-            {downloadError}
-            <Button
-              size="sm"
-              disabled={downloading}
-              onClick={() => void download()}
-            >
-              Retry download
-            </Button>
-          </div>
-        )}
-        {url === null || error !== null ? null : (
-          <ImageViewer
-            open={opened}
-            images={[
-              {
-                src: url,
-                name: attachment.name,
-                alt: attachment.name,
-              },
-            ]}
-            onClose={() => setOpened(false)}
-          />
-        )}
-      </div>
-    );
-  }
 
   return (
     <div
