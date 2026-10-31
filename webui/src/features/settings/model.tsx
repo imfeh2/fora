@@ -973,6 +973,7 @@ export function ModelPanel({
                               </span>
                             </button>
                             <OverflowMenu
+                              compact
                               className={rowDisabled ? "opacity-45" : undefined}
                               label={`Actions for ${item.name}`}
                               actions={[
