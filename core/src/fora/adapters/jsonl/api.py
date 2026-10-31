@@ -703,7 +703,7 @@ def settings_get(context: _Context, params: dict[str, Any]) -> Any:
     section = str(params.get("section", "model"))
     values = context.settings.get_settings(section) or {}
     if section == "model":
-        return ModelCatalog.restore(values).redacted()
+        return ModelCatalog.restore(values).public()
     if section == "voice":
         if "mode" in values:
             values = context.settings.update_settings("voice", {})
@@ -737,7 +737,7 @@ def settings_update(context: _Context, params: dict[str, Any]) -> Any:
     updated = context.settings.update_settings(section, values)
     context.api._dispatcher.emit("settings.updated", {"section": section})
     if section == "model":
-        return ModelCatalog.restore(updated).redacted()
+        return ModelCatalog.restore(updated).public()
     return settings_get(context, {"section": section})
 
 

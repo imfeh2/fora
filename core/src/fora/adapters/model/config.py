@@ -514,6 +514,8 @@ class ModelCatalog(ConfigurationRecord):
                 if record_id is not None:
                     provider = updated.provider(record_id)
                     merged = provider.model_dump()
+                    # The web UI no longer sends clear_key; older builds still do, so
+                    # keep accepting it.
                     if values.pop("clear_key", False):
                         values["api_key"] = ""
                     merged.update(values)
@@ -600,7 +602,7 @@ class ModelCatalog(ConfigurationRecord):
             )
         return updated
 
-    def redacted(self) -> dict[str, Any]:
+    def public(self) -> dict[str, Any]:
         values = self.model_dump()
         for model, public in zip(self.models, values["models"], strict=True):
             public["thinking_options"] = thinking_options(
