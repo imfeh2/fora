@@ -1208,24 +1208,19 @@ function ProviderModelEditor({
             <p className="font-medium">{model.name}</p>
             <p className="text-xs text-fg-muted">{model.model}</p>
           </div>
-          <label
-            htmlFor={`${id}-enabled`}
-            className="flex items-center gap-2 text-sm"
-          >
-            <Input
-              id={`${id}-enabled`}
-              type="checkbox"
+          <div className="flex items-center gap-2 text-sm">
+            <Switch
               aria-label={`Enable model ${model.name}`}
               checked={model.enabled}
               disabled={busy || unavailable}
-              onChange={(event) =>
+              onCheckedChange={(checked) =>
                 void save("save_model", model.id, {
-                  enabled: event.target.checked,
+                  enabled: checked,
                 })
               }
             />
-            Enabled
-          </label>
+            <span>Enabled</span>
+          </div>
           <Button size="sm" disabled={busy} onClick={() => setExpanded(true)}>
             Edit
           </Button>
