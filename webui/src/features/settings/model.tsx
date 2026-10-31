@@ -4,9 +4,13 @@ import {
   Eye,
   EyeOff,
   Pencil,
+  PlugZap,
+  Plus,
+  RefreshCw,
   Save,
   Search,
   Settings,
+  Trash2,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -711,7 +715,7 @@ export function ModelPanel({
     <fieldset
       ref={editor}
       aria-label="Provider configuration"
-      className="m-0 flex min-w-0 max-w-[720px] flex-col gap-6 border-0 p-0"
+      className="m-0 mx-auto flex w-full min-w-0 max-w-[720px] flex-col gap-6 border-0 p-0"
       key={`${selected}-${revision}`}
     >
       {error ? (
@@ -1168,9 +1172,15 @@ function ProviderModelEditor({
     });
   };
   const addAction = (
-    <Button disabled={busy || unavailable} onClick={() => setExpanded(true)}>
-      Add model
-    </Button>
+    <IconButton
+      label="Add model"
+      size="sm"
+      className={iconHitAreaPair}
+      disabled={busy || unavailable}
+      onClick={() => setExpanded(true)}
+    >
+      <Plus size={16} strokeWidth={1.5} />
+    </IconButton>
   );
   return (
     <section
@@ -1203,16 +1213,27 @@ function ProviderModelEditor({
             />
             Enabled
           </label>
-          <Button size="sm" disabled={busy} onClick={() => setExpanded(true)}>
-            Edit
-          </Button>
-          <Button
+          <IconButton
+            label="Edit model"
             size="sm"
+            className={iconHitAreaPair}
+            disabled={busy}
+            onClick={() => setExpanded(true)}
+          >
+            <Pencil size={16} strokeWidth={1.5} />
+          </IconButton>
+          <IconButton
+            label="Delete model"
+            size="sm"
+            className={clsx(
+              iconHitAreaPair,
+              "text-danger hover:enabled:bg-red-500/18 hover:enabled:text-red-100",
+            )}
             disabled={busy || unavailable}
             onClick={() => setDeleting(true)}
           >
-            Delete
-          </Button>
+            <Trash2 size={16} strokeWidth={1.5} />
+          </IconButton>
         </>
       ) : (
         directory?.(addAction)
@@ -1711,41 +1732,44 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
   );
   return (
     <>
-      {provider ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 className="wrap-anywhere text-base font-medium">
-              {provider.name}
-            </h2>
-            <Chip>{provider.api_type}</Chip>
-            <IconButton
-              label="Edit provider"
-              size="sm"
-              disabled={busy}
-              onClick={() => onEdit(true)}
+      <div className="mx-auto flex w-full min-w-0 max-w-[720px] flex-col gap-4">
+        {provider ? (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="wrap-anywhere text-base font-medium">
+                {provider.name}
+              </h2>
+              <Chip>{provider.api_type}</Chip>
+              <IconButton
+                label="Edit provider"
+                size="sm"
+                disabled={busy}
+                onClick={() => onEdit(true)}
+              >
+                <Pencil size={16} />
+              </IconButton>
+            </div>
+            <label
+              htmlFor={`${id}-enabled`}
+              className="flex items-center gap-2 text-sm"
             >
-              <Pencil size={16} />
-            </IconButton>
+              <Switch
+                id={`${id}-enabled`}
+                aria-label={`Enable ${provider.name}`}
+                checked={provider.enabled}
+                disabled={busy || unavailable}
+                onCheckedChange={(checked) =>
+                  void save("save_provider", provider.id, {
+                    enabled: checked,
+                  })
+                }
+              />
+              Enabled
+            </label>
           </div>
-          <label
-            htmlFor={`${id}-enabled`}
-            className="flex items-center gap-2 text-sm"
-          >
-            <Switch
-              id={`${id}-enabled`}
-              aria-label={`Enable ${provider.name}`}
-              checked={provider.enabled}
-              disabled={busy || unavailable}
-              onCheckedChange={(checked) =>
-                void save("save_provider", provider.id, {
-                  enabled: checked,
-                })
-              }
-            />
-            Enabled
-          </label>
-        </div>
-      ) : null}
+        ) : null}
+        {editOpen ? null : fields}
+      </div>
       {editOpen ? (
         <Modal
           open
@@ -1760,9 +1784,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
         >
           {content}
         </Modal>
-      ) : (
-        fields
-      )}
+      ) : null}
     </>
   );
 }
@@ -1822,6 +1844,11 @@ function useModelProbe(identity: string, disabled: boolean) {
   return { testing, feedback, run };
 }
 
+const iconHitArea =
+  "relative after:absolute after:-inset-[10px] after:content-['']";
+const iconHitAreaPair =
+  "relative after:absolute after:-inset-y-[10px] after:-inset-x-[5px] after:content-['']";
+
 function ProviderTest({
   provider,
   models,
@@ -1845,9 +1872,15 @@ function ProviderTest({
   return (
     <>
       <span className="inline-flex items-center gap-1">
-        <Button disabled={disabled} onClick={() => setOpen(true)}>
-          Test
-        </Button>
+        <IconButton
+          label="Test connection"
+          size="sm"
+          className={iconHitArea}
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+        >
+          <PlugZap size={16} strokeWidth={1.5} />
+        </IconButton>
         {hint ? (
           <Tooltip label={hint}>
             <button
@@ -2014,9 +2047,15 @@ function ModelDirectory({
   }, [open, load]);
   const actions = (
     <div className="flex flex-wrap items-center gap-2">
-      <Button disabled={disabled} onClick={() => setOpen(true)}>
-        Get model list
-      </Button>
+      <IconButton
+        label="Get model list"
+        size="sm"
+        className={iconHitAreaPair}
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
+        <RefreshCw size={16} strokeWidth={1.5} />
+      </IconButton>
       {addAction}
     </div>
   );
@@ -2025,7 +2064,7 @@ function ModelDirectory({
   );
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
         <h3 className="text-base font-medium">
           Models <span className="text-fg-muted">{modelCount}</span>
         </h3>

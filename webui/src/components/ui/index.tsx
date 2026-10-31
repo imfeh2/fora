@@ -186,12 +186,14 @@ export function IconButton({
       <button
         {...rest}
         type={type}
-        className={clsx(
-          "inline-flex items-center justify-center flex-none border rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color] duration-(--duration-fast) ease-linear hover:enabled:bg-surface-hover hover:enabled:border-line-hover disabled:not-aria-pressed:text-fg-disabled disabled:cursor-not-allowed aria-pressed:bg-blue-500/18 aria-pressed:text-blue-100",
-          iconButtonSizes[size],
-          touchTarget &&
-            "narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11",
-          className,
+        className={twMerge(
+          clsx(
+            "inline-flex items-center justify-center flex-none border rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color] duration-(--duration-fast) ease-linear hover:enabled:bg-surface-hover hover:enabled:border-line-hover disabled:not-aria-pressed:text-fg-disabled disabled:cursor-not-allowed aria-pressed:bg-blue-500/18 aria-pressed:text-blue-100",
+            iconButtonSizes[size],
+            touchTarget &&
+              "narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11",
+            className,
+          ),
         )}
         aria-label={label}
         aria-pressed={pressed}
