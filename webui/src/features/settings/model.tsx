@@ -1597,6 +1597,7 @@ function ProviderForm({
             <IconButton
               label={showKey ? "Hide API key" : "Show API key"}
               size="sm"
+              className={iconHitAreaPair}
               onClick={() => setShowKey((value) => !value)}
             >
               {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -1631,6 +1632,7 @@ function ProviderForm({
             <IconButton
               label="Advanced settings"
               size="sm"
+              className={iconHitArea}
               onClick={() => setAdvanced((value) => !value)}
             >
               <Settings size={16} />
@@ -1743,6 +1745,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
               <IconButton
                 label="Edit provider"
                 size="sm"
+                className={iconHitArea}
                 disabled={busy}
                 onClick={() => onEdit(true)}
               >
@@ -1875,7 +1878,7 @@ function ProviderTest({
         <IconButton
           label="Test connection"
           size="sm"
-          className={iconHitArea}
+          className={iconHitAreaPair}
           disabled={disabled}
           onClick={() => setOpen(true)}
         >
