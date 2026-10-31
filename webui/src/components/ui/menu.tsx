@@ -39,7 +39,7 @@ const triggerClasses =
   "inline-flex items-center justify-center size-7 narrow:size-11 narrow:min-w-11 narrow:min-h-11 touch:size-11 touch:min-w-11 touch:min-h-11 border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg";
 
 const compactTriggerClasses =
-  "relative inline-flex items-center justify-center size-7 flex-none border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg after:absolute after:-inset-y-2 after:-left-2 after:right-0 after:content-['']";
+  "relative inline-flex items-center justify-center size-7 flex-none border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg after:absolute after:-inset-y-[9px] after:-left-2 after:right-0 after:content-['']";
 
 export function OverflowMenu({
   label,
