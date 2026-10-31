@@ -19,6 +19,7 @@ export type ProviderConfig = {
   name: string;
   api_type: string;
   base_url: string;
+  api_key: string;
   api_key_set: boolean;
   enabled: boolean;
   extra_body?: Record<string, HistoryValue>;

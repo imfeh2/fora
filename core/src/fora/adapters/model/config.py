@@ -514,8 +514,6 @@ class ModelCatalog(ConfigurationRecord):
                 if record_id is not None:
                     provider = updated.provider(record_id)
                     merged = provider.model_dump()
-                    if values.get("api_key") == "":
-                        values.pop("api_key")
                     if values.pop("clear_key", False):
                         values["api_key"] = ""
                     merged.update(values)
@@ -603,7 +601,7 @@ class ModelCatalog(ConfigurationRecord):
         return updated
 
     def redacted(self) -> dict[str, Any]:
-        values = self.model_dump(exclude={"providers": {"__all__": {"api_key"}}})
+        values = self.model_dump()
         for model, public in zip(self.models, values["models"], strict=True):
             public["thinking_options"] = thinking_options(
                 self.provider(model.provider_id).api_type,

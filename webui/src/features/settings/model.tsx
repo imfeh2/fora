@@ -744,13 +744,8 @@ export function ModelPanel({
           recovery={recovery}
           saveError={error}
           unavailable={providerMissing}
-          onDeleted={() => {
-            resetEditor();
-            setSelected(null);
-          }}
           onDraft={providerDraft}
           onCancel={() => choose(null)}
-          modelCount={models.length}
           models={currentModels}
           editOpen={editProvider}
           onEdit={setEditProvider}
@@ -1334,11 +1329,9 @@ function ProviderForm({
   save,
   busy,
   saving,
-  onDeleted,
   onDraft,
   onCancel,
   unavailable = false,
-  modelCount = 0,
   recovery,
   saveError,
   models,
@@ -1357,18 +1350,15 @@ function ProviderForm({
   save: SaveModel;
   busy: boolean;
   saving: boolean;
-  onDeleted: () => void;
   onDraft?: (dirty: boolean, connectionDirty: boolean) => void;
   onCancel?: () => void;
-  modelCount?: number;
 }) {
   const id = useId();
   const [name, setName] = useState(provider?.name ?? "");
   const [apiType, setApiType] = useState(provider?.api_type ?? "openai-chat");
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "");
-  const [apiKey, setApiKey] = useState("");
+  const [apiKey, setApiKey] = useState(provider?.api_key ?? "");
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
-  const [clearKey, setClearKey] = useState(false);
   const [extraBody, setExtraBody] = useState(
     JSON.stringify(provider?.extra_body ?? {}),
   );
@@ -1376,8 +1366,7 @@ function ProviderForm({
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   const restoreBodyFocus = useRef(false);
   const [nameError, setNameError] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [showKey, setShowKey] = useState(false);
+  const [showKey, setShowKey] = useState(true);
   const [advanced, setAdvanced] = useState(false);
   const dirty = useRef(false);
   const body = parseRequestBody(extraBody, apiType);
@@ -1385,8 +1374,7 @@ function ProviderForm({
   const connectionDirty =
     apiType !== (provider?.api_type ?? "openai-chat") ||
     baseUrl !== (provider?.base_url ?? "") ||
-    apiKey !== "" ||
-    clearKey ||
+    apiKey !== (provider?.api_key ?? "") ||
     body.error !== null ||
     JSON.stringify(body.value) !== JSON.stringify(provider?.extra_body ?? {});
   const draftDirty =
@@ -1422,8 +1410,7 @@ function ProviderForm({
       setName(provider?.name ?? "");
       setApiType(provider?.api_type ?? "openai-chat");
       setBaseUrl(provider?.base_url ?? "");
-      setApiKey("");
-      setClearKey(false);
+      setApiKey(provider?.api_key ?? "");
       setExtraBody(JSON.stringify(provider?.extra_body ?? {}));
       setBodyError(null);
       onDraft?.(false, false);
@@ -1457,7 +1444,6 @@ function ProviderForm({
           api_key: apiKey.trim(),
           enabled,
           extra_body: body.value,
-          ...(provider ? { clear_key: clearKey } : {}),
         },
         (message) => {
           setBodyError(message);
@@ -1469,8 +1455,7 @@ function ProviderForm({
       dirty.current = false;
       setName(name.trim());
       setBaseUrl(baseUrl.trim());
-      setApiKey("");
-      setClearKey(false);
+      setApiKey(apiKey.trim());
       onEdit(false);
     }
   };
@@ -1482,28 +1467,6 @@ function ProviderForm({
         </Button>
       }
     >
-      {provider ? (
-        <span className="inline-flex items-center gap-2">
-          <Button
-            disabled={busy || unavailable || modelCount > 0}
-            onClick={() => setConfirmDelete(true)}
-          >
-            {onDraft ? "Delete" : "Delete provider"}
-          </Button>
-          {modelCount > 0 ? (
-            <Tooltip label="Remove this provider's models first.">
-              <button
-                type="button"
-                disabled={busy}
-                aria-label="About deleting this provider"
-                className="inline-flex cursor-help p-1.5 -m-1.5"
-              >
-                <CircleHelp size={14} />
-              </button>
-            </Tooltip>
-          ) : null}
-        </span>
-      ) : null}
       <Button
         type="submit"
         variant="primary"
@@ -1575,15 +1538,7 @@ function ProviderForm({
             </Field>
           </>
         ) : null}
-        <Field
-          label="API key"
-          htmlFor={`${id}-key`}
-          hint={
-            provider?.api_key_set
-              ? "Leave blank to keep the stored key."
-              : undefined
-          }
-        >
+        <Field label="API key" htmlFor={`${id}-key`}>
           <div className="flex flex-wrap items-center gap-2">
             <div className="min-w-0 flex-1 basis-40">
               <Input
@@ -1602,9 +1557,6 @@ function ProviderForm({
             >
               {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
             </IconButton>
-            {provider?.api_key_set ? (
-              <Chip tone="success">Key stored</Chip>
-            ) : null}
             {provider ? (
               <ProviderTest
                 provider={provider}
@@ -1693,36 +1645,7 @@ Applies from the next Turn for OpenAI Chat, OpenAI Responses and Anthropic.`}
             ) : null}
           </Field>
         ) : null}
-        {provider?.api_key_set ? (
-          <label
-            htmlFor={`${id}-clear-key`}
-            className="flex items-center gap-2 text-sm"
-          >
-            <Input
-              id={`${id}-clear-key`}
-              type="checkbox"
-              checked={clearKey}
-              onChange={(event) => setClearKey(event.target.checked)}
-            />
-            Clear stored key
-          </label>
-        ) : null}
       </fieldset>
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={`Delete ${provider?.name}?`}
-        description="The provider is removed from the settings for every Member. This cannot be undone."
-        confirmLabel="Delete provider"
-        onConfirm={async () => {
-          if (
-            !unavailable &&
-            provider &&
-            (await save("delete_provider", provider.id))
-          )
-            onDeleted();
-        }}
-      />
     </>
   );
   const fields = (
