@@ -938,21 +938,18 @@ export function ModelPanel({
                       {visibleProviderRows.map((item) => {
                         const rowDisabled = busy || uncertain || !connected;
                         return (
-                          <div
-                            key={item.id}
-                            className={clsx(
-                              "flex min-h-11 min-w-0 items-center gap-2 rounded-sm px-2 py-1 transition-[background-color] duration-[90ms] ease-linear",
-                              rowDisabled
-                                ? "cursor-not-allowed"
-                                : "hover:bg-surface-hover",
-                              selected === item.id &&
-                                "bg-surface-hover shadow-[inset_2px_0_0_var(--color-blue-300)]",
-                            )}
-                          >
+                          <div key={item.id} className="relative">
                             <button
                               type="button"
                               data-provider-target
-                              className="min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-300"
+                              className={clsx(
+                                "flex min-h-11 w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1 pr-11 text-left transition-[background-color] duration-[90ms] ease-linear focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-300",
+                                rowDisabled
+                                  ? "cursor-not-allowed"
+                                  : "cursor-pointer hover:bg-surface-hover",
+                                selected === item.id &&
+                                  "bg-surface-hover shadow-[inset_2px_0_0_var(--color-blue-300)]",
+                              )}
                               aria-current={
                                 selected === item.id ? "true" : undefined
                               }
@@ -964,7 +961,7 @@ export function ModelPanel({
                             >
                               <span
                                 className={clsx(
-                                  "block truncate text-sm font-medium",
+                                  "block min-w-0 truncate text-sm font-medium",
                                   rowDisabled && "text-fg-muted",
                                 )}
                                 title={item.name}
@@ -972,39 +969,42 @@ export function ModelPanel({
                                 {item.name}
                               </span>
                             </button>
-                            <OverflowMenu
-                              compact
-                              className={
-                                rowDisabled
-                                  ? "opacity-45 cursor-not-allowed"
-                                  : undefined
-                              }
-                              label={`Actions for ${item.name}`}
-                              actions={[
-                                {
-                                  id: "edit",
-                                  label: "Edit",
-                                  disabled: busy || uncertain || !connected,
-                                  onSelect: () => choose(item.id, true),
-                                },
-                                {
-                                  id: "delete",
-                                  label: "Delete",
-                                  tone: "danger",
-                                  disabled:
-                                    busy ||
-                                    uncertain ||
-                                    !connected ||
-                                    catalog.models.some(
-                                      (model) => model.provider_id === item.id,
-                                    ) ||
-                                    !catalog.providers.some(
-                                      (provider) => provider.id === item.id,
-                                    ),
-                                  onSelect: () => setDeleteProvider(item),
-                                },
-                              ]}
-                            />
+                            <span className="absolute inset-y-0 right-2 flex items-center">
+                              <OverflowMenu
+                                compact
+                                className={
+                                  rowDisabled
+                                    ? "opacity-45 cursor-not-allowed"
+                                    : undefined
+                                }
+                                label={`Actions for ${item.name}`}
+                                actions={[
+                                  {
+                                    id: "edit",
+                                    label: "Edit",
+                                    disabled: busy || uncertain || !connected,
+                                    onSelect: () => choose(item.id, true),
+                                  },
+                                  {
+                                    id: "delete",
+                                    label: "Delete",
+                                    tone: "danger",
+                                    disabled:
+                                      busy ||
+                                      uncertain ||
+                                      !connected ||
+                                      catalog.models.some(
+                                        (model) =>
+                                          model.provider_id === item.id,
+                                      ) ||
+                                      !catalog.providers.some(
+                                        (provider) => provider.id === item.id,
+                                      ),
+                                    onSelect: () => setDeleteProvider(item),
+                                  },
+                                ]}
+                              />
+                            </span>
                           </div>
                         );
                       })}
