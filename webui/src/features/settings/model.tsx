@@ -974,7 +974,11 @@ export function ModelPanel({
                             </button>
                             <OverflowMenu
                               compact
-                              className={rowDisabled ? "opacity-45" : undefined}
+                              className={
+                                rowDisabled
+                                  ? "opacity-45 cursor-not-allowed"
+                                  : undefined
+                              }
                               label={`Actions for ${item.name}`}
                               actions={[
                                 {
