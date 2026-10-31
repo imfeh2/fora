@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { twMerge } from "tailwind-merge";
 
 const MENU_WIDTH = 168;
 
@@ -163,10 +164,12 @@ export function OverflowMenu({
       <button
         ref={trigger}
         type="button"
-        className={clsx(
-          triggerClassName ??
-            (compact ? compactTriggerClasses : triggerClasses),
-          className,
+        className={twMerge(
+          clsx(
+            triggerClassName ??
+              (compact ? compactTriggerClasses : triggerClasses),
+            className,
+          ),
         )}
         aria-label={label}
         aria-haspopup="menu"
