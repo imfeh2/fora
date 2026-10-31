@@ -1,5 +1,10 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
-import type { ReactNode } from "react";
+import {
+  type ComponentPropsWithoutRef,
+  type ElementRef,
+  forwardRef,
+  type ReactNode,
+} from "react";
 
 export type ContextMenuAction = {
   id: string;
@@ -8,22 +13,25 @@ export type ContextMenuAction = {
   onSelect: () => void;
 };
 
-export function ContextMenuArea({
-  label,
-  actions,
-  children,
-  className,
-  asChild = false,
-}: {
+type ContextMenuAreaProps = {
   label: string;
   actions: ContextMenuAction[];
   children: ReactNode;
-  className?: string;
-  asChild?: boolean;
-}) {
+} & Omit<
+  ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Trigger>,
+  "children"
+>;
+
+export const ContextMenuArea = forwardRef<
+  ElementRef<typeof ContextMenuPrimitive.Trigger>,
+  ContextMenuAreaProps
+>(function ContextMenuArea(
+  { label, actions, children, asChild = false, ...props },
+  ref,
+) {
   return (
     <ContextMenuPrimitive.Root>
-      <ContextMenuPrimitive.Trigger className={className} asChild={asChild}>
+      <ContextMenuPrimitive.Trigger ref={ref} asChild={asChild} {...props}>
         {children}
       </ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
@@ -56,4 +64,4 @@ export function ContextMenuArea({
       </ContextMenuPrimitive.Portal>
     </ContextMenuPrimitive.Root>
   );
-}
+});
