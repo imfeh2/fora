@@ -1,7 +1,9 @@
 import { Download, FileIcon, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ContextMenuArea } from "@/components/ui/context-menu";
 import { ImageViewer } from "@/components/ui/image-viewer";
 import { Button, Spinner } from "@/components/ui/index";
+import { Tooltip } from "@/components/ui/tooltip";
 import type { ComposerFile } from "@/features/discussions/composer-state";
 import { type Attachment, backend } from "@/lib/backend";
 
@@ -96,11 +98,6 @@ export function MessageAttachment({
   const downloadRequest = useRef<AbortController | null>(null);
   const downloadUrls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [attempt, setAttempt] = useState(0);
-  const images = useMemo(
-    () =>
-      url ? [{ src: url, name: attachment.name, alt: attachment.name }] : [],
-    [url, attachment.name],
-  );
   useEffect(
     () => () => {
       downloadRequest.current?.abort();
@@ -194,54 +191,108 @@ export function MessageAttachment({
   };
 
   const previewFeedback =
-    error || loading ? (
+    error === null ? null : (
       <div
-        role={error ? "alert" : undefined}
-        className="flex items-center gap-2 px-3 pb-3 text-sm text-fg-muted"
+        role="alert"
+        className="flex items-center gap-2 pt-2 text-sm text-fg-muted"
       >
-        {error ? <span className="text-danger">{error}</span> : null}
+        <span className="text-danger">{error}</span>
         <Button size="sm" onClick={() => setAttempt((value) => value + 1)}>
           Retry preview
         </Button>
       </div>
-    ) : null;
+    );
+
+  if (image) {
+    return (
+      <div ref={root} className="my-2 max-w-sm">
+        {url !== null && error === null ? (
+          <Tooltip label={attachment.name}>
+            <ContextMenuArea
+              asChild
+              label={`Actions for ${attachment.name}`}
+              actions={[
+                {
+                  id: "download",
+                  label: "Download",
+                  icon: <Download size={15} />,
+                  onSelect: () => void download(),
+                },
+              ]}
+            >
+              <button
+                type="button"
+                aria-label={`View ${attachment.name}`}
+                onClick={() => setOpened(true)}
+                className={
+                  thumbnail
+                    ? "block w-full max-h-[200px] overflow-hidden rounded-lg bg-black/10"
+                    : "block w-full max-h-[280px] overflow-hidden rounded-lg bg-black/10"
+                }
+                style={{
+                  aspectRatio: `${attachment.width}/${attachment.height}`,
+                }}
+              >
+                <img
+                  src={url}
+                  alt={attachment.name}
+                  className="h-full w-full object-contain"
+                  onError={() => setError("The image could not be displayed.")}
+                />
+              </button>
+            </ContextMenuArea>
+          </Tooltip>
+        ) : (
+          <div
+            className="flex w-full items-center justify-center overflow-hidden rounded-lg bg-black/10"
+            style={{
+              aspectRatio: `${attachment.width}/${attachment.height}`,
+              maxHeight: thumbnail ? "200px" : "280px",
+            }}
+          >
+            {loading ? <Spinner label="Loading image" /> : null}
+          </div>
+        )}
+        {opened ? null : previewFeedback}
+        {downloadError === null ? null : (
+          <div
+            role="alert"
+            className="flex items-center gap-2 pt-2 text-sm text-danger"
+          >
+            {downloadError}
+            <Button
+              size="sm"
+              disabled={downloading}
+              onClick={() => void download()}
+            >
+              Retry download
+            </Button>
+          </div>
+        )}
+        {url === null || error !== null ? null : (
+          <ImageViewer
+            open={opened}
+            images={[
+              {
+                src: url,
+                name: attachment.name,
+                alt: attachment.name,
+              },
+            ]}
+            onClose={() => setOpened(false)}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
       ref={root}
       className="my-2 max-w-sm overflow-hidden rounded-lg border border-line bg-surface-raised"
     >
-      {image ? (
-        <button
-          type="button"
-          disabled={loading || error !== null || url === null}
-          aria-label={`View ${attachment.name}`}
-          onClick={() => setOpened(true)}
-          className={
-            thumbnail
-              ? "block w-full max-h-[200px] overflow-hidden bg-black/10"
-              : "block w-full max-h-[280px] overflow-hidden bg-black/10"
-          }
-          style={{
-            aspectRatio: `${attachment.width}/${attachment.height}`,
-          }}
-        >
-          {url && !error && !loading ? (
-            <img
-              src={url}
-              alt={attachment.name}
-              className="h-full w-full object-contain"
-              onError={() => setError("The image could not be displayed.")}
-            />
-          ) : loading ? (
-            <Spinner label="Loading image" />
-          ) : (
-            <span className="text-xs text-fg-muted">Image preview</span>
-          )}
-        </button>
-      ) : null}
       <div className="flex items-center gap-2 p-3">
-        {image ? null : <FileIcon size={20} />}
+        <FileIcon size={20} />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm" title={attachment.name}>
             {attachment.name}
@@ -260,8 +311,7 @@ export function MessageAttachment({
           Download
         </Button>
       </div>
-      {!opened ? previewFeedback : null}
-      {downloadError ? (
+      {downloadError === null ? null : (
         <div role="alert" className="px-3 pb-3 text-sm text-danger">
           {downloadError}
           <Button
@@ -272,12 +322,7 @@ export function MessageAttachment({
             Retry download
           </Button>
         </div>
-      ) : null}
-      <ImageViewer
-        open={opened}
-        images={images}
-        onClose={() => setOpened(false)}
-      />
+      )}
     </div>
   );
 }
