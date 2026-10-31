@@ -23,6 +23,25 @@ describe("library paths", () => {
     expect(libraryPathFromHref("./tasks/x.png")).toBe("tasks/x.png");
   });
 
+  it("interprets every leading slash relative to the Library root", () => {
+    expect(libraryPathFromHref("/root/.fora/library/tasks/x.png")).toBe(
+      "root/.fora/library/tasks/x.png",
+    );
+    expect(libraryPathFromHref("/tasks/x.png")).toBe("tasks/x.png");
+    expect(libraryPathFromHref("/etc/demo.png")).toBe("etc/demo.png");
+    expect(libraryPathFromHref("./etc/demo.png")).toBe("etc/demo.png");
+    expect(libraryPathFromHref("etc/demo.png")).toBe("etc/demo.png");
+    expect(libraryPathFromHref(encodeURI("/tasks/图 片.png"))).toBe(
+      "tasks/图 片.png",
+    );
+    expect(libraryPathFromHref("/root/.fora/library/../x.png")).toBeNull();
+  });
+
+  it.each(["C:/library/tasks/x.png", "D:\\library\\tasks\\x.png"])(
+    "rejects a drive-qualified path %s",
+    (href) => expect(libraryPathFromHref(href)).toBeNull(),
+  );
+
   it("rejects external, fragment, and parent paths", () => {
     expect(libraryPathFromHref("https://example.com/x")).toBeNull();
     expect(libraryPathFromHref("//example.com/x")).toBeNull();

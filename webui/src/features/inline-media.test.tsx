@@ -1,6 +1,7 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RouterProvider } from "@/app/router";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   estimateInlineMediaSize,
   imageSizeOf,
@@ -43,14 +44,23 @@ beforeAll(() => {
   URL.createObjectURL = vi.fn(() => "blob:inline-media");
   URL.revokeObjectURL = vi.fn();
   vi.spyOn(backend, "library").mockResolvedValue([]);
+  vi.spyOn(backend, "libraryFileUrl").mockImplementation(
+    async (path) =>
+      `http://fora/library/content?path=${encodeURIComponent(path)}`,
+  );
   vi.spyOn(backend, "libraryPoster").mockResolvedValue(
     "http://fora/library/poster?path=tasks/demo.mp4",
   );
 });
 
 afterEach(() => {
+  cleanup();
   vi.restoreAllMocks();
   vi.spyOn(backend, "library").mockResolvedValue([]);
+  vi.spyOn(backend, "libraryFileUrl").mockImplementation(
+    async (path) =>
+      `http://fora/library/content?path=${encodeURIComponent(path)}`,
+  );
   vi.spyOn(backend, "libraryPoster").mockResolvedValue(
     "http://fora/library/poster?path=tasks/demo.mp4",
   );
@@ -64,13 +74,15 @@ function pending() {
 
 function renderMessage(source: string, inlineMedia = true) {
   return render(
-    <RouterProvider>
-      <MarkdownContent
-        source={source}
-        identity="test-message"
-        inlineMedia={inlineMedia}
-      />
-    </RouterProvider>,
+    <TooltipProvider>
+      <RouterProvider>
+        <MarkdownContent
+          source={source}
+          identity="test-message"
+          inlineMedia={inlineMedia}
+        />
+      </RouterProvider>
+    </TooltipProvider>,
   );
 }
 
@@ -137,6 +149,57 @@ describe("inline media scope", () => {
     );
     expect(container.textContent).toContain("构建日志");
     expect(container.textContent).toContain("Retry");
+    const details = container.querySelector("details");
+    expect(details?.open).toBe(false);
+    fireEvent.click(details?.querySelector("summary") as HTMLElement);
+    await waitFor(() =>
+      expect(details?.textContent).toContain(
+        "File URL: http://fora/library/content?path=tasks%2Fa.png",
+      ),
+    );
+    expect(details?.textContent).toContain("Stage: File request");
+    expect(details?.textContent).toContain("Message: missing");
+    expect(
+      container.querySelector('button[aria-label="Copy error details"]'),
+    ).not.toBeNull();
+  });
+});
+
+describe("Library-root media paths", () => {
+  it.each([
+    ["/root/.fora/library/tasks/", "root/.fora/library/tasks/"],
+    ["/etc/", "etc/"],
+  ])("reports a missing Library file for %s", async (href, path) => {
+    const libraryFile = pending();
+    libraryFile.mockRejectedValue(new Error("File not found in Library"));
+    const source = `![Photo](${href}missing.png)\n\n![Video](${href}missing.mp4)\n\n[File](${href}missing.png)`;
+    const { container } = renderMessage(source);
+    await waitFor(() =>
+      expect(libraryFile).toHaveBeenCalledWith(
+        `${path}missing.png`,
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(container.querySelector("details pre")?.textContent).toContain(
+        `File: ${path}missing.png`,
+      ),
+    );
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(
+      `/library/${path}missing.png`,
+    );
+    await play(container, "Video");
+    await waitFor(() =>
+      expect(libraryFile).toHaveBeenCalledWith(
+        `${path}missing.mp4`,
+        expect.any(AbortSignal),
+      ),
+    );
+    await waitFor(() =>
+      expect(container.querySelectorAll("details").length).toBe(2),
+    );
+    expect(container.querySelector("video")).toBeNull();
+    expect(container.textContent).toContain(`File: ${path}missing.mp4`);
   });
 });
 
@@ -275,6 +338,41 @@ describe("videos", () => {
       expect(container.querySelector(".inline-media-poster")).toBeNull();
     });
     expect(container.querySelector(".inline-media-play")).not.toBeNull();
+  });
+});
+
+describe("video errors", () => {
+  it("distinguishes file request failures from player errors", async () => {
+    vi.spyOn(backend, "libraryFile").mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
+    const request = renderMessage("![Request](/tasks/request-error.mp4)");
+    await play(request.container, "Request");
+    await waitFor(() =>
+      expect(request.container.querySelector("details")?.textContent).toContain(
+        "Stage: File request\nError: TypeError\nMessage: Failed to fetch",
+      ),
+    );
+    request.unmount();
+    vi.spyOn(backend, "libraryFile").mockResolvedValue(new Blob(["video"]));
+    const playback = renderMessage("![Playback](/tasks/playback-error.mp4)");
+    await play(playback.container, "Playback");
+    const player = await waitFor(() => {
+      const element = playback.container.querySelector("video");
+      if (element === null) throw new Error("player is missing");
+      return element;
+    });
+    Object.defineProperty(player, "error", {
+      value: { code: 3, message: "Decoder error" },
+    });
+    fireEvent.error(player);
+    await waitFor(() =>
+      expect(
+        playback.container.querySelector("details")?.textContent,
+      ).toContain(
+        "Stage: Video playback\nMediaError.code: 3\nMessage: Decoder error",
+      ),
+    );
   });
 });
 
@@ -485,6 +583,9 @@ describe("single image", () => {
       expect(container.textContent).toContain("Image could not be loaded."),
     );
     expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("details")?.textContent).toContain(
+      "Stage: Image decoding",
+    );
     const retry = await waitFor(() => {
       const button = [...container.querySelectorAll("button")].find(
         (node) => node.textContent === "Retry",

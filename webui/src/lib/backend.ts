@@ -269,11 +269,14 @@ type LibraryWriteResult =
 export type BackendEvent = { type: string } & Record<string, unknown>;
 
 export class BackendError extends Error {
+  cause?: unknown;
+
   constructor(
     readonly code: string,
     message: string,
     readonly transport = false,
     readonly operation: string | null = null,
+    readonly details: string | null = null,
   ) {
     super(message);
     this.name = "BackendError";
@@ -1009,25 +1012,58 @@ export class Backend {
     return blob;
   }
 
-  async libraryFile(path: string, signal: AbortSignal) {
+  async libraryFileUrl(path: string) {
     const url = new URL(await this.#fileConnection("/library/content"));
     url.searchParams.set("path", path);
-    const response = await fetch(url, {
-      signal,
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      const error = response.headers
-        .get("content-type")
-        ?.includes("application/json")
-        ? await response.json()
-        : null;
-      throw new BackendError(
-        error?.error?.code ?? "download_failed",
-        error?.error?.message ?? `Could not read file (${response.status})`,
+    return url.toString();
+  }
+
+  async libraryFile(path: string, signal: AbortSignal) {
+    const url = await this.libraryFileUrl(path);
+    let response: Response | null = null;
+    let stage = "File request";
+    try {
+      response = await fetch(url, {
+        signal,
+        cache: "no-store",
+      });
+      stage = "HTTP response";
+      if (!response.ok) {
+        const error = response.headers
+          .get("content-type")
+          ?.includes("application/json")
+          ? await response.json()
+          : null;
+        throw new BackendError(
+          error?.error?.code ?? "download_failed",
+          error?.error?.message ?? `Could not read file (${response.status})`,
+        );
+      }
+      stage = "Response body";
+      return await response.blob();
+    } catch (error) {
+      if (signal.aborted) throw error;
+      const address = new URL(url);
+      address.username = "";
+      address.password = "";
+      const message = error instanceof Error ? error.message : String(error);
+      const failure = new BackendError(
+        error instanceof BackendError ? error.code : "download_failed",
+        message,
+        false,
+        null,
+        [
+          `Stage: ${stage}`,
+          `Request URL: ${address}`,
+          `HTTP status: ${response?.status ?? "Unavailable"}`,
+          `Content-Type: ${response?.headers.get("content-type") ?? "Unavailable"}`,
+          `Error: ${error instanceof Error ? error.name : "Unknown"}`,
+          `Message: ${message}`,
+        ].join("\n"),
       );
+      failure.cause = error;
+      throw failure;
     }
-    return await response.blob();
   }
 
   async libraryPoster(path: string, version: string | null) {

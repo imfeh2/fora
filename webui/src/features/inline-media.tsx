@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { FileVideo, FolderOpen, Play } from "lucide-react";
+import { Copy, FileVideo, FolderOpen, Play } from "lucide-react";
 import {
   type CSSProperties,
   useEffect,
@@ -10,11 +10,12 @@ import {
 import { documentPath, useNavigate } from "@/app/router";
 import { ContextMenuArea } from "@/components/ui/context-menu";
 import { ImageViewer as SharedImageViewer } from "@/components/ui/image-viewer";
-import { Button, Spinner } from "@/components/ui/index";
+import { Button, IconButton, Spinner } from "@/components/ui/index";
 import { mediaKind } from "@/features/library/media";
 import { libraryPathFromHref } from "@/features/library/path";
 import { libraryEntry } from "@/features/library/preview";
-import { backend } from "@/lib/backend";
+import { BackendError, backend } from "@/lib/backend";
+import { copyText } from "@/lib/copy";
 import { documentName, formatBytes } from "@/lib/format";
 import { MAX_FILE_BYTES } from "@/lib/limits";
 
@@ -232,15 +233,54 @@ export function mediaGridBox(total: number) {
   };
 }
 
+function fileFailure(error: unknown): string {
+  if (error instanceof BackendError && error.details !== null)
+    return error.details;
+  return [
+    "Stage: File request",
+    `Error: ${error instanceof Error ? error.name : "Unknown"}`,
+    `Message: ${error instanceof Error ? error.message : String(error)}`,
+  ].join("\n");
+}
+
 function MediaFailure({
+  path,
   alt,
   message,
+  details,
   onRetry,
 }: {
+  path: string;
   alt: string;
   message: string;
+  details: string;
   onRetry: () => void;
 }) {
+  const [address, setAddress] = useState("Unavailable");
+  useEffect(() => {
+    let live = true;
+    void backend.libraryFileUrl(path).then(
+      (value) => {
+        const url = new URL(value);
+        url.username = "";
+        url.password = "";
+        if (live) setAddress(url.toString());
+      },
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [path]);
+  const diagnostic = [
+    details,
+    `File: ${path}`,
+    `File URL: ${address}`,
+    `Page origin: ${location.origin}`,
+  ].join("\n");
+  useEffect(() => {
+    console.error("Inline media failed", diagnostic);
+  }, [diagnostic]);
   return (
     <div className="inline-media inline-media-fixed">
       <div className="inline-media-failure">
@@ -251,6 +291,20 @@ function MediaFailure({
         <Button size="sm" onClick={onRetry}>
           Retry
         </Button>
+        <details className="w-full min-w-0">
+          <summary className="cursor-pointer text-fg-muted">Details</summary>
+          <IconButton
+            label="Copy error details"
+            onClick={() =>
+              void copyText(diagnostic).catch(backend.reportFailure)
+            }
+          >
+            <Copy size={14} />
+          </IconButton>
+          <pre className="m-0 max-h-40 overflow-auto whitespace-pre-wrap break-all select-text font-mono text-xs text-fg-muted">
+            {diagnostic}
+          </pre>
+        </details>
       </div>
     </div>
   );
@@ -329,7 +383,7 @@ export function InlineMediaImage({
   offset: number | null;
 }) {
   const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [size, setSize] = useState(() => imageSizeOf(path));
   const [open, setOpen] = useState<number | null>(null);
@@ -338,7 +392,7 @@ export function InlineMediaImage({
   useEffect(() => {
     const abort = new AbortController();
     let objectUrl: string | null = null;
-    setFailed(false);
+    setFailure(null);
     setUrl(null);
     void backend.libraryFile(path, abort.signal).then(
       (blob) => {
@@ -350,8 +404,8 @@ export function InlineMediaImage({
           if (next !== null && !abort.signal.aborted) setSize(next);
         });
       },
-      () => {
-        if (!abort.signal.aborted) setFailed(true);
+      (error) => {
+        if (!abort.signal.aborted) setFailure(fileFailure(error));
       },
     );
     return () => {
@@ -364,10 +418,12 @@ export function InlineMediaImage({
 
   return (
     <>
-      {failed ? (
+      {failure !== null ? (
         <MediaFailure
+          path={path}
           alt={alt}
           message="Image could not be loaded."
+          details={failure}
           onRetry={() => setAttempt((value) => value + 1)}
         />
       ) : url === null ? (
@@ -407,7 +463,11 @@ export function InlineMediaImage({
                 src={url}
                 alt={alt}
                 title={alt || undefined}
-                onError={() => setFailed(true)}
+                onError={(event) =>
+                  setFailure(
+                    `Stage: Image decoding\nSource: ${event.currentTarget.currentSrc || url}\nMessage: The browser could not decode the downloaded image.`,
+                  )
+                }
               />
             </button>
           </div>
@@ -436,7 +496,7 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
   const [poster, setPoster] = useState<string | null>(null);
   const [posterFailed, setPosterFailed] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState(false);
   const navigate = useNavigate();
@@ -499,18 +559,18 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
 
   const start = async () => {
     setBusy(true);
-    setFailed(false);
+    setFailure(null);
     hold.current?.release();
     const next = acquireVideoUrl(path);
     hold.current = next;
     try {
       const objectUrl = await next.promise;
       if (hold.current === next) setUrl(objectUrl);
-    } catch {
+    } catch (error) {
       if (hold.current === next) {
         hold.current = null;
         next.release();
-        setFailed(true);
+        setFailure(fileFailure(error));
       }
     } finally {
       setBusy(false);
@@ -556,11 +616,13 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
       </ContextMenuArea>
     );
 
-  if (failed)
+  if (failure !== null)
     return (
       <MediaFailure
+        path={path}
         alt={alt}
         message="Video could not be played."
+        details={failure}
         onRetry={() => void start()}
       />
     );
@@ -635,12 +697,22 @@ export function InlineMediaVideo({ path, alt }: { path: string; alt: string }) {
               setPlaying(false);
               trimVideoObjects();
             }}
-            onError={() => {
+            onError={(event) => {
+              const player = event.currentTarget;
+              setFailure(
+                [
+                  "Stage: Video playback",
+                  `MediaError.code: ${player.error?.code ?? "Unavailable"}`,
+                  `Message: ${player.error?.message || "The browser could not play the downloaded video."}`,
+                  `Source: ${player.currentSrc || url}`,
+                  `Ready state: ${player.readyState}`,
+                  `Network state: ${player.networkState}`,
+                ].join("\n"),
+              );
               setPlaying(false);
               setUrl(null);
               hold.current?.release();
               hold.current = null;
-              setFailed(true);
             }}
           />
         </ContextMenuArea>
