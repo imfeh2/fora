@@ -2,7 +2,7 @@ import { Download, FileIcon, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenuArea } from "@/components/ui/context-menu";
 import { ImageViewer } from "@/components/ui/image-viewer";
-import { Button } from "@/components/ui/index";
+import { Button, toast } from "@/components/ui/index";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ComposerFile } from "@/features/discussions/composer-state";
 import { mediaGridBox, mediaSingleBox } from "@/features/inline-media";
@@ -139,7 +139,6 @@ function AttachmentImages({
   const [attempt, setAttempt] = useState(0);
   const [open, setOpen] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadUrls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
@@ -198,7 +197,6 @@ function AttachmentImages({
   const download = async (image: ImageAttachment) => {
     if (downloading) return;
     setDownloading(true);
-    setDownloadError(null);
     const abort = new AbortController();
     try {
       const blob = await backend.attachmentFile(
@@ -221,22 +219,18 @@ function AttachmentImages({
       link.click();
       link.remove();
     } catch (failure) {
-      setDownloadError(
-        failure instanceof Error ? failure.message : String(failure),
-      );
+      toast({
+        id: "attachment-image-download-error",
+        tone: "danger",
+        title: "Could not download the image",
+        description:
+          failure instanceof Error ? failure.message : String(failure),
+      });
     } finally {
       setDownloading(false);
     }
   };
 
-  const gallery = useMemo(
-    () =>
-      images.flatMap((image) => {
-        const src = sources[image.id];
-        return src === undefined ? [] : [{ image, src }];
-      }),
-    [images, sources],
-  );
   const actions = (image: ImageAttachment) => [
     {
       id: "download",
@@ -352,24 +346,6 @@ function AttachmentImages({
           ))}
         </div>
       )}
-      {downloadError === null ? null : (
-        <div
-          role="alert"
-          className="flex items-center gap-2 pt-2 text-sm text-danger"
-        >
-          {downloadError}
-          <Button
-            size="sm"
-            disabled={downloading}
-            onClick={() => {
-              const item = gallery[0];
-              if (item) void download(item.image);
-            }}
-          >
-            Retry download
-          </Button>
-        </div>
-      )}
       {open === null ? null : (
         <ImageViewer
           open
@@ -403,7 +379,6 @@ export function MessageAttachment({
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState(false);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadRequest = useRef<AbortController | null>(null);
   const downloadUrls = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(
@@ -422,7 +397,6 @@ export function MessageAttachment({
     const abort = new AbortController();
     downloadRequest.current = abort;
     setDownloading(true);
-    setDownloadError(null);
     try {
       const blob = await backend.attachmentFile(
         discussionId,
@@ -444,10 +418,14 @@ export function MessageAttachment({
       link.click();
       link.remove();
     } catch (failure) {
-      if (!abort.signal.aborted)
-        setDownloadError(
+      if (abort.signal.aborted) return;
+      toast({
+        id: "attachment-file-download-error",
+        tone: "danger",
+        title: "Could not download the file",
+        description:
           failure instanceof Error ? failure.message : String(failure),
-        );
+      });
     } finally {
       downloadRequest.current = null;
       if (!abort.signal.aborted) setDownloading(false);
@@ -479,18 +457,6 @@ export function MessageAttachment({
           Download
         </Button>
       </div>
-      {downloadError === null ? null : (
-        <div role="alert" className="px-3 pb-3 text-sm text-danger">
-          {downloadError}
-          <Button
-            size="sm"
-            disabled={downloading}
-            onClick={() => void download()}
-          >
-            Retry download
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

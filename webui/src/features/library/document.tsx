@@ -202,7 +202,7 @@ export function DocumentBody({
   );
 }
 
-function TextDocument({
+export function TextDocument({
   path,
   embedded,
   actionsSlot,
@@ -220,7 +220,6 @@ function TextDocument({
   >(null);
   const [failed, setFailed] = useState(false);
   const [loadError, setLoadError] = useState<BackendError | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(true);
 
@@ -388,7 +387,6 @@ function TextDocument({
   const save = async () => {
     if (!dirty || loaded === null) return;
     setBusy(true);
-    setSaveError(null);
     try {
       const result = await backend.writeLibrary(path, draft, loaded.hash);
       if (result.conflict) {
@@ -413,9 +411,13 @@ function TextDocument({
       if (failure instanceof BackendError && failure.transport)
         backend.reportFailure(failure);
       else
-        setSaveError(
-          failure instanceof Error ? failure.message : String(failure),
-        );
+        toast({
+          id: "document-save-error",
+          tone: "danger",
+          title: "Could not save the document",
+          description:
+            failure instanceof Error ? failure.message : String(failure),
+        });
     } finally {
       setBusy(false);
     }
@@ -460,11 +462,6 @@ function TextDocument({
       status={dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
     >
       <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
-        {saveError ? (
-          <p role="alert" className="text-sm text-danger">
-            {saveError}
-          </p>
-        ) : null}
         {unavailable ? <DocumentUnavailable code={unavailable} /> : null}
         {loadError && !(loadError.transport && backend.disconnected) ? (
           <LoadError error={loadError} retry={() => void load(true)} />

@@ -1,5 +1,6 @@
 import { CircleHelp } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { LoadError } from "@/components/ui/access-error";
 import {
   Button,
   Field,
@@ -7,9 +8,11 @@ import {
   Input,
   LoadingSkeleton,
   Spinner,
+  toast,
 } from "@/components/ui/index";
 import { Tooltip } from "@/components/ui/tooltip";
-import { backend } from "@/lib/backend";
+import { reportLoadFailure } from "@/features/settings/saver";
+import { BackendError, backend } from "@/lib/backend";
 import { VoiceRecording, type VoiceState } from "@/lib/voice";
 
 type Values = {
@@ -24,8 +27,7 @@ export function VoicePanel() {
   const [key, setKey] = useState("");
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState<BackendError | null>(null);
   const [text, setText] = useState("");
   const [state, setState] = useState<VoiceState>("closed");
   const [level, setLevel] = useState(0);
@@ -35,17 +37,14 @@ export function VoicePanel() {
 
   const load = useCallback(async () => {
     if (dirtyRef.current) return;
-    setLoadFailed(false);
     try {
       const next = (await backend.settings("voice")) as Values;
       if (dirtyRef.current) return;
       setValues(next);
       setDirty(false);
-      setLoadFailed(false);
-      setError("");
+      setLoadError(null);
     } catch (failure) {
-      setLoadFailed(true);
-      setError(failure instanceof Error ? failure.message : String(failure));
+      setLoadError(reportLoadFailure(failure));
     }
   }, []);
 
@@ -67,12 +66,10 @@ export function VoicePanel() {
     setValues(next);
     setDirty(true);
     setText("");
-    setError("");
   };
   const save = async () => {
     if (!values || busy || active) return;
     setBusy(true);
-    setError("");
     setText("");
     try {
       const update: Record<string, unknown> = {
@@ -85,9 +82,18 @@ export function VoicePanel() {
       setKey("");
       dirtyRef.current = false;
       setDirty(false);
-      setLoadFailed(false);
+      setLoadError(null);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (failure instanceof BackendError && failure.transport)
+        backend.reportFailure(failure);
+      else
+        toast({
+          id: "voice-save-error",
+          tone: "danger",
+          title: "Could not save the voice settings",
+          description:
+            failure instanceof Error ? failure.message : String(failure),
+        });
     } finally {
       setBusy(false);
     }
@@ -95,7 +101,6 @@ export function VoicePanel() {
   const test = () => {
     if (active || dirty || busy || !values) return;
     setText("");
-    setError("");
     const current = new VoiceRecording((event) => {
       if (recording.current !== current) return;
       if (event.type === "state") {
@@ -106,37 +111,37 @@ export function VoicePanel() {
         }
       } else if (event.type === "transcript") setText(event.text);
       else if (event.type === "level") setLevel(event.level);
-      else setError(event.message);
+      else
+        toast({
+          id: "voice-mic-test-error",
+          tone: "danger",
+          title: "Could not test the microphone",
+          description: event.message,
+        });
     });
     recording.current = current;
     void current.start();
   };
 
-  if (values === null && !loadFailed)
+  if (values === null)
     return (
       <div className="w-full max-w-[720px]">
-        <LoadingSkeleton label="Loading voice settings">
-          {["address", "model", "key"].map((field) => (
-            <FieldSkeleton key={field} />
-          ))}
-        </LoadingSkeleton>
+        {loadError ? (
+          <LoadError error={loadError} retry={() => void load()} />
+        ) : (
+          <LoadingSkeleton label="Loading voice settings">
+            {["address", "model", "key"].map((field) => (
+              <FieldSkeleton key={field} />
+            ))}
+          </LoadingSkeleton>
+        )}
       </div>
     );
 
   return (
     <div className="flex w-full max-w-[720px] flex-col gap-4">
-      {error ? (
-        <div
-          role="alert"
-          className="flex items-center gap-2 text-sm text-danger"
-        >
-          <span className="min-w-0 flex-1">{error}</span>
-          {loadFailed ? (
-            <Button size="sm" onClick={() => void load()}>
-              Retry
-            </Button>
-          ) : null}
-        </div>
+      {loadError ? (
+        <LoadError error={loadError} retry={() => void load()} />
       ) : null}
       <form
         onSubmit={(event) => {

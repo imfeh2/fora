@@ -319,12 +319,42 @@ export function AgentCreateDialog({
   );
 }
 
+type SaveAction =
+  | "set_defaults"
+  | "save_provider"
+  | "delete_provider"
+  | "save_model"
+  | "delete_model";
+
 type SaveModel = (
-  action: string,
+  action: SaveAction,
   id: string | number | null,
   values?: Record<string, unknown>,
   onBodyError?: (message: string) => void,
 ) => Promise<boolean>;
+
+const SAVE_FAILURES: Record<SaveAction, { id: string; title: string }> = {
+  set_defaults: {
+    id: "settings-default-save-error",
+    title: "Could not save the global default",
+  },
+  save_provider: {
+    id: "settings-provider-save-error",
+    title: "Could not save the provider",
+  },
+  delete_provider: {
+    id: "settings-provider-delete-error",
+    title: "Could not delete the provider",
+  },
+  save_model: {
+    id: "settings-model-save-error",
+    title: "Could not save the model",
+  },
+  delete_model: {
+    id: "settings-model-delete-error",
+    title: "Could not delete the model",
+  },
+};
 
 export function ModelPanel({
   view = "models",
@@ -353,7 +383,6 @@ export function ModelPanel({
   const [connected, setConnected] = useState(true);
   const online = useRef(true);
   const [loadError, setLoadError] = useState<BackendError | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [uncertain, setUncertain] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -389,7 +418,6 @@ export function ModelPanel({
       const loaded = await backend.modelCatalog();
       if (request !== generation.current) return;
       setCatalog(loaded);
-      setError(null);
       setReviewed(true);
     } catch (failure) {
       if (request === generation.current) {
@@ -532,7 +560,6 @@ export function ModelPanel({
       );
       setSelected(id);
       setEditProvider(edit || id === "new");
-      setError(null);
       if (id === null)
         requestAnimationFrame(() => {
           const target =
@@ -568,7 +595,6 @@ export function ModelPanel({
     generation.current += 1;
     reading.current = null;
     setBusy(true);
-    setError(null);
     const focus =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -602,7 +628,9 @@ export function ModelPanel({
     } catch (failure) {
       if (!mounted.current || connection !== connectionGeneration.current)
         return false;
-      setError(failure instanceof Error ? failure.message : String(failure));
+      const transport = failure instanceof BackendError && failure.transport;
+      const message =
+        failure instanceof Error ? failure.message : String(failure);
       if (
         onBodyError &&
         failure instanceof BackendError &&
@@ -611,9 +639,19 @@ export function ModelPanel({
         )
       ) {
         onBodyError(failure.message);
-        setError(null);
+      } else if (!transport) {
+        const report = SAVE_FAILURES[action];
+        toast({
+          id: report.id,
+          tone: "danger",
+          title: report.title,
+          description:
+            action === "set_defaults"
+              ? `${message}. Enable that provider or model under Providers, or choose another default, then save again.`
+              : message,
+        });
       }
-      if (failure instanceof BackendError && failure.transport) {
+      if (transport) {
         setUncertain(true);
         setReviewed(false);
         backend.reportFailure(failure);
@@ -702,7 +740,6 @@ export function ModelPanel({
               setEditProvider(false);
               setSelected(null);
               setUncertain(false);
-              setError(null);
             }}
           >
             Use saved configuration
@@ -718,14 +755,6 @@ export function ModelPanel({
       className="m-0 mx-auto flex w-full min-w-0 max-w-[720px] flex-col gap-6 border-0 p-0"
       key={`${selected}-${revision}`}
     >
-      {error ? (
-        <p
-          role="alert"
-          className="rounded border border-danger p-3 text-sm text-danger"
-        >
-          {error}
-        </p>
-      ) : null}
       {providerMissing ? (
         <p role="alert" className="text-sm text-danger">
           This provider no longer exists. Your draft is retained. Close this
@@ -742,7 +771,6 @@ export function ModelPanel({
           busy={busy || uncertain || !connected}
           saving={busy}
           recovery={recovery}
-          saveError={error}
           unavailable={providerMissing}
           onDraft={providerDraft}
           onCancel={() => choose(null)}
@@ -765,7 +793,6 @@ export function ModelPanel({
             connectionDirty={connectionDirty}
             onDraft={modelDraft}
             recovery={recovery}
-            saveError={error}
             unavailable={providerMissing}
             directory={(addAction) => (
               <ModelDirectory
@@ -782,7 +809,6 @@ export function ModelPanel({
                   connectionDirty
                 }
                 recovery={recovery}
-                saveError={error}
               />
             )}
             onDiscard={(proceed) => {
@@ -801,7 +827,6 @@ export function ModelPanel({
               connectionDirty={connectionDirty}
               onDraft={modelDraft}
               recovery={recovery}
-              saveError={error}
               onDiscard={(proceed) => {
                 if (drafts.current.get(model.id)) setDiscard(() => proceed);
                 else proceed();
@@ -885,11 +910,6 @@ export function ModelPanel({
             </fieldset>
           ) : null}
           {recovery}
-          {error && !open ? (
-            <p role="alert" className="text-sm text-danger">
-              {error}
-            </p>
-          ) : null}
           {view === "providers" ? (
             <>
               {catalog.providers.length === 0 && !open ? (
@@ -1133,12 +1153,10 @@ function ProviderModelEditor({
   onClose,
   onDiscard,
   recovery,
-  saveError,
   directory,
 }: {
   directory?: (addAction: ReactNode) => ReactNode;
   recovery: ReactNode;
-  saveError: string | null;
   unavailable?: boolean;
   onClose?: () => void;
   onDiscard: (proceed: () => void) => void;
@@ -1241,7 +1259,6 @@ function ProviderModelEditor({
             if (!next) close();
           }}
           recovery={recovery}
-          saveError={saveError}
           provider={provider}
           model={model}
           save={save}
@@ -1333,7 +1350,6 @@ function ProviderForm({
   onCancel,
   unavailable = false,
   recovery,
-  saveError,
   models,
   editOpen,
   onEdit,
@@ -1341,7 +1357,6 @@ function ProviderForm({
 }: {
   models: RegisteredModel[];
   recovery: ReactNode;
-  saveError: string | null;
   editOpen: boolean;
   onEdit: (open: boolean) => void;
   onDiscard: (proceed: () => void) => void;
@@ -1478,19 +1493,10 @@ function ProviderForm({
     </DialogActions>
   );
   const alerts =
-    editOpen && (saveError || unavailable) ? (
-      <>
-        {saveError ? (
-          <p role="alert" className="text-sm text-danger">
-            {saveError}
-          </p>
-        ) : null}
-        {unavailable ? (
-          <p role="alert" className="text-sm text-danger">
-            This provider no longer exists. Your draft is retained.
-          </p>
-        ) : null}
-      </>
+    editOpen && unavailable ? (
+      <p role="alert" className="text-sm text-danger">
+        This provider no longer exists. Your draft is retained.
+      </p>
     ) : null;
   const content = (
     <>
@@ -1900,14 +1906,12 @@ function ModelDirectory({
   recovery,
   addAction,
   modelCount,
-  saveError,
 }: {
   provider: ProviderConfig;
   models: RegisteredModel[];
   save: SaveModel;
   disabled: boolean;
   recovery: ReactNode;
-  saveError: string | null;
   addAction: ReactNode;
   modelCount: number;
 }) {
@@ -2021,7 +2025,6 @@ function ModelDirectory({
         />
         {loading ? <Spinner label="Loading model list" /> : null}
         {error ? <p role="alert">{error}</p> : null}
-        {saveError ? <p role="alert">{saveError}</p> : null}
         <Button disabled={disabled || loading} onClick={() => void load()}>
           Retry
         </Button>
@@ -2075,7 +2078,6 @@ function ModelForm({
   title,
   onOpenChange,
   recovery,
-  saveError,
   provider,
   model,
   save,
@@ -2090,7 +2092,6 @@ function ModelForm({
   title: string;
   onOpenChange: (open: boolean) => void;
   recovery?: ReactNode;
-  saveError?: string | null;
   onClose?: () => void;
   provider: ProviderConfig;
   unavailable?: boolean;
@@ -2313,11 +2314,9 @@ function ModelForm({
       title={title}
       onOpenChange={onOpenChange}
       alert={
-        saveError || unavailable ? (
+        unavailable ? (
           <p role="alert" className="text-sm text-danger">
-            {unavailable
-              ? "This model or provider no longer exists. Your draft is retained."
-              : saveError}
+            This model or provider no longer exists. Your draft is retained.
           </p>
         ) : null
       }

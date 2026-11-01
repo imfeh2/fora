@@ -1,9 +1,22 @@
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { RouterProvider } from "@/app/router";
+import { clearToasts, Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { MessageAttachments } from "@/features/discussions/attachments";
-import { type Attachment, backend } from "@/lib/backend";
+import {
+  MessageAttachment,
+  MessageAttachments,
+} from "@/features/discussions/attachments";
+import { type Attachment, BackendError, backend } from "@/lib/backend";
 
 class Observer {
   static live: Observer[] = [];
@@ -37,7 +50,12 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  clearToasts();
   vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  clearToasts();
 });
 
 function image(id: string, width: number, height: number): Attachment {
@@ -50,6 +68,29 @@ function image(id: string, width: number, height: number): Attachment {
     width,
     height,
   };
+}
+
+function file(id: string): Attachment {
+  return {
+    id,
+    name: `${id}.pdf`,
+    size: 2048,
+    media_type: "application/pdf",
+    sha256: "checksum",
+    width: null,
+    height: null,
+  };
+}
+
+function withHost(children: ReactNode) {
+  return render(
+    <TooltipProvider>
+      <RouterProvider>
+        {children}
+        <Toaster />
+      </RouterProvider>
+    </TooltipProvider>,
+  );
 }
 
 function renderAttachments(attachments: Attachment[]) {
@@ -95,5 +136,50 @@ describe("attachment image loading state", () => {
     expect(container.querySelector("[role=status]")).toBeNull();
     expect(container.textContent).toBe("");
     for (const cell of cells) expect(cell.childElementCount).toBe(0);
+  });
+
+  it("reports a failed file download as a toast", async () => {
+    vi.spyOn(backend, "attachmentFile").mockRejectedValue(
+      new BackendError("not_found", "The attachment is gone"),
+    );
+    const { container } = withHost(
+      <MessageAttachment
+        discussionId={1}
+        messageId={2}
+        attachment={file("f1")}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Download f1.pdf" }));
+
+    expect(await screen.findByText("Could not download the file")).toBeTruthy();
+    expect(screen.getByText("The attachment is gone")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("reports a failed image download as a toast", async () => {
+    const read = vi
+      .spyOn(backend, "attachmentFile")
+      .mockResolvedValue(new Blob(["x"]));
+    const { container } = withHost(
+      <MessageAttachments
+        discussionId={1}
+        messageId={2}
+        attachments={[image("a", 480, 640)]}
+      />,
+    );
+
+    const view = await screen.findByRole("button", { name: "View a.png" });
+    read.mockRejectedValue(new BackendError("not_found", "The image is gone"));
+    fireEvent.contextMenu(view);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
+
+    expect(
+      await screen.findByText("Could not download the image"),
+    ).toBeTruthy();
+    expect(screen.getByText("The image is gone")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 });

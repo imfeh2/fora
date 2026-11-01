@@ -30,13 +30,14 @@ import {
   Skeleton,
   StateDot,
   StatusText,
+  toast,
 } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { Segmented } from "@/components/ui/segmented";
 import { StatePanel } from "@/components/ui/state-panel";
 import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
-import { backend, type Member } from "@/lib/backend";
+import { BackendError, backend, type Member } from "@/lib/backend";
 
 type Filter = "all" | "agents" | "humans";
 
@@ -85,6 +86,28 @@ export function MembersPage() {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<Member | null>(null);
   const [doomed, setDoomed] = useState<Member | null>(null);
+  const toggle = async (member: Member) => {
+    const resume = canResume(member);
+    try {
+      await (resume
+        ? backend.resumeAgent(member.id)
+        : backend.pauseAgent(member.id));
+      await refresh();
+    } catch (failure) {
+      if (failure instanceof BackendError && failure.transport)
+        backend.reportFailure(failure);
+      else
+        toast({
+          id: "member-toggle-error",
+          tone: "danger",
+          title: resume
+            ? "Could not resume the Agent"
+            : "Could not pause the Agent",
+          description:
+            failure instanceof Error ? failure.message : String(failure),
+        });
+    }
+  };
 
   const shown = useMemo(() => {
     if (members === null) return null;
@@ -187,12 +210,7 @@ export function MembersPage() {
               <MemberCard
                 key={member.id}
                 member={member}
-                onToggle={async () => {
-                  await (canResume(member)
-                    ? backend.resumeAgent(member.id)
-                    : backend.pauseAgent(member.id));
-                  await refresh();
-                }}
+                onToggle={() => void toggle(member)}
                 onRename={() => setRenaming(member)}
                 onDelete={() => setDoomed(member)}
               />
@@ -207,12 +225,7 @@ export function MembersPage() {
               <MemberRow
                 key={member.id}
                 member={member}
-                onToggle={async () => {
-                  await (canResume(member)
-                    ? backend.resumeAgent(member.id)
-                    : backend.pauseAgent(member.id));
-                  await refresh();
-                }}
+                onToggle={() => void toggle(member)}
                 onRename={() => setRenaming(member)}
                 onDelete={() => setDoomed(member)}
               />
@@ -343,7 +356,6 @@ export function MemberRow({
   const agent = member.type === "agent";
   const paused = canResume(member);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
   const toggle = async () => {
     if (inFlight.current) return;
@@ -351,9 +363,6 @@ export function MemberRow({
     setPending(true);
     try {
       await onToggle();
-      setError(null);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
       inFlight.current = false;
       setPending(false);
@@ -425,14 +434,6 @@ export function MemberRow({
           }).filter((action) => action.id !== "toggle")}
         />
       </div>
-      {error ? (
-        <p
-          role="alert"
-          className="relative z-1 w-full text-sm text-danger wrap-anywhere [@media(max-width:640px)]:col-span-2"
-        >
-          {error}
-        </p>
-      ) : null}
     </li>
   );
 }
