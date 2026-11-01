@@ -7,16 +7,8 @@ CONTEXT_WINDOW_RATIO_DEFAULT = 80
 CONTEXT_WINDOW_RATIO_MIN = 50
 CONTEXT_WINDOW_RATIO_MAX = 95
 
-# Measured ratios of real tokens to UTF-8 bytes divided by four: English 0.70,
-# Chinese 0.88-1.27, mixed Chinese and English 1.38-1.61, code 1.13, small JSON
-# tool output 1.60. A single conservative divisor of 2.5 covers the densest
-# side of that table for every kind of text.
 BYTES_PER_TOKEN = 2.5
 
-# Images are counted per image instead of by bytes: a 5 MiB screenshot would
-# otherwise estimate as millions of tokens, while image input costs a fixed
-# allowance per image. Underestimating here falls back to the provider rejection
-# path that switches the window immediately.
 IMAGE_TOKENS = 1_500
 
 
