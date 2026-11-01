@@ -73,7 +73,7 @@ describe("provider key", () => {
       screen.getByLabelText("API key"),
     )) as HTMLInputElement;
     expect(input.value).toBe(KEY);
-    expect(input.type).toBe("text");
+    expect(input.type).toBe("password");
     expect(container.textContent).not.toContain("Key stored");
     expect(container.textContent).not.toContain("Clear stored key");
     expect(container.textContent).not.toContain("Leave blank");
@@ -84,6 +84,20 @@ describe("provider key", () => {
         .getAllByRole("button")
         .map((button) => button.textContent?.trim()),
     ).toEqual(["Cancel", "Save"]);
+  });
+
+  it("reveals the key only after the eye button is pressed", async () => {
+    vi.spyOn(backend, "modelCatalog").mockResolvedValue(catalog);
+    const { container } = renderPanel();
+    await openProvider(container);
+    const input = (await waitFor(() =>
+      screen.getByLabelText("API key"),
+    )) as HTMLInputElement;
+    expect(input.type).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show API key" }));
+    expect(input.type).toBe("text");
+    fireEvent.click(screen.getByRole("button", { name: "Hide API key" }));
+    expect(input.type).toBe("password");
   });
 
   it("saves an emptied field as an empty key", async () => {

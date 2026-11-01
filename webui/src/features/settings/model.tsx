@@ -1366,7 +1366,7 @@ function ProviderForm({
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   const restoreBodyFocus = useRef(false);
   const [nameError, setNameError] = useState(false);
-  const [showKey, setShowKey] = useState(true);
+  const [showKey, setShowKey] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const dirty = useRef(false);
   const body = parseRequestBody(extraBody, apiType);
