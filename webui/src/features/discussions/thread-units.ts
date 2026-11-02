@@ -7,6 +7,21 @@ export type ThreadUnit = {
   message: ThreadMessage;
 };
 
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
+type GroupedMessage = Pick<ThreadUnit, "senderId" | "timestamp">;
+
+export function sameGroup(
+  previous: GroupedMessage,
+  current: GroupedMessage,
+): boolean {
+  if (previous.senderId !== current.senderId) return false;
+  const gap =
+    new Date(current.timestamp).getTime() -
+    new Date(previous.timestamp).getTime();
+  return gap <= GROUP_WINDOW_MS;
+}
+
 export function combineThreadUnits(
   messages: ThreadMessage[],
   cache?: Map<string, ThreadUnit>,

@@ -53,6 +53,7 @@ import {
 } from "@/features/discussions/thread-search";
 import {
   combineThreadUnits,
+  sameGroup,
   type ThreadUnit,
 } from "@/features/discussions/thread-units";
 import { estimateInlineMediaSize } from "@/features/inline-media";
@@ -929,24 +930,26 @@ function ThreadSession({
                 {items.map((item) => {
                   const unit = units[item.index];
                   const message = unit.message;
-                  const previousSender =
-                    item.index === 0
-                      ? detail?.previousSender
-                      : units[item.index - 1].senderId;
+                  const previous =
+                    item.index === 0 ? null : units[item.index - 1];
                   const divider = message?.id === detail?.divider;
-                  const compact = !divider && previousSender === unit.senderId;
+                  const compact =
+                    !divider &&
+                    (previous
+                      ? sameGroup(previous, unit)
+                      : detail?.previousSender === unit.senderId);
                   return (
                     <li
                       key={item.key}
                       ref={virtual.measureElement}
                       data-index={item.index}
                       className="flow-root w-full"
-                      style={{ paddingTop: compact ? 4 : 16 }}
+                      style={{ paddingTop: compact ? 4 : 20 }}
                     >
                       {divider ? (
                         <div
                           data-new-divider
-                          className="mb-4 flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40"
+                          className="mb-5 flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40"
                         >
                           <span>New</span>
                         </div>
