@@ -944,7 +944,7 @@ function ThreadSession({
                       ref={virtual.measureElement}
                       data-index={item.index}
                       className="flow-root w-full"
-                      style={{ paddingTop: compact ? 4 : 20 }}
+                      style={{ paddingTop: compact ? 16 : 20 }}
                     >
                       {divider ? (
                         <div
