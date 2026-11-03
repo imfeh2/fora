@@ -189,3 +189,5 @@ def test_an_unknown_name_points_back_to_the_list(world) -> None:
 def test_the_resident_prompt_only_points_at_the_tool() -> None:
     mentions = [line for line in SYSTEM_PROMPT.splitlines() if "skill" in line.lower()]
     assert mentions == ["Skills are loaded on demand with the skills tool."]
+    for name in ("task-flow", "privacy-guard"):
+        assert name not in SYSTEM_PROMPT
