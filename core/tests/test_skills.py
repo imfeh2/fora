@@ -104,7 +104,9 @@ def test_a_shared_name_is_read_from_the_workspace(world) -> None:
 def test_reading_a_skill_returns_its_text_and_where_it_lives(world) -> None:
     tools, library, _ = world
     directory = write_skill(library, "task-flow", "Shared copy.", "Full body.")
-    (directory / "notes.md").write_text("Extra notes.\n", encoding="utf-8")
+    (directory / "notes.md").write_text(
+        "Extra notes.\n", encoding="utf-8", newline="\n"
+    )
 
     payload = tools.read_skill("task-flow")
     assert payload["name"] == "task-flow"
@@ -113,6 +115,15 @@ def test_reading_a_skill_returns_its_text_and_where_it_lives(world) -> None:
     assert "Full body." in payload["content"]
     notes, _ = DirectoryTree(library).read(f"{payload['path']}/notes.md")
     assert notes == "Extra notes.\n"
+
+
+def test_a_skill_body_with_crlf_reads_back_as_lf(world) -> None:
+    _, library, _ = world
+    directory = write_skill(library, "task-flow", "Shared copy.", "Full body.")
+    (directory / "notes.md").write_bytes(b"First line.\r\nSecond line.\rLone.\n")
+
+    notes, _ = DirectoryTree(library).read("skills/task-flow/notes.md")
+    assert notes == "First line.\nSecond line.\nLone.\n"
 
 
 def test_editing_a_skill_shows_up_on_the_next_read(world) -> None:
