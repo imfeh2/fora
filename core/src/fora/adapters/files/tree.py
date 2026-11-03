@@ -61,11 +61,12 @@ class DirectoryTree:
 
     def _content(self, target: Path) -> str:
         try:
-            return target.read_bytes().decode("utf-8")
+            text = target.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise DomainError(
                 ErrorCode.NOT_READABLE, "File cannot be read as UTF-8"
             ) from error
+        return text.replace("\r\n", "\n").replace("\r", "\n")
 
     def _entry(self, target: Path) -> TreeEntry:
         try:
