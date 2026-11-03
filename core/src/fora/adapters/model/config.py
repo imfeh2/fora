@@ -333,33 +333,6 @@ class RegisteredModel(ConfigurationRecord):
     thinking_budget_tokens: int | None = Field(default=None, gt=0, strict=True)
 
 
-LegacyThinking = Literal[
-    "default", "none", "minimal", "low", "medium", "high", "xhigh", "max"
-]
-
-
-class LegacyRegisteredModel(ConfigurationRecord):
-    id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
-    provider_id: str = Field(min_length=1)
-    name: str = Field(min_length=1)
-    model: str = Field(min_length=1)
-    enabled: bool = True
-
-
-class LegacyAgentModelConfig(ConfigurationRecord):
-    model_id: str | None = None
-    thinking: LegacyThinking | None = None
-
-
-class LegacyModelCatalog(ConfigurationRecord):
-    version: Literal[1] = 1
-    providers: list[ProviderConfig] = Field(default_factory=list)
-    models: list[LegacyRegisteredModel] = Field(default_factory=list)
-    default_model_id: str | None = None
-    default_thinking: LegacyThinking = "default"
-    agent_configs: dict[str, LegacyAgentModelConfig] = Field(default_factory=dict)
-
-
 class AgentModelConfig(ConfigurationRecord):
     model_id: str | None = None
     thinking: Thinking | None = None
@@ -395,25 +368,7 @@ class ModelCatalog(ConfigurationRecord):
         values = _without_model_switch(values)
         if "version" in values:
             try:
-                if values.get("version") == 1:
-                    legacy = LegacyModelCatalog.model_validate(values)
-                    catalog = cls(
-                        providers=legacy.providers,
-                        models=[
-                            RegisteredModel.model_validate(model.model_dump())
-                            for model in legacy.models
-                        ],
-                        default_model_id=legacy.default_model_id,
-                        default_thinking=legacy.default_thinking,
-                        agent_configs={
-                            agent_id: AgentModelConfig.model_validate(
-                                config.model_dump()
-                            )
-                            for agent_id, config in legacy.agent_configs.items()
-                        },
-                    )
-                else:
-                    catalog = cls.model_validate(values)
+                catalog = cls.model_validate(values)
             except ValidationError:
                 raise DomainError(
                     ErrorCode.INVALID_MODEL_CONFIG, "Invalid model configuration"
