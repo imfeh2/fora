@@ -9,6 +9,7 @@ from fora.adapters.file_writes import (
     directory_lock,
     replace_file,
 )
+from fora.adapters.files.text import normalize_newlines
 from fora.adapters.sandbox.paths import is_within
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
@@ -86,6 +87,10 @@ def edit_file(
     if type(create) is not bool:
         raise DomainError(ErrorCode.INVALID_EDIT, "create must be a boolean")
     parsed = _parse_edits(edits, create=create)
+    parsed = [
+        (normalize_newlines(old_text), normalize_newlines(new_text), replace_all)
+        for old_text, new_text, replace_all in parsed
+    ]
     candidate = Path(path)
     if not candidate.is_absolute():
         raise DomainError(ErrorCode.INVALID_PATH, "path must be an absolute path")
@@ -123,7 +128,7 @@ def edit_file(
         if not target.is_file():
             raise DomainError(ErrorCode.NOT_FOUND, f"{path} does not exist")
         try:
-            original = target.read_bytes().decode("utf-8")
+            original = normalize_newlines(target.read_bytes().decode("utf-8"))
         except UnicodeDecodeError as error:
             raise DomainError(
                 ErrorCode.NOT_TEXT, f"{path} is not valid UTF-8"

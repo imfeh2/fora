@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from fora.adapters.execution.editing import edit_file
 from fora.adapters.file_writes import directory_lock, replace_file
+from fora.adapters.files.text import normalize_newlines
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.files import TreeEntry
@@ -66,7 +67,7 @@ class DirectoryTree:
             raise DomainError(
                 ErrorCode.NOT_READABLE, "File cannot be read as UTF-8"
             ) from error
-        return text.replace("\r\n", "\n").replace("\r", "\n")
+        return normalize_newlines(text)
 
     def _entry(self, target: Path) -> TreeEntry:
         try:
