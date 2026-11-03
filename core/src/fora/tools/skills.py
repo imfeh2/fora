@@ -68,8 +68,9 @@ def _named(tree: FileTree, source: str) -> dict[str, Skill]:
         try:
             text, _ = tree.read(f"{path}/{DOCUMENT}")
         except DomainError as error:
-            if error.code != ErrorCode.NOT_FOUND:
-                raise
+            if error.code == ErrorCode.NOT_FOUND:
+                continue
+            found[name] = Skill(name, name, source)
             continue
         found[name] = Skill(name, describe(text, name), source)
     return found
@@ -81,25 +82,23 @@ def discover(library: FileTree, workspace: FileTree) -> list[Skill]:
     return [found[name] for name in sorted(found)]
 
 
-def load(library: FileTree, workspace: FileTree, name: str) -> dict[str, str]:
+def load(tree: FileTree, source: str, name: str) -> dict[str, str]:
     if not name or name in (".", "..") or "/" in name:
         raise _missing(name)
-    for tree, source in ((workspace, WORKSPACE), (library, LIBRARY)):
-        path = f"{SKILLS}/{name}/{DOCUMENT}"
-        try:
-            text, _ = tree.read(path)
-        except DomainError as error:
-            if error.code != ErrorCode.NOT_FOUND:
-                raise
-            continue
-        return {
-            "name": name,
-            "description": describe(text, name),
-            "source": source,
-            "path": f"{SKILLS}/{name}",
-            "content": text,
-        }
-    raise _missing(name)
+    path = f"{SKILLS}/{name}/{DOCUMENT}"
+    try:
+        text, _ = tree.read(path)
+    except DomainError as error:
+        if error.code != ErrorCode.NOT_FOUND:
+            raise
+        raise _missing(name) from None
+    return {
+        "name": name,
+        "description": describe(text, name),
+        "source": source,
+        "path": f"{SKILLS}/{name}",
+        "content": text,
+    }
 
 
 def _missing(name: str) -> DomainError:
