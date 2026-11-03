@@ -107,6 +107,7 @@ class DirectoryTree:
     ) -> TreeEntry:
         if not isinstance(content, str):
             raise DomainError(ErrorCode.INVALID_CONTENT, "Content must be a string")
+        content = normalize_newlines(content)
         target = self._resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with directory_lock(target):
