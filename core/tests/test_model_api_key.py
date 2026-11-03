@@ -42,21 +42,3 @@ def test_saving_an_empty_key_clears_it() -> None:
 def test_saving_a_new_key_replaces_it() -> None:
     updated = save({"api_key": "sk-test-new"})
     assert updated.provider("deepseek").api_key == "sk-test-new"
-
-
-def test_legacy_save_without_a_key_keeps_the_stored_key() -> None:
-    updated = save({"name": "Renamed", "api_key": "", "clear_key": False})
-    assert updated.provider("deepseek").name == "Renamed"
-    assert updated.provider("deepseek").api_key == "sk-test-deepseek"
-    assert updated.public()["providers"][0]["api_key_set"] is True
-
-
-def test_legacy_save_with_a_new_key_replaces_it() -> None:
-    updated = save({"api_key": "sk-test-new", "clear_key": False})
-    assert updated.provider("deepseek").api_key == "sk-test-new"
-
-
-def test_legacy_save_with_clear_key_clears_the_stored_key() -> None:
-    updated = save({"api_key": "", "clear_key": True})
-    assert updated.provider("deepseek").api_key == ""
-    assert updated.public()["providers"][0]["api_key_set"] is False

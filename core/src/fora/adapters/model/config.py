@@ -529,11 +529,6 @@ class ModelCatalog(ConfigurationRecord):
                 if record_id is not None:
                     provider = updated.provider(record_id)
                     merged = provider.model_dump()
-                    if "clear_key" in values:
-                        if values.pop("clear_key"):
-                            values["api_key"] = ""
-                        elif values.get("api_key") == "":
-                            values.pop("api_key")
                     merged.update(values)
                     merged["id"] = record_id
                     updated.providers[updated.providers.index(provider)] = (
