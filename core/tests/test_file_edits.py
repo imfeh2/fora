@@ -42,6 +42,23 @@ def test_creating_with_crlf_writes_lf(tmp_path: Path) -> None:
     assert (tmp_path / "new.md").read_bytes() == b"one\ntwo\n"
 
 
+def test_writing_with_crlf_stores_lf_and_keeps_the_hash_writable(
+    tmp_path: Path,
+) -> None:
+    tree = DirectoryTree(tmp_path)
+
+    tree.write("g.md", "a\r\nb\r\n")
+
+    assert (tmp_path / "g.md").read_bytes() == b"a\nb\n"
+
+    content, digest = tree.read("g.md")
+    assert content == "a\nb\n"
+
+    tree.write("g.md", content + "c\n", expected_hash=digest)
+
+    assert (tmp_path / "g.md").read_bytes() == b"a\nb\nc\n"
+
+
 def test_editing_a_non_utf8_document_still_reports_not_readable(tmp_path: Path) -> None:
     tree = DirectoryTree(tmp_path)
     (tmp_path / "doc.md").write_bytes(b"\xff\xfe bad \r\n")
