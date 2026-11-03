@@ -30,7 +30,6 @@ export type RegisteredModel = {
   provider_id: string;
   name: string;
   model: string;
-  enabled: boolean;
   thinking_budget_tokens: number | null;
   thinking_options: Thinking[];
 };

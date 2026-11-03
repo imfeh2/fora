@@ -147,11 +147,7 @@ export function ModelSelection({
               {catalog.models
                 .filter((model) => model.provider_id === provider.id)
                 .map((model) => (
-                  <option
-                    key={model.id}
-                    value={model.id}
-                    disabled={!model.enabled}
-                  >
+                  <option key={model.id} value={model.id}>
                     {model.name}
                   </option>
                 ))}
@@ -1209,23 +1205,6 @@ function ProviderModelEditor({
             <p className="font-medium">{model.name}</p>
             <p className="text-xs text-fg-muted">{model.model}</p>
           </div>
-          <label
-            htmlFor={`${id}-enabled`}
-            className="flex items-center gap-2 text-sm"
-          >
-            <Switch
-              id={`${id}-enabled`}
-              aria-label={`Enable model ${model.name}`}
-              checked={model.enabled}
-              disabled={busy || unavailable}
-              onCheckedChange={(checked) =>
-                void save("save_model", model.id, {
-                  enabled: checked,
-                })
-              }
-            />
-            Enabled
-          </label>
           <IconButton
             label="Edit model"
             size="sm"
@@ -2055,7 +2034,6 @@ function ModelDirectory({
                       provider_id: provider.id,
                       model: remote,
                       name: remote,
-                      enabled: true,
                       thinking_budget_tokens: null,
                     });
                   } finally {
@@ -2105,7 +2083,6 @@ function ModelForm({
   const id = useId();
   const [name, setName] = useState(model?.name ?? "");
   const [remote, setRemote] = useState(model?.model ?? "");
-  const [enabled, setEnabled] = useState(model?.enabled ?? true);
   const [budgetTokens, setBudgetTokens] = useState(
     model?.thinking_budget_tokens?.toString() ?? "",
   );
@@ -2119,7 +2096,6 @@ function ModelForm({
   const draftDirty =
     name !== (model?.name ?? "") ||
     remote !== (model?.model ?? "") ||
-    enabled !== (model?.enabled ?? true) ||
     budgetTokens !== (model?.thinking_budget_tokens?.toString() ?? "");
   useEffect(() => {
     onDraft?.(draftDirty);
@@ -2144,13 +2120,9 @@ function ModelForm({
     if (!dirty.current) {
       setName(model?.name ?? "");
       setRemote(model?.model ?? "");
-      setEnabled(model?.enabled ?? true);
       setBudgetTokens(model?.thinking_budget_tokens?.toString() ?? "");
     }
   }, [model]);
-  useEffect(() => {
-    setEnabled(model?.enabled ?? true);
-  }, [model?.enabled]);
   useEffect(() => {
     listRequest.current += 1;
     setOptions([]);
@@ -2240,7 +2212,6 @@ function ModelForm({
         name: name.trim() || remote.trim(),
         model: remote.trim(),
         provider_id: provider.id,
-        enabled,
         thinking_budget_tokens: budgetSupported ? parsedBudget : null,
       })
     ) {
@@ -2254,7 +2225,6 @@ function ModelForm({
       }
       if (!model) {
         setName("");
-        setEnabled(true);
         setRemote("");
         setBudgetTokens("");
         setThinking("default");
@@ -2382,18 +2352,6 @@ function ModelForm({
             />
           </Field>
         ) : null}
-        <label
-          htmlFor={`${id}-enabled`}
-          className="flex items-center gap-2 text-sm"
-        >
-          <Input
-            id={`${id}-enabled`}
-            type="checkbox"
-            checked={enabled}
-            onChange={(event) => setEnabled(event.target.checked)}
-          />
-          Enabled
-        </label>
         <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
           <Select
             id={`${id}-thinking`}

@@ -64,10 +64,10 @@ def resolve(
         if "model_id" in values:
             registered = catalog.registered_model(values["model_id"])
             provider = catalog.provider(registered.provider_id)
-            if not registered.enabled or not provider.enabled:
+            if not provider.enabled:
                 raise DomainError(
                     ErrorCode.MODEL_UNAVAILABLE,
-                    "The selected model or provider is disabled",
+                    "The selected provider is disabled",
                 )
             model_name = registered.model
             budget_tokens = registered.thinking_budget_tokens

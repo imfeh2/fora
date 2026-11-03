@@ -42,7 +42,6 @@ function model(id: string, name: string, ref: string): RegisteredModel {
     provider_id: "deepseek",
     name,
     model: ref,
-    enabled: true,
     thinking_budget_tokens: null,
     thinking_options: [],
   };

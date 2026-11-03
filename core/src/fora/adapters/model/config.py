@@ -330,7 +330,6 @@ class RegisteredModel(ConfigurationRecord):
     provider_id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     model: str = Field(min_length=1)
-    enabled: bool = True
     thinking_budget_tokens: int | None = Field(default=None, gt=0, strict=True)
 
 
@@ -366,6 +365,21 @@ class AgentModelConfig(ConfigurationRecord):
     thinking: Thinking | None = None
 
 
+def _without_model_switch(values: dict[str, Any]) -> dict[str, Any]:
+    models = values.get("models")
+    if not isinstance(models, list):
+        return values
+    return {
+        **values,
+        "models": [
+            {key: value for key, value in model.items() if key != "enabled"}
+            if isinstance(model, dict)
+            else model
+            for model in models
+        ],
+    }
+
+
 class ModelCatalog(ConfigurationRecord):
     version: Literal[2] = 2
     providers: list[ProviderConfig] = Field(default_factory=list)
@@ -378,6 +392,7 @@ class ModelCatalog(ConfigurationRecord):
     def restore(cls, values: dict[str, Any] | None) -> ModelCatalog:
         if not values:
             return cls()
+        values = _without_model_switch(values)
         if "version" in values:
             try:
                 if values.get("version") == 1:
@@ -463,10 +478,10 @@ class ModelCatalog(ConfigurationRecord):
             return
         model = self.registered_model(model_id)
         provider = self.provider(model.provider_id)
-        if not model.enabled or not provider.enabled:
+        if not provider.enabled:
             raise DomainError(
                 ErrorCode.MODEL_IN_USE,
-                f"{owner} references a disabled model or provider",
+                f"{owner} references a disabled provider",
             )
         options = thinking_options(
             provider.api_type, model.model, model.thinking_budget_tokens
@@ -624,10 +639,10 @@ class ModelCatalog(ConfigurationRecord):
             )
         model = self.registered_model(model_id)
         provider = self.provider(model.provider_id)
-        if not model.enabled or not provider.enabled:
+        if not provider.enabled:
             raise DomainError(
                 ErrorCode.MODEL_UNAVAILABLE,
-                "The selected model or provider is disabled",
+                "The selected provider is disabled",
             )
         if not provider.base_url.strip():
             raise DomainError(
