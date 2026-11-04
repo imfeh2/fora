@@ -1,6 +1,6 @@
 {
   "name": "fora-app",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "description": "Run your own organization of agents.",
   "private": true,
   "type": "module",
