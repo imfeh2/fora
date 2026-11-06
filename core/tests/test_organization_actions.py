@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from pydantic_ai.messages import (
+    ModelMessagesTypeAdapter,
     ModelResponse,
     RetryPromptPart,
     TextPart,
@@ -228,8 +229,22 @@ def test_delete_action_reports_a_missing_member(world) -> None:
 
 
 def test_pause_action_on_self_waits_for_the_end_of_the_turn(world) -> None:
-    scheduler, part = run_own_turn(world, "pause", member_id=MAIN)
-    result = returned(part)
+    mention(world)
+    scheduler = Scheduler(world, _runner("pause", {"member_id": MAIN}, []))
+    record = scheduler.run_turn(MAIN)
+    assert record is not None
+    assert record.status == "interrupted", record.error
+    assert record.error is None
+    parts = [
+        part
+        for message in ModelMessagesTypeAdapter.validate_json(
+            world.history.runs(MAIN, limit=1)[0].messages_json
+        )
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "organization"
+    ]
+    assert len(parts) == 1
+    result = returned(parts[0])
     assert result["state"] == "running"
     assert result["pause_requested"] is True
     assert scheduler.agent_status(MAIN)["state"] == "paused"

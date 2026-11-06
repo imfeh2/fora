@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from fora.core.error_codes import ErrorCode
@@ -206,6 +208,52 @@ class HistoryValidationError(DomainError):
         super().__init__(ErrorCode.HISTORY_INVALID, message)
 
 
+class ModelRequestStopped(Exception):
+    pass
+
+
+class ModelRequestControl:
+    def __init__(self) -> None:
+        self._stopped = threading.Event()
+        self._lock = threading.Lock()
+        self._waiters: dict[asyncio.Future[None], asyncio.AbstractEventLoop] = {}
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped.set()
+            for waiter, loop in self._waiters.items():
+                loop.call_soon_threadsafe(self._wake, waiter)
+
+    @staticmethod
+    def _wake(waiter: asyncio.Future[None]) -> None:
+        if not waiter.done():
+            waiter.set_result(None)
+
+    def check(self) -> None:
+        if self.stopped:
+            raise ModelRequestStopped()
+
+    async def wait(self, seconds: float) -> None:
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_future()
+        with self._lock:
+            self.check()
+            self._waiters[waiter] = loop
+        try:
+            async with asyncio.timeout(seconds):
+                await waiter
+        except TimeoutError:
+            pass
+        finally:
+            with self._lock:
+                del self._waiters[waiter]
+        self.check()
+
+
 @dataclass(frozen=True)
 class TurnRequest:
     agent_id: int
@@ -221,6 +269,7 @@ class TurnRequest:
     agents_instructions: str | None = None
     request_recorder: ModelRequestRecorder | None = None
     live_observer: LiveTurnObserver | None = None
+    model_control: ModelRequestControl = field(default_factory=ModelRequestControl)
 
 
 @dataclass(frozen=True)
@@ -231,6 +280,7 @@ class TurnOutcome:
     input_tokens: int | None = None
     context_exceeded: bool = False
     overflow_context: str | None = None
+    stopped: bool = False
 
 
 class ModelRunner(Protocol):

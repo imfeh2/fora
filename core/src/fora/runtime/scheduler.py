@@ -26,6 +26,7 @@ from fora.runtime.live import LiveSnapshots
 from fora.runtime.reminder import (
     PREPARATION_PROMPT,
     HistoryValidationError,
+    ModelRequestControl,
     ModelRunner,
     Reminder,
     TurnRequest,
@@ -57,6 +58,7 @@ class PreparedTurn:
     reminder: Reminder | None
     prompt: str
     history: str
+    model_control: ModelRequestControl
 
 
 @dataclass
@@ -150,6 +152,7 @@ class Scheduler:
             WeakValueDictionary()
         )
         self._active: dict[int, AgentRun] = {}
+        self._model_controls: dict[int, ModelRequestControl] = {}
         self._reserved: set[int] = set()
         self._failures: dict[int, FailedFinalization] = {}
         self._blocked: dict[int, str] = {}
@@ -381,6 +384,9 @@ class Scheduler:
         with self.member_lock(agent_id):
             self._require_agent(agent_id)
             self._pause_requested.add(agent_id)
+            control = self._model_controls.get(agent_id)
+            if control is not None:
+                control.stop()
             active = agent_id in self._active
             try:
                 with self.history.transaction():
@@ -694,12 +700,15 @@ class Scheduler:
                         ),
                     )
                 self._active[agent_id] = run
+                model_control = ModelRequestControl()
+                self._model_controls[agent_id] = model_control
                 return PreparedTurn(
                     run,
                     member.name,
                     reminder,
                     reminder.render() if reminder is not None else PREPARATION_PROMPT,
                     previous,
+                    model_control,
                 )
             except HistoryValidationError:
                 self.history.pause_for_safety(agent_id, "history_invalid")
@@ -772,6 +781,7 @@ class Scheduler:
             persist=persist,
             request_recorder=request_recorder,
             live_observer=live_observer,
+            model_control=prepared.model_control,
             ephemeral=lambda: exchange_nudge(
                 self.store,
                 agent_id,
@@ -810,7 +820,9 @@ class Scheduler:
             context_exceeded = outcome.context_exceeded
             overflow_context = outcome.overflow_context
             messages = outcome.messages_json
-            if outcome.error:
+            if outcome.stopped:
+                status = "interrupted"
+            elif outcome.error:
                 status = "failed"
                 error = outcome.error
         except Exception as failure:
@@ -990,6 +1002,7 @@ class Scheduler:
             finally:
                 with self.member_lock(agent_id):
                     self._active.pop(agent_id, None)
+                    self._model_controls.pop(agent_id, None)
                     with self._lock:
                         self._reserved.discard(agent_id)
             if window is not None:

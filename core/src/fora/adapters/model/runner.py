@@ -32,6 +32,7 @@ from typing import (
 )
 
 import pydantic_ai
+from google.genai.types import HttpRetryOptions
 from pydantic import StrictInt, TypeAdapter
 from pydantic_ai import (
     Agent,
@@ -117,6 +118,7 @@ from fora.adapters.model.observability import (
     active_trace,
 )
 from fora.adapters.model.prompt import SYSTEM_PROMPT
+from fora.adapters.model.retry import RequestRetry, RetryingModel
 from fora.core.attachment import ViewedImage
 from fora.core.context_budget import (
     estimate_image_tokens,
@@ -136,6 +138,8 @@ from fora.ports.live import LiveRequestCoverage, LiveTool, LiveTurn, LiveTurnObs
 from fora.runtime.reminder import (
     HistoryPersistenceError,
     HistoryValidationError,
+    ModelRequestControl,
+    ModelRequestStopped,
     TurnOutcome,
     TurnRequest,
 )
@@ -274,20 +278,27 @@ def build_model(config: ModelConfig) -> Model:
                 ErrorCode.UNSUPPORTED_REQUEST_BODY,
                 "This model does not support sampling fields. Remove temperature, top_p and top_k.",
             )
+        anthropic_provider = AnthropicProvider(
+            base_url=config.base_url, api_key=config.api_key
+        )
+        anthropic_provider.client.max_retries = 0
         return AnthropicModel(
             cast(AnthropicModelName, config.model),
             settings=settings,
-            provider=AnthropicProvider(
-                base_url=config.base_url, api_key=config.api_key
-            ),
+            provider=anthropic_provider,
         )
     if config.api_type == "google":
         return GoogleModel(
             cast(GoogleModelName, config.model),
             settings=settings,
-            provider=GoogleProvider(api_key=config.api_key, base_url=config.base_url),
+            provider=GoogleProvider(
+                api_key=config.api_key,
+                base_url=config.base_url,
+                retry_options=HttpRetryOptions(attempts=1),
+            ),
         )
     provider = OpenAIProvider(base_url=config.base_url, api_key=config.api_key)
+    provider.client.max_retries = 0
     if config.api_type == "openai-responses":
         return OpenAIResponsesModel(
             cast(OpenAIModelName, config.model), provider=provider, settings=settings
@@ -496,7 +507,10 @@ class LiveModel(WrapperModel):
         context_sources: ContextSources | None = None,
         context_ratio_percent: int = 80,
         context_window_override: int | None = None,
+        request_retry: RequestRetry | None = None,
     ) -> None:
+        self.request_retry = request_retry or RequestRetry(ModelRequestControl(), 0, 0)
+        self.request_messages: list[ModelMessage] = []
         self._resolve = resolve
         self._ephemeral = ephemeral
         self._cache_key = cache_key
@@ -803,6 +817,7 @@ class LiveModel(WrapperModel):
     def _record_response(
         self, handle: ModelRequestHandle | None, response: ModelResponse
     ) -> None:
+        self.request_retry.control.check()
         self.current_response = response
         if response.usage.input_tokens:
             self._last_input_tokens = response.usage.input_tokens
@@ -875,6 +890,8 @@ class LiveModel(WrapperModel):
     def _record_error(
         self, handle: ModelRequestHandle | None, error: BaseException
     ) -> None:
+        if isinstance(error, ModelRequestStopped):
+            return
         if not isinstance(
             error,
             HistoryPersistenceError
@@ -942,8 +959,11 @@ class LiveModel(WrapperModel):
         self._response_version = None
         self.current_response = None
         self.model_failure = None
+        self.request_messages = messages
         try:
-            response = await wrapped.request(outgoing, settings, parameters)
+            response = await RetryingModel(wrapped, self.request_retry).request(
+                outgoing, settings, parameters
+            )
         except BaseException as error:
             self._record_error(handle, error)
             raise
@@ -970,8 +990,9 @@ class LiveModel(WrapperModel):
         self._response_version = None
         self.current_response = None
         self.model_failure = None
+        self.request_messages = messages
         try:
-            async with wrapped.request_stream(
+            async with RetryingModel(wrapped, self.request_retry).request_stream(
                 outgoing,
                 settings,
                 parameters,
@@ -1067,7 +1088,8 @@ class PydanticModelRunner:
                 "while thinking=default keeps the model's default thinking behavior. "
                 "rename takes member_id and name and changes that Member's name. "
                 "pause, resume and delete take member_id and act on one Agent: "
-                "pause lets the current Turn finish and then stops the Agent, "
+                "pause stops model retries and discards in-flight model results; "
+                "running tools finish before the Agent stops, "
                 "resume returns a paused Agent to idle, "
                 "delete removes the Agent and its model selection permanently and cannot be undone."
             ),
@@ -1531,6 +1553,7 @@ class PydanticModelRunner:
             request_context: ModelRequestContext,
             response: ModelResponse,
         ) -> ModelResponse:
+            request.model_control.check()
             if live_model is not None:
                 saved = live_model.current_response
                 if saved is not None:
@@ -1656,6 +1679,9 @@ class PydanticModelRunner:
                     context_sources,
                     context_ratio_percent=parameters.context_window_ratio_percent,
                     context_window_override=parameters.context_window_tokens,
+                    request_retry=RequestRetry(
+                        request.model_control, request.agent_id, request.sequence
+                    ),
                 )
                 live_model = wrapper
 
@@ -1680,6 +1706,7 @@ class PydanticModelRunner:
         trace = TurnTrace.of(request)
         history_length = len(history)
         error = None
+        stopped = False
         context_exceeded = False
         context_limit_reached = False
         overflow_context = None
@@ -1693,6 +1720,20 @@ class PydanticModelRunner:
                 result = asyncio.run(once())
             except HistoryPersistenceError:
                 raise
+            except ModelRequestStopped:
+                stopped = True
+                final_messages = (
+                    live_model.request_messages
+                    if live_model is not None and live_model.request_messages
+                    else history
+                )
+                if live_model is not None:
+                    live_model.finalize(final_messages)
+                messages = _encode_history(
+                    context_sources.snapshot(final_messages, persistent=True)
+                )
+                new_messages = final_messages[history_length:]
+                input_tokens = _last_input_tokens(new_messages)
             except Exception as failure:
                 reached = isinstance(failure, ContextWindowReached)
                 if not reached:
@@ -1772,6 +1813,7 @@ class PydanticModelRunner:
             input_tokens=input_tokens,
             context_exceeded=context_exceeded,
             overflow_context=overflow_context,
+            stopped=stopped,
         )
 
 
