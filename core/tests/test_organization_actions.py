@@ -228,7 +228,7 @@ def test_delete_action_reports_a_missing_member(world) -> None:
     assert "not_found" in message
 
 
-def test_pause_action_on_self_waits_for_the_end_of_the_turn(world) -> None:
+def test_pause_action_on_self_stops_after_tools_finish(world) -> None:
     mention(world)
     scheduler = Scheduler(world, _runner("pause", {"member_id": MAIN}, []))
     record = scheduler.run_turn(MAIN)
