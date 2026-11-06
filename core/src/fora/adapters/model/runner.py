@@ -265,7 +265,7 @@ def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:
     )
 
 
-def build_model(config: ModelConfig) -> Model:
+def build_model(config: ModelConfig, *, sdk_retries: bool = True) -> Model:
     settings = cast(ModelSettings, model_settings(config))
     if config.api_type == "anthropic":
         profile = anthropic_model_profile(config.model)
@@ -281,7 +281,8 @@ def build_model(config: ModelConfig) -> Model:
         anthropic_provider = AnthropicProvider(
             base_url=config.base_url, api_key=config.api_key
         )
-        anthropic_provider.client.max_retries = 0
+        if not sdk_retries:
+            anthropic_provider.client.max_retries = 0
         return AnthropicModel(
             cast(AnthropicModelName, config.model),
             settings=settings,
@@ -294,11 +295,12 @@ def build_model(config: ModelConfig) -> Model:
             provider=GoogleProvider(
                 api_key=config.api_key,
                 base_url=config.base_url,
-                retry_options=HttpRetryOptions(attempts=1),
+                retry_options=None if sdk_retries else HttpRetryOptions(attempts=1),
             ),
         )
     provider = OpenAIProvider(base_url=config.base_url, api_key=config.api_key)
-    provider.client.max_retries = 0
+    if not sdk_retries:
+        provider.client.max_retries = 0
     if config.api_type == "openai-responses":
         return OpenAIResponsesModel(
             cast(OpenAIModelName, config.model), provider=provider, settings=settings
@@ -318,6 +320,10 @@ def build_model(config: ModelConfig) -> Model:
         settings=settings,
         profile=chat_profile,
     )
+
+
+def build_turn_model(config: ModelConfig) -> Model:
+    return build_model(config, sdk_retries=False)
 
 
 def _web_search_tool() -> Any:
@@ -1046,7 +1052,7 @@ class PydanticModelRunner:
         self,
         settings: SettingsStore,
         *,
-        build_model: Callable[[ModelConfig], Model] = build_model,
+        build_model: Callable[[ModelConfig], Model] = build_turn_model,
         build_observability: Callable[
             [ObservabilityConfig], Observability
         ] = build_observability,
