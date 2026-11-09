@@ -696,14 +696,7 @@ class LiveModel(WrapperModel):
             },
         }
         try:
-            self._request_recorder.related(
-                handle,
-                _encode_messages(
-                    self._context_sources.snapshot(related)
-                    if self._context_sources is not None
-                    else related
-                ),
-            )
+            self._request_recorder.related(handle)
         except HistoryPersistenceError:
             raise
         except Exception as error:
@@ -798,11 +791,7 @@ class LiveModel(WrapperModel):
         try:
             model_json = _encode_json(model_snapshot)
             handle = self._request_recorder.start(
-                _encode_messages(
-                    self._context_sources.snapshot(messages)
-                    if self._context_sources is not None
-                    else messages
-                ),
+                len(messages),
                 _encode_request_parameters(parameters),
                 _encode_json(model_settings or {}),
                 model_json,
@@ -856,10 +845,9 @@ class LiveModel(WrapperModel):
             },
         }
         self.observe_response(response)
-        response_json = _encode_history([response])
         response_version = _response_version(response)
         try:
-            self._request_recorder.response(handle, (response_json,))
+            self._request_recorder.response(handle)
         except HistoryPersistenceError:
             raise
         except Exception as error:
@@ -1015,13 +1003,9 @@ class LiveModel(WrapperModel):
 
 
 def live_coverage(
-    raw: str | Sequence[str], turn: LiveTurn
+    history: Sequence[str], turn: LiveTurn
 ) -> tuple[LiveRequestCoverage, ...]:
-    messages = [
-        message
-        for value in ((raw,) if isinstance(raw, str) else raw)
-        for message in ModelMessagesTypeAdapter.validate_json(value)
-    ]
+    messages = _decode_history(history)
     identities = {(request.ordinal, request.request_id) for request in turn.requests}
     coverage = []
     for index, message in enumerate(messages):
@@ -1044,9 +1028,9 @@ def live_coverage(
 
 class PydanticModelRunner:
     def live_coverage(
-        self, raw: str, turn: LiveTurn
+        self, messages: Sequence[str], turn: LiveTurn
     ) -> tuple[LiveRequestCoverage, ...]:
-        return live_coverage(raw, turn)
+        return live_coverage(messages, turn)
 
     def __init__(
         self,
@@ -1404,8 +1388,8 @@ class PydanticModelRunner:
     def check_available(self, agent_id: int) -> None:
         ModelCatalog.restore(self._settings.get_settings("model")).resolve(agent_id)
 
-    def validate_history(self, raw: str) -> None:
-        for message in _decode_history(raw):
+    def validate_history(self, messages: Sequence[str]) -> None:
+        for message in _decode_history(messages):
             if isinstance(message, ModelRequest) and message.metadata is not None:
                 metadata = message.metadata.get("fora", {})
                 if not isinstance(metadata, dict):
@@ -1422,8 +1406,8 @@ class PydanticModelRunner:
                 request.agent_id
             )
         except DomainError as failure:
-            return TurnOutcome(messages_json=request.history_json, error=str(failure))
-        self.validate_history(request.history_json)
+            return TurnOutcome(messages=request.history, error=str(failure))
+        self.validate_history(request.history)
         with self._lock:
             tracing = ObservabilityConfig.restore(
                 self._settings.get_settings("observability")
@@ -1440,7 +1424,7 @@ class PydanticModelRunner:
             observability = self._observability
         context_sources = ContextSources(request.agent_id, request.sequence)
         history = _settle_tool_calls(
-            context_sources.restore(_decode_history(request.history_json))
+            context_sources.restore(_decode_history(request.history))
         )
         new_window = not history
         if new_window:
@@ -1719,7 +1703,7 @@ class PydanticModelRunner:
         snapshot = (
             _persist_history(request, history, context_sources)
             if new_window
-            else _encode_history(context_sources.snapshot(history, persistent=True))
+            else _encode_messages(context_sources.snapshot(history, persistent=True))
         )
         with capture_run_messages() as captured, active_trace(trace):
             try:
@@ -1735,7 +1719,7 @@ class PydanticModelRunner:
                 )
                 if live_model is not None:
                     live_model.finalize(final_messages)
-                messages = _encode_history(
+                messages = _encode_messages(
                     context_sources.snapshot(final_messages, persistent=True)
                 )
                 new_messages = final_messages[history_length:]
@@ -1755,7 +1739,7 @@ class PydanticModelRunner:
                     final_messages = _settle_tool_calls(captured)
                     if live_model is not None:
                         live_model.finalize(final_messages)
-                    messages = _encode_history(
+                    messages = _encode_messages(
                         context_sources.snapshot(final_messages, persistent=True)
                     )
                 new_messages = captured[history_length:]
@@ -1787,7 +1771,7 @@ class PydanticModelRunner:
                 final_messages = _settle_tool_calls(result.all_messages())
                 assert live_model is not None
                 live_model.finalize(final_messages)
-                messages = _encode_history(
+                messages = _encode_messages(
                     context_sources.snapshot(final_messages, persistent=True)
                 )
                 new_messages = result.new_messages()
@@ -1813,7 +1797,7 @@ class PydanticModelRunner:
             }
         )
         return TurnOutcome(
-            messages_json=messages,
+            messages=messages,
             usage_json=usage,
             error=error,
             input_tokens=input_tokens,
@@ -1899,9 +1883,9 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
     return [*messages[:-1], replace(trailing, parts=[*trailing.parts, *parts])]
 
 
-def _decode_history(raw: str) -> list[ModelMessage]:
+def _decode_history(messages: Sequence[str]) -> list[ModelMessage]:
     try:
-        return ModelMessagesTypeAdapter.validate_json(raw)
+        return ModelMessagesTypeAdapter.validate_json("[" + ",".join(messages) + "]")
     except ValueError as error:
         raise HistoryValidationError("Stored model history is invalid") from error
 
@@ -1994,7 +1978,7 @@ def _encode_request_parameters(parameters: ModelRequestParameters) -> str:
 
 
 def _encode_messages(messages: Sequence[ModelMessage]) -> tuple[str, ...]:
-    return tuple(_encode_history([message]) for message in messages)
+    return tuple(_encode_history([message])[1:-1] for message in messages)
 
 
 def _encode_history(messages: Sequence[ModelMessage]) -> str:
@@ -2008,17 +1992,17 @@ def _persist_history(
     request: TurnRequest,
     messages: list[ModelMessage],
     context_sources: ContextSources | None = None,
-) -> str:
-    raw = _encode_history(
+) -> tuple[str, ...]:
+    encoded = _encode_messages(
         context_sources.snapshot(messages, persistent=True)
         if context_sources is not None
         else messages
     )
     try:
-        request.persist(raw)
+        request.persist(encoded)
     except Exception as error:
         raise HistoryPersistenceError(
             f"Could not save model history for agent {request.agent_id} "
             f"turn {request.sequence}"
         ) from error
-    return raw
+    return encoded

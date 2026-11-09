@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 from weakref import WeakValueDictionary
@@ -57,15 +57,15 @@ class PreparedTurn:
     name: str
     reminder: Reminder | None
     prompt: str
-    history: str
+    history: tuple[str, ...]
     model_control: ModelRequestControl
 
 
 @dataclass
 class FailedFinalization:
     sequence: int
-    saved_history: str
-    messages: str
+    saved_history: tuple[str, ...]
+    messages: tuple[str, ...]
     usage: str | None
     error: str
 
@@ -85,7 +85,7 @@ class _TurnRequestRecorder:
 
     def start(
         self,
-        messages_json: Sequence[str],
+        input_count: int,
         parameters_json: str,
         settings_json: str,
         model_json: str,
@@ -94,9 +94,8 @@ class _TurnRequestRecorder:
         handle = self._history.start_model_request(
             self._run.agent_id,
             self._run.sequence,
-            self._run.run_id,
             self._window_number,
-            messages_json,
+            input_count,
             parameters_json,
             settings_json,
             model_json,
@@ -105,18 +104,13 @@ class _TurnRequestRecorder:
         self._progress("request.started")
         return handle
 
-    def response(
-        self, handle: ModelRequestHandle, response_json: Sequence[str]
-    ) -> None:
+    def response(self, handle: ModelRequestHandle) -> None:
         self._history.finish_model_request(
-            self._run.agent_id, self._run.sequence, handle, response_json
+            self._run.agent_id, self._run.sequence, handle
         )
         self._progress("request.response")
 
-    def related(self, handle: ModelRequestHandle, messages_json: Sequence[str]) -> None:
-        self._history.link_model_request(
-            self._run.agent_id, self._run.sequence, handle, messages_json
-        )
+    def related(self, handle: ModelRequestHandle) -> None:
         self._progress("tool.result")
 
     def error(self, handle: ModelRequestHandle, error: str) -> None:
@@ -198,19 +192,19 @@ class Scheduler:
                 runs = self.history.runs(member.id, limit=1)
                 try:
                     self._runner.validate_history(
-                        self.history.latest_messages(member.id)
+                        self.history.current_messages(member.id)
                     )
                     if runs and runs[0].status == "running":
                         run = runs[0]
-                        self._runner.validate_history(run.messages_json)
-                        self.history.save_progress(
-                            member.id, run.sequence, run.messages_json
+                        messages = self.history.window_messages(
+                            member.id, run.window_number
                         )
+                        self._runner.validate_history(messages)
                         self.history.finish_run(
                             member.id,
                             run.sequence,
                             status="interrupted",
-                            messages_json=run.messages_json,
+                            messages=messages,
                             usage_json=run.usage_json,
                         )
                 except HistoryValidationError:
@@ -409,7 +403,7 @@ class Scheduler:
         return self.agent_status(agent_id)
 
     def resume(self, agent_id: int, is_agent: bool = False) -> dict[str, Any]:
-        recovered: tuple[int, str] | None = None
+        recovered: tuple[int, tuple[str, ...]] | None = None
         with self.member_lock(agent_id):
             self._require_agent(agent_id)
             if is_agent and (
@@ -427,7 +421,7 @@ class Scheduler:
                         agent_id, replace(lifecycle, pause_requested=False)
                     )
                 else:
-                    current = self.history.latest_messages(agent_id)
+                    current = self.history.current_messages(agent_id)
                     self._runner.validate_history(current)
                     failure = self._failures.get(agent_id)
                     if failure is not None:
@@ -437,19 +431,20 @@ class Scheduler:
                                 ErrorCode.HISTORY_CHANGED,
                                 "The failed Turn identity changed",
                             )
-                        stored = runs[0].messages_json
+                        stored = self.history.window_messages(
+                            agent_id, runs[0].window_number
+                        )
                         messages = (
                             failure.messages
                             if stored == failure.saved_history
                             else stored
                         )
                         self._runner.validate_history(messages)
-                        self.history.save_progress(agent_id, failure.sequence, messages)
                         self.history.finish_run(
                             agent_id,
                             failure.sequence,
                             status="interrupted",
-                            messages_json=messages,
+                            messages=messages,
                             usage_json=failure.usage,
                             error=failure.error,
                         )
@@ -458,15 +453,15 @@ class Scheduler:
                         runs = self.history.runs(agent_id, limit=1)
                         if runs and runs[0].status == "running":
                             run = runs[0]
-                            self._runner.validate_history(run.messages_json)
-                            self.history.save_progress(
-                                agent_id, run.sequence, run.messages_json
+                            messages = self.history.window_messages(
+                                agent_id, run.window_number
                             )
+                            self._runner.validate_history(messages)
                             self.history.finish_run(
                                 agent_id,
                                 run.sequence,
                                 status="interrupted",
-                                messages_json=run.messages_json,
+                                messages=messages,
                                 usage_json=run.usage_json,
                                 error=run.error,
                             )
@@ -484,7 +479,9 @@ class Scheduler:
         self._changed("organization.changed", {"id": agent_id})
         return self.agent_status(agent_id)
 
-    def _confirm_live(self, agent_id: int, sequence: int, messages: str) -> None:
+    def _confirm_live(
+        self, agent_id: int, sequence: int, messages: tuple[str, ...]
+    ) -> None:
         turn = next(iter(self.live.capture(agent_id)), None)
         if turn is not None and turn.sequence == sequence and turn.requests:
             coverage = self._runner.live_coverage(messages, turn)
@@ -674,7 +671,7 @@ class Scheduler:
                     )
                     if reminder is None and not self.preparation_due(agent_id):
                         return None
-                    previous = self.history.latest_messages(agent_id)
+                    previous = self.history.current_messages(agent_id)
                     self._runner.validate_history(previous)
                     keys = (
                         [
@@ -748,14 +745,13 @@ class Scheduler:
         persisted_history = prepared.history
 
         def progress(phase: str) -> None:
-            saved = self.history.history_run(agent_id, run.sequence)
             self.emit(
                 "turn.progress",
                 {
                     "agent_id": agent_id,
                     "sequence": run.sequence,
                     "phase": phase,
-                    "saved_at": saved.last_saved_at if saved is not None else None,
+                    "saved_at": self.history.last_saved_at(agent_id, run.sequence),
                 },
             )
 
@@ -763,10 +759,10 @@ class Scheduler:
             self.history, run, self.history.window(agent_id).number, progress
         )
 
-        def persist(messages_json: str) -> None:
+        def persist(messages: tuple[str, ...]) -> None:
             nonlocal persisted_history
-            self.history.save_progress(agent_id, run.sequence, messages_json)
-            persisted_history = messages_json
+            self.history.save_history(agent_id, run.sequence, messages)
+            persisted_history = messages
             progress("history.saved")
 
         request = TurnRequest(
@@ -775,7 +771,7 @@ class Scheduler:
             agent_name=agent_name,
             prompt=prompt,
             reminder=reminder,
-            history_json=persisted_history,
+            history=persisted_history,
             resident="",
             environment=lambda: self.environment_facts(agent_id),
             persist=persist,
@@ -806,7 +802,7 @@ class Scheduler:
                     read_agents_instructions(
                         self._deps.library_tree, self._deps.workspace_tree_for(agent_id)
                     )
-                    if not json.loads(request.history_json)
+                    if not request.history
                     else None
                 ),
             )
@@ -819,7 +815,7 @@ class Scheduler:
             usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
             overflow_context = outcome.overflow_context
-            messages = outcome.messages_json
+            messages = outcome.messages
             if outcome.stopped:
                 status = "interrupted"
             elif outcome.error:
@@ -856,7 +852,7 @@ class Scheduler:
                             agent_id,
                             run.sequence,
                             status=status,
-                            messages_json=messages,
+                            messages=messages,
                             usage_json=usage_json,
                             error=error,
                         )
@@ -868,7 +864,7 @@ class Scheduler:
                             agent_id,
                             run.sequence,
                             status=status,
-                            messages_json=messages,
+                            messages=messages,
                             usage_json=usage_json,
                             error=error,
                         )
@@ -957,7 +953,7 @@ class Scheduler:
                             agent_id,
                             run.sequence,
                             status="failed",
-                            messages_json=persisted_history,
+                            messages=persisted_history,
                             usage_json=usage_json,
                             error=error,
                         )
@@ -979,7 +975,7 @@ class Scheduler:
         except Exception as failure:
             with self.member_lock(agent_id):
                 self._blocked[agent_id] = "storage_unavailable"
-                saved = self.history.runs(agent_id, limit=1)[0].messages_json
+                saved = self.history.window_messages(agent_id, run.window_number)
                 self._failures[agent_id] = FailedFinalization(
                     run.sequence,
                     saved,

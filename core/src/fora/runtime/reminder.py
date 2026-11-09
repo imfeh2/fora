@@ -261,11 +261,11 @@ class TurnRequest:
     agent_name: str
     prompt: str
     reminder: Reminder | None
-    history_json: str
+    history: tuple[str, ...]
     resident: str
     environment: Callable[[], str | None]
     ephemeral: Callable[[], str]
-    persist: Callable[[str], None]
+    persist: Callable[[tuple[str, ...]], None]
     agents_instructions: str | None = None
     request_recorder: ModelRequestRecorder | None = None
     live_observer: LiveTurnObserver | None = None
@@ -274,7 +274,7 @@ class TurnRequest:
 
 @dataclass(frozen=True)
 class TurnOutcome:
-    messages_json: str
+    messages: tuple[str, ...]
     usage_json: str | None = None
     error: str | None = None
     input_tokens: int | None = None
@@ -285,10 +285,10 @@ class TurnOutcome:
 
 class ModelRunner(Protocol):
     def live_coverage(
-        self, raw: str, turn: LiveTurn
+        self, messages: Sequence[str], turn: LiveTurn
     ) -> tuple[LiveRequestCoverage, ...]: ...
 
-    def validate_history(self, raw: str) -> None: ...
+    def validate_history(self, messages: Sequence[str]) -> None: ...
 
     def check_available(self, agent_id: int) -> None: ...
 

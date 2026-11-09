@@ -121,7 +121,7 @@ def rejected_turn(fora: Fora, error: Exception) -> TurnOutcome:
         agent_name="Stub",
         prompt="hello",
         reminder=None,
-        history_json="[]",
+        history=(),
         resident="MEMORY",
         environment=lambda: None,
         ephemeral=lambda: "",

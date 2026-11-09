@@ -119,7 +119,7 @@ def _turn_request(agent_id: int) -> TurnRequest:
         agent_name="Main",
         prompt="Use the organization tool.",
         reminder=None,
-        history_json="[]",
+        history=(),
         resident="",
         environment=lambda: "environment",
         ephemeral=lambda: "",
@@ -238,7 +238,7 @@ def test_pause_action_on_self_stops_after_tools_finish(world) -> None:
     parts = [
         part
         for message in ModelMessagesTypeAdapter.validate_json(
-            world.history.runs(MAIN, limit=1)[0].messages_json
+            "[" + ",".join(world.history.current_messages(MAIN)) + "]"
         )
         for part in message.parts
         if isinstance(part, ToolReturnPart) and part.tool_name == "organization"

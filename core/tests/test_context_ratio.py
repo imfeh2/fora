@@ -107,13 +107,13 @@ class ScriptedRunner:
         self.calls = 0
         self.reminders: list[bool] = []
 
-    def validate_history(self, raw: str) -> None:
+    def validate_history(self, messages) -> None:
         pass
 
     def check_available(self, agent_id: int) -> None:
         pass
 
-    def live_coverage(self, raw, turn):
+    def live_coverage(self, messages, turn):
         return ()
 
     def run(self, request, tools):
@@ -132,7 +132,7 @@ class ScriptedRunner:
             }
         )
         return TurnOutcome(
-            messages_json=request.history_json,
+            messages=request.history,
             usage_json=usage,
             input_tokens=10,
         )
@@ -259,7 +259,7 @@ def test_the_recorded_window_is_declared_and_the_scheduler_recomputes(
         agent_name="Stub",
         prompt="hello",
         reminder=None,
-        history_json="[]",
+        history=(),
         resident="MEMORY",
         environment=lambda: None,
         ephemeral=lambda: "",

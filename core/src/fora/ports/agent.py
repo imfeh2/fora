@@ -14,10 +14,9 @@ class AgentRun:
     status: str
     started_at: str
     completed_at: str | None
-    messages_json: str
     usage_json: str | None
     error: str | None
-    window_number: int | None = None
+    window_number: int
     pending_revision: int = -1
 
 
@@ -35,80 +34,6 @@ class RunSummary:
 class ModelRequestHandle:
     ordinal: int
     request_id: str
-
-
-@dataclass(frozen=True)
-class WindowEvent:
-    number: int
-    since_sequence: int
-    reset_at: str | None
-    reason: str | None
-    overflow_context: str | None = None
-
-
-@dataclass(frozen=True)
-class AgentHistoryRun:
-    sequence: int
-    run_id: str
-    status: str
-    started_at: str
-    completed_at: str | None
-    usage_json: str | None
-    error: str | None
-    window_number: int | None
-    window_reset_at: str | None
-    window_reason: str | None
-    request_count: int
-    last_saved_at: str | None
-    reminded: tuple[tuple[int, int], ...] = ()
-
-
-@dataclass(frozen=True)
-class AgentModelRequestSummary:
-    ordinal: int
-    request_id: str
-    run_id: str
-    window_number: int | None
-    status: str
-    started_at: str
-    completed_at: str | None
-    streaming: bool
-    input_length: int
-    parameters_length: int
-    settings_length: int
-    model_length: int
-    response_length: int
-    input_count: int
-    response_count: int
-    related_count: int
-    error: str | None
-
-
-@dataclass(frozen=True)
-class AgentModelRequest:
-    summary: AgentModelRequestSummary
-    parameters_json: str | None = None
-    settings_json: str | None = None
-    model_json: str | None = None
-
-
-@dataclass(frozen=True)
-class AgentTextPage:
-    field: str
-    offset: int
-    total_bytes: int
-    value: str
-    has_more: bool
-
-
-@dataclass(frozen=True)
-class AgentMessagePage:
-    channel: str
-    offset: int
-    total: int
-    total_bytes: int
-    messages: tuple[str, ...]
-    has_more: bool
 
 
 @dataclass(frozen=True)
@@ -150,20 +75,16 @@ class AgentLifecycle:
 class ModelRequestRecorder(Protocol):
     def start(
         self,
-        messages_json: Sequence[str],
+        input_count: int,
         parameters_json: str,
         settings_json: str,
         model_json: str,
         streaming: bool,
     ) -> ModelRequestHandle: ...
 
-    def response(
-        self, handle: ModelRequestHandle, response_json: Sequence[str]
-    ) -> None: ...
+    def response(self, handle: ModelRequestHandle) -> None: ...
 
-    def related(
-        self, handle: ModelRequestHandle, messages_json: Sequence[str]
-    ) -> None: ...
+    def related(self, handle: ModelRequestHandle) -> None: ...
 
     def error(self, handle: ModelRequestHandle, error: str) -> None: ...
 
@@ -224,8 +145,8 @@ class HistoryStore(Protocol):
         self, agent_id: int, keys: Sequence[tuple[int, int]]
     ) -> frozenset[tuple[int, int]]: ...
 
-    def save_progress(
-        self, agent_id: int, sequence: int, messages_json: str
+    def save_history(
+        self, agent_id: int, sequence: int, messages: Sequence[str]
     ) -> None: ...
 
     def finish_run(
@@ -234,7 +155,7 @@ class HistoryStore(Protocol):
         sequence: int,
         *,
         status: str,
-        messages_json: str,
+        messages: Sequence[str],
         usage_json: str | None = None,
         error: str | None = None,
     ) -> None: ...
@@ -243,9 +164,8 @@ class HistoryStore(Protocol):
         self,
         agent_id: int,
         sequence: int,
-        run_id: str,
         window_number: int,
-        messages_json: Sequence[str],
+        input_count: int,
         parameters_json: str,
         settings_json: str,
         model_json: str,
@@ -253,23 +173,11 @@ class HistoryStore(Protocol):
     ) -> ModelRequestHandle: ...
 
     def finish_model_request(
-        self,
-        agent_id: int,
-        sequence: int,
-        handle: ModelRequestHandle,
-        response_json: Sequence[str],
+        self, agent_id: int, sequence: int, handle: ModelRequestHandle
     ) -> None: ...
 
     def complete_model_request(
         self, agent_id: int, sequence: int, handle: ModelRequestHandle
-    ) -> None: ...
-
-    def link_model_request(
-        self,
-        agent_id: int,
-        sequence: int,
-        handle: ModelRequestHandle,
-        messages_json: Sequence[str],
     ) -> None: ...
 
     def fail_model_request(
@@ -280,23 +188,11 @@ class HistoryStore(Protocol):
         error: str,
     ) -> None: ...
 
-    def latest_messages(self, agent_id: int) -> str: ...
+    def current_messages(self, agent_id: int) -> tuple[str, ...]: ...
 
-    def history_run(self, agent_id: int, sequence: int) -> AgentHistoryRun | None: ...
+    def window_messages(self, agent_id: int, window_number: int) -> tuple[str, ...]: ...
 
-    def model_request_summary(
-        self, agent_id: int, sequence: int, ordinal: int
-    ) -> AgentModelRequestSummary | None: ...
-
-    def model_request_messages(
-        self,
-        agent_id: int,
-        sequence: int,
-        ordinal: int,
-        channel: str,
-        offset: int,
-        limit: int,
-    ) -> AgentMessagePage: ...
+    def last_saved_at(self, agent_id: int, sequence: int) -> str | None: ...
 
     def runs(self, agent_id: int, *, limit: int = 50) -> tuple[AgentRun, ...]: ...
 

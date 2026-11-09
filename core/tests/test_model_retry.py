@@ -110,7 +110,7 @@ class World:
         ]
 
     def history_text(self) -> str:
-        return self.history.runs(2, limit=1)[0].messages_json
+        return "[" + ",".join(self.history.current_messages(2)) + "]"
 
     def expect_reply(self, record) -> None:
         assert record.status == "completed", record.error

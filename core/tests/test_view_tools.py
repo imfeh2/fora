@@ -74,7 +74,7 @@ def _turn_request(agent_id: int) -> TurnRequest:
         agent_name="Main",
         prompt="View an image.",
         reminder=None,
-        history_json="[]",
+        history=(),
         resident="",
         environment=lambda: "environment",
         ephemeral=lambda: "",

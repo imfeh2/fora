@@ -142,12 +142,12 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     status TEXT NOT NULL,
     started_at TEXT NOT NULL,
     completed_at TEXT,
-    window_number INTEGER,
+    window_number INTEGER NOT NULL,
     last_saved_at TEXT,
-    messages_json TEXT NOT NULL DEFAULT '[]',
     reminded_json TEXT NOT NULL DEFAULT '[]',
     usage_json TEXT,
     error TEXT,
+    pending_revision INTEGER NOT NULL DEFAULT -1,
     PRIMARY KEY (agent_id, sequence)
 );
 """
@@ -515,6 +515,13 @@ class SqliteStore:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA foreign_keys=ON")
             self._db = LockedConnection(connection, self._path)
+            if "messages_json" in {
+                row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
+            }:
+                raise RuntimeError(
+                    f"{self._path} stores Agent history in the previous layout;"
+                    " convert it before starting Fora"
+                )
             self._db.executescript(SCHEMA)
             if "state" not in {
                 row["name"]
@@ -545,61 +552,14 @@ class SqliteStore:
                 self._db.execute(
                     "ALTER TABLE mentions ADD COLUMN length INTEGER NOT NULL DEFAULT 0"
                 )
-            if "reminded_json" not in {
-                row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
-            }:
-                self._db.execute(
-                    "ALTER TABLE agent_runs ADD COLUMN reminded_json TEXT NOT NULL DEFAULT '[]'"
-                )
-            if "last_saved_at" not in {
-                row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
-            }:
-                self._db.execute("ALTER TABLE agent_runs ADD COLUMN last_saved_at TEXT")
-            if "window_number" not in {
-                row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
-            }:
-                self._db.execute(
-                    "ALTER TABLE agent_runs ADD COLUMN window_number INTEGER"
-                )
             self._db.execute(
                 "INSERT OR IGNORE INTO organization_identity(id, uuid) VALUES (1, ?)",
                 (str(uuid.uuid4()),),
             )
             self._db.commit()
             with self._db:
-                if "pending_revision" not in {
-                    row["name"]
-                    for row in self._db.execute("PRAGMA table_info(agent_runs)")
-                }:
-                    self._db.execute(
-                        "ALTER TABLE agent_runs ADD COLUMN pending_revision INTEGER NOT NULL DEFAULT -1"
-                    )
                 for statement in PENDING_REVISION_SCHEMA:
                     self._db.execute(statement)
-                summary_columns = (
-                    "agent_id",
-                    "sequence",
-                    "status",
-                    "started_at",
-                    "completed_at",
-                    "usage_json",
-                    "error",
-                    "reminded_json",
-                    "pending_revision",
-                    "run_id",
-                    "last_saved_at",
-                    "window_number",
-                )
-                indexed_columns = tuple(
-                    row["name"]
-                    for row in self._db.execute("PRAGMA index_info(agent_runs_summary)")
-                )
-                if indexed_columns != summary_columns:
-                    self._db.execute("DROP INDEX IF EXISTS agent_runs_summary")
-                    self._db.execute(
-                        "CREATE INDEX agent_runs_summary ON agent_runs"
-                        f" ({', '.join(summary_columns)})"
-                    )
             cleanup.pop_all()
 
     def close(self) -> None:
