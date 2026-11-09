@@ -7,6 +7,7 @@ import pytest
 
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.services.history import History
 
 AGENT = 1
 
@@ -174,6 +175,28 @@ def test_search_finds_the_turn_that_wrote_the_text(store: SqliteAgentStore) -> N
         sequences[1]
     ]
     assert store.search_runs(AGENT, "needle 1000") == ()
+
+
+def test_search_pages_through_finished_turns(store: SqliteAgentStore) -> None:
+    history: list[str] = []
+    finished = []
+    for index in range(45):
+        run = store.start_run(AGENT)
+        history.append(message(f"needle {index}"))
+        store.finish_run(AGENT, run.sequence, status="completed", messages=history)
+        finished.append(run.sequence)
+    running = store.start_run(AGENT)
+    store.save_history(AGENT, running.sequence, [*history, message("needle now")])
+    search = History(store, AGENT)
+
+    pages = []
+    offset: int | None = 0
+    while offset is not None:
+        found, offset = search.search("needle", offset)
+        pages.append([run.sequence for run in found])
+
+    assert [len(page) for page in pages] == [20, 20, 5]
+    assert [sequence for page in pages for sequence in page] == finished[::-1]
 
 
 def test_request_payloads_are_stored_once(store: SqliteAgentStore) -> None:

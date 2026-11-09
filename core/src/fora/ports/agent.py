@@ -215,7 +215,7 @@ class HistoryStore(Protocol):
     def mark_session_start(self) -> int: ...
 
     def search_runs(
-        self, agent_id: int, query: str, *, limit: int = 20
+        self, agent_id: int, query: str, *, limit: int = 20, offset: int = 0
     ) -> tuple[AgentRun, ...]: ...
 
     def read_run_slice(

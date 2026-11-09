@@ -985,16 +985,20 @@ class AgentTools:
     def _history(self) -> History:
         return History(self._deps.history, self._actor.member_id)
 
-    def search_history(self, query: str) -> list[dict[str, Any]]:
+    def search_history(self, query: str, offset: int = 0) -> dict[str, Any]:
         self._check("history.search")
-        return [
-            {
-                "sequence": item.sequence,
-                "status": item.status,
-                "started_at": item.started_at,
-            }
-            for item in self._history().search(query)
-        ]
+        found, next_offset = self._history().search(query, offset)
+        return {
+            "turns": [
+                {
+                    "sequence": item.sequence,
+                    "status": item.status,
+                    "started_at": item.started_at,
+                }
+                for item in found
+            ],
+            "next_offset": next_offset,
+        }
 
     def read_history(self, sequence: int, offset: int | None = None) -> dict[str, Any]:
         self._check("history.read", sequence)

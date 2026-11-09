@@ -1349,7 +1349,18 @@ class PydanticModelRunner:
                 return _guard(lambda: tools.read_skill(_required(name, "name", action)))
             raise ToolFailed(f"skills has no action {action}")
 
-        @tool(sequential=True)
+        @tool(
+            sequential=True,
+            description=(
+                "Look up your own earlier Turns, including those from before a context "
+                "window reset. search takes query and returns the most recent finished "
+                "Turns whose messages contain that text, newest first, 20 at a time; "
+                "pass the returned next_offset as offset to get older matches. "
+                "read takes sequence and returns the messages that Turn added, as a "
+                "JSON text slice; without offset it returns the end of the Turn, and "
+                "next_offset continues forward."
+            ),
+        )
         def history(
             ctx: RunContext[AgentTools],
             action: str,
@@ -1360,7 +1371,9 @@ class PydanticModelRunner:
             tools = ctx.deps
             if action == "search":
                 return _guard(
-                    lambda: tools.search_history(_required(query, "query", action))
+                    lambda: tools.search_history(
+                        _required(query, "query", action), offset or 0
+                    )
                 )
             if action == "read":
                 return _guard(

@@ -1003,15 +1003,16 @@ class SqliteAgentStore:
 
     @reading
     def search_runs(
-        self, agent_id: int, query: str, *, limit: int = 20
+        self, agent_id: int, query: str, *, limit: int = 20, offset: int = 0
     ) -> tuple[AgentRun, ...]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self._db.execute(
-            "SELECT * FROM agent_runs r WHERE r.agent_id = ? AND EXISTS ("
-            "SELECT 1 FROM agent_messages m INDEXED BY agent_messages_run"
+            "SELECT * FROM agent_runs r WHERE r.agent_id = ? AND r.status != 'running'"
+            " AND EXISTS (SELECT 1 FROM agent_messages m INDEXED BY agent_messages_run"
             " WHERE m.agent_id = r.agent_id AND m.sequence = r.sequence"
-            " AND m.content_json LIKE ? ESCAPE '\\') ORDER BY r.sequence DESC LIMIT ?",
-            (agent_id, f"%{escaped}%", limit),
+            " AND m.content_json LIKE ? ESCAPE '\\')"
+            " ORDER BY r.sequence DESC LIMIT ? OFFSET ?",
+            (agent_id, f"%{escaped}%", limit, offset),
         )
         return tuple(self._run(row) for row in rows)
 
