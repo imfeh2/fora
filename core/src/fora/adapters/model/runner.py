@@ -1423,8 +1423,10 @@ class PydanticModelRunner:
                     previous.shutdown()
             observability = self._observability
         context_sources = ContextSources(request.agent_id, request.sequence)
-        history = _settle_tool_calls(
-            context_sources.restore(_decode_history(request.history))
+        history = _merge_requests(
+            _settle_tool_calls(
+                context_sources.restore(_decode_history(request.history))
+            )
         )
         new_window = not history
         if new_window:
@@ -1703,7 +1705,7 @@ class PydanticModelRunner:
         snapshot = (
             _persist_history(request, history, context_sources)
             if new_window
-            else _encode_messages(context_sources.snapshot(history, persistent=True))
+            else _stored_history(history, context_sources)
         )
         with capture_run_messages() as captured, active_trace(trace):
             try:
@@ -1719,9 +1721,7 @@ class PydanticModelRunner:
                 )
                 if live_model is not None:
                     live_model.finalize(final_messages)
-                messages = _encode_messages(
-                    context_sources.snapshot(final_messages, persistent=True)
-                )
+                messages = _stored_history(final_messages, context_sources)
                 new_messages = final_messages[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
             except Exception as failure:
@@ -1739,9 +1739,7 @@ class PydanticModelRunner:
                     final_messages = _settle_tool_calls(captured)
                     if live_model is not None:
                         live_model.finalize(final_messages)
-                    messages = _encode_messages(
-                        context_sources.snapshot(final_messages, persistent=True)
-                    )
+                    messages = _stored_history(final_messages, context_sources)
                 new_messages = captured[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
                 if reached:
@@ -1771,9 +1769,7 @@ class PydanticModelRunner:
                 final_messages = _settle_tool_calls(result.all_messages())
                 assert live_model is not None
                 live_model.finalize(final_messages)
-                messages = _encode_messages(
-                    context_sources.snapshot(final_messages, persistent=True)
-                )
+                messages = _stored_history(final_messages, context_sources)
                 new_messages = result.new_messages()
                 input_tokens = _last_input_tokens(new_messages)
 
@@ -1988,16 +1984,67 @@ def _encode_history(messages: Sequence[ModelMessage]) -> str:
         raise HistoryPersistenceError("Could not serialize model history") from error
 
 
+def _merge_metadata(
+    first: dict[str, Any] | None, second: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    merged = {**(first or {}), **(second or {})}
+    for key, value in (first or {}).items():
+        later = (second or {}).get(key)
+        if isinstance(value, dict) and isinstance(later, dict):
+            merged[key] = {**value, **later}
+    return merged or None
+
+
+def _merge_requests(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+    # pydantic-ai 在每次运行开始时合并相邻的请求，并丢弃应用写入的 metadata。
+    # 这里按同样的条件提前合并并保留双方的 metadata，保存的历史里就不会再有相邻请求。
+    merged: list[ModelMessage] = []
+    for message in messages:
+        last = merged[-1] if merged else None
+        if (
+            isinstance(message, ModelRequest)
+            and isinstance(last, ModelRequest)
+            and (
+                not last.instructions
+                or not message.instructions
+                or last.instructions == message.instructions
+            )
+        ):
+            parts = [*last.parts, *message.parts]
+            parts.sort(
+                key=lambda part: (
+                    0 if isinstance(part, ToolReturnPart | RetryPromptPart) else 1
+                )
+            )
+            merged[-1] = replace(
+                last,
+                parts=parts,
+                instructions=last.instructions or message.instructions,
+                timestamp=message.timestamp or last.timestamp,
+                metadata=_merge_metadata(last.metadata, message.metadata),
+            )
+        else:
+            merged.append(message)
+    return merged
+
+
+def _stored_history(
+    messages: Sequence[ModelMessage], context_sources: ContextSources | None
+) -> tuple[str, ...]:
+    merged = _merge_requests(messages)
+    return _encode_messages(
+        context_sources.snapshot(merged, persistent=True)
+        if context_sources is not None
+        else merged
+    )
+
+
 def _persist_history(
     request: TurnRequest,
     messages: list[ModelMessage],
     context_sources: ContextSources | None = None,
 ) -> tuple[str, ...]:
-    encoded = _encode_messages(
-        context_sources.snapshot(messages, persistent=True)
-        if context_sources is not None
-        else messages
-    )
+    encoded = _stored_history(messages, context_sources)
     try:
         request.persist(encoded)
     except Exception as error:
