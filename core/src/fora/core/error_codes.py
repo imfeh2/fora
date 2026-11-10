@@ -54,6 +54,7 @@ class ErrorCode:
     INVALID_PARAMETER = "invalid_parameter"
     INVALID_PARAMS = "invalid_params"
     INVALID_PATH = "invalid_path"
+    INVALID_PERMISSION = "invalid_permission"
     INVALID_REQUEST_BODY = "invalid_request_body"
     INVALID_SETTING = "invalid_setting"
     INVALID_STATE = "invalid_state"
