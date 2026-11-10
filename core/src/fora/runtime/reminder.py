@@ -182,9 +182,9 @@ def render_resident(
     return "\n\n".join(parts)
 
 
-def read_agents_instructions(*trees: FileTree) -> str | None:
+def read_instructions(library: FileTree, workspace: FileTree) -> str | None:
     parts = []
-    for tree in trees:
+    for tree in (library, workspace):
         try:
             content, _ = tree.read("AGENTS.md")
         except DomainError as error:
@@ -266,7 +266,7 @@ class TurnRequest:
     environment: Callable[[], str | None]
     ephemeral: Callable[[], str]
     persist: Callable[[tuple[str, ...]], None]
-    agents_instructions: str | None = None
+    instructions: str | None = None
     request_recorder: ModelRequestRecorder | None = None
     live_observer: LiveTurnObserver | None = None
     model_control: ModelRequestControl = field(default_factory=ModelRequestControl)

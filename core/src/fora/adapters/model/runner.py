@@ -506,7 +506,7 @@ class LiveModel(WrapperModel):
         resolve: Callable[[], Model],
         ephemeral: Callable[[], str],
         cache_key: str,
-        agents_instructions: str | None = None,
+        instructions: str | None = None,
         request_recorder: ModelRequestRecorder | None = None,
         model_snapshot: dict[str, Any] | None = None,
         live_observer: LiveTurnObserver | None = None,
@@ -520,7 +520,7 @@ class LiveModel(WrapperModel):
         self._resolve = resolve
         self._ephemeral = ephemeral
         self._cache_key = cache_key
-        self._agents_instructions = agents_instructions
+        self._instructions = instructions
         self._request_recorder = request_recorder
         self._model_snapshot = model_snapshot or {}
         self._live_observer = live_observer
@@ -575,15 +575,13 @@ class LiveModel(WrapperModel):
         parameters: ModelRequestParameters,
     ) -> tuple[list[ModelMessage], ModelRequestParameters]:
         outgoing = self._outgoing(messages)
-        if self._agents_instructions is not None and isinstance(
-            wrapped, OpenAIResponsesModel
-        ):
+        if self._instructions is not None and isinstance(wrapped, OpenAIResponsesModel):
             return (
                 [
                     ModelRequest(
                         parts=[
                             SystemPromptPart(
-                                SYSTEM_PROMPT + "\n\n" + self._agents_instructions
+                                SYSTEM_PROMPT + "\n\n" + self._instructions
                             )
                         ]
                     ),
@@ -1407,9 +1405,6 @@ class PydanticModelRunner:
                 metadata = message.metadata.get("fora", {})
                 if not isinstance(metadata, dict):
                     raise HistoryValidationError("Invalid resident history metadata")
-                instructions = metadata.get("agents_instructions")
-                if instructions is not None and not isinstance(instructions, str):
-                    raise HistoryValidationError("Invalid resident instructions")
 
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome:
         parameters = agent_parameters(self._settings.get_settings("agent"))
@@ -1451,7 +1446,6 @@ class PydanticModelRunner:
                     metadata={
                         "fora": {
                             "block": "resident",
-                            "agents_instructions": request.agents_instructions,
                             "environment": request.environment() or "",
                             "cache_key": uuid.uuid4().hex,
                         }
@@ -1459,18 +1453,7 @@ class PydanticModelRunner:
                 )
             )
         cache_key = _cache_key(history)
-        agents_instructions = next(
-            (
-                message.metadata["fora"].get("agents_instructions")
-                for message in history
-                if isinstance(message, ModelRequest)
-                and message.metadata is not None
-                and message.metadata.get("fora", {}).get("block") == "resident"
-            ),
-            None,
-        )
-        if agents_instructions is not None and not isinstance(agents_instructions, str):
-            raise ValueError("Invalid AGENTS.md snapshot in resident history")
+        instructions = request.instructions
         hooks: Hooks[AgentTools] = Hooks()
 
         @hooks.on.tool_execute
@@ -1494,14 +1477,14 @@ class PydanticModelRunner:
         async def durable(
             ctx: RunContext[AgentTools], request_context: ModelRequestContext
         ) -> ModelRequestContext:
-            if agents_instructions is not None:
+            if instructions is not None:
                 request_context = replace(
                     request_context,
                     model_request_parameters=replace(
                         request_context.model_request_parameters,
                         instruction_parts=[
                             InstructionPart(
-                                content=SYSTEM_PROMPT + "\n\n" + agents_instructions
+                                content=SYSTEM_PROMPT + "\n\n" + instructions
                             )
                         ],
                     ),
@@ -1668,7 +1651,7 @@ class PydanticModelRunner:
                     lambda: model,
                     request.ephemeral,
                     cache_key,
-                    agents_instructions,
+                    instructions,
                     request.request_recorder,
                     {
                         "provider_id": config.provider_id,

@@ -32,7 +32,7 @@ from fora.runtime.reminder import (
     TurnRequest,
     build_reminder,
     exchange_nudge,
-    read_agents_instructions,
+    read_instructions,
     render_resident,
     reset_notice,
 )
@@ -798,12 +798,8 @@ class Scheduler:
             request = replace(
                 request,
                 resident=self.resident_block(agent_id),
-                agents_instructions=(
-                    read_agents_instructions(
-                        self._deps.library_tree, self._deps.workspace_tree_for(agent_id)
-                    )
-                    if not request.history
-                    else None
+                instructions=read_instructions(
+                    self._deps.library_tree, self._deps.workspace_tree_for(agent_id)
                 ),
             )
             outcome = self._runner.run(

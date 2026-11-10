@@ -7,12 +7,18 @@ import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
 
+from fora.adapters.execution.manager import ExecutionManager
+from fora.adapters.files.tree import DirectoryTree
+from fora.adapters.files.uploads import decode_image
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.runtime.reminder import TurnRequest
+from fora.runtime.scheduler import Scheduler
+from fora.tools import Dependencies
 
 AGENTS = "Always sign replies with the team name."
+CHANGED = "Never sign replies."
 
 
 @pytest.fixture
@@ -35,7 +41,9 @@ def settings(tmp_path: Path) -> Iterator[SqliteAgentStore]:
 
 
 def run_turns(
-    settings: SqliteAgentStore, count: int
+    settings: SqliteAgentStore,
+    instructions: list[str],
+    history: tuple[str, ...] = (),
 ) -> tuple[list[str], tuple[str, ...]]:
     sent: list[str] = []
 
@@ -53,8 +61,7 @@ def run_turns(
         yield FunctionModel(respond, stream_function=stream)
 
     runner = PydanticModelRunner(settings, build_model=build_model)
-    history: tuple[str, ...] = ()
-    for sequence in range(1, count + 1):
+    for sequence, current in enumerate(instructions, start=1):
         request = TurnRequest(
             agent_id=1,
             sequence=sequence,
@@ -66,7 +73,7 @@ def run_turns(
             environment=lambda: "Commands run on linux",
             ephemeral=lambda: "",
             persist=lambda messages: None,
-            agents_instructions=AGENTS if not history else None,
+            instructions=current,
         )
         outcome = runner.run(request, None)
         assert outcome.error is None
@@ -74,22 +81,106 @@ def run_turns(
     return sent, history
 
 
-def test_every_turn_of_a_window_keeps_the_agents_instructions(
+def test_every_turn_sends_the_instructions_read_for_it(
     settings: SqliteAgentStore,
 ) -> None:
-    sent, history = run_turns(settings, 4)
+    sent, _ = run_turns(settings, [AGENTS, AGENTS, AGENTS, CHANGED])
 
     assert len(sent) == 4
-    assert all(AGENTS in instructions for instructions in sent)
+    assert all(AGENTS in instructions for instructions in sent[:3])
+    assert CHANGED in sent[3] and AGENTS not in sent[3]
+
+
+def test_a_window_that_lost_its_first_metadata_still_gets_the_instructions(
+    settings: SqliteAgentStore,
+) -> None:
+    _, history = run_turns(settings, [AGENTS, AGENTS])
     first = json.loads(history[0])
-    assert first["metadata"]["fora"]["block"] == "resident"
-    assert first["metadata"]["fora"]["agents_instructions"] == AGENTS
+    first.pop("metadata")
+    damaged = (json.dumps(first), *history[1:])
+
+    sent, _ = run_turns(settings, [AGENTS], damaged)
+
+    assert AGENTS in sent[0]
 
 
 def test_the_saved_history_has_no_adjacent_requests(
     settings: SqliteAgentStore,
 ) -> None:
-    _, history = run_turns(settings, 3)
+    _, history = run_turns(settings, [AGENTS] * 3)
 
     kinds = [json.loads(message)["kind"] for message in history]
     assert kinds == ["request", "response"] * 3
+
+
+def test_the_scheduler_reads_the_rules_again_every_turn(
+    tmp_path: Path,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    database = SqliteStore(tmp_path / "fora.sqlite3")
+    settings = SqliteAgentStore(database._db)
+    settings.set_settings(
+        "model",
+        {
+            "model": "stub-model",
+            "api_type": "openai-chat",
+            "base_url": "http://127.0.0.1:1/v1",
+            "api_key": "stub",
+        },
+    )
+    settings.set_settings("agent", {"no_tool_turns_before_pause": 10})
+    execution = ExecutionManager(
+        settings=settings.get_settings("execution"), tolerant=True
+    )
+
+    def agent_directory_for(member_id: int) -> Path:
+        path = tmp_path / "agents" / str(member_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    sent: list[str] = []
+
+    def respond(messages, info):
+        request = next(m for m in reversed(messages) if isinstance(m, ModelRequest))
+        sent.append(request.instructions or "")
+        return ModelResponse(parts=[TextPart("done")])
+
+    @asynccontextmanager
+    async def build_model(config):
+        yield FunctionModel(respond)
+
+    deps = Dependencies(
+        store=database,
+        history=settings,
+        settings=settings,
+        execution=execution,
+        agent_directory_for=agent_directory_for,
+        decode_image=decode_image,
+        reading=database._db.read,
+        library_tree=DirectoryTree(library),
+        workspace_tree_for=lambda member_id: DirectoryTree(
+            agent_directory_for(member_id) / "workspace"
+        ),
+    )
+    scheduler = Scheduler(deps, PydanticModelRunner(settings, build_model=build_model))
+    try:
+        human = database.create_member("human", "You")
+        agent = database.create_member("agent", "Stub")
+        discussion = database.create_discussion("Topic", [human.id, agent.id])
+        (library / "AGENTS.md").write_text(AGENTS, encoding="utf-8")
+        for turn in range(3):
+            database.append_message(discussion.id, human.id, f"@Stub turn {turn}")
+            record = scheduler.run_turn(agent.id)
+            assert record is not None
+            assert record.status == "completed", record
+        (library / "AGENTS.md").write_text(CHANGED, encoding="utf-8")
+        database.append_message(discussion.id, human.id, "@Stub last turn")
+        assert scheduler.run_turn(agent.id) is not None
+    finally:
+        execution.close()
+        database.close()
+
+    assert len(sent) == 4
+    assert all(AGENTS in instructions for instructions in sent[:3])
+    assert CHANGED in sent[3] and AGENTS not in sent[3]
