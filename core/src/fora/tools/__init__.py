@@ -862,19 +862,16 @@ class AgentTools:
         content, digest = self._workspace(agent_id).read(path)
         return {"path": path, "content": content, "hash": digest}
 
-    def list_skills(self) -> dict[str, Any]:
+    def list_skills(self) -> list[dict[str, str]]:
         self._check("workspace.list")
         self._check("library.list")
-        skills = [
+        return [
             skill.payload()
             for skill in discover(
                 self._deps.library_tree,
                 self._deps.workspace_tree_for(self._actor.member_id),
             )
         ]
-        if not skills:
-            return {"skills": [], "note": "No skills are available."}
-        return {"skills": skills}
 
     def read_skill(self, name: str) -> dict[str, str]:
         self._check("workspace.read", name)

@@ -12,6 +12,7 @@ from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
+from fora.runtime.reminder import read_instructions
 from fora.tools import AgentTools, Dependencies
 from fora.tools.authorize import Actor
 
@@ -66,7 +67,7 @@ def test_the_list_names_every_skill_and_its_source(world) -> None:
     write_skill(library, "shared-two", "Shared skill two.", "Shared body two.")
     write_skill(workspace, "private-one", "Private skill one.", "Private body.")
 
-    assert tools.list_skills()["skills"] == [
+    assert tools.list_skills() == [
         {
             "name": "private-one",
             "description": "Private skill one.",
@@ -90,7 +91,7 @@ def test_a_shared_name_is_read_from_the_workspace(world) -> None:
     write_skill(library, "task-flow", "Shared copy.", "Shared body.")
     write_skill(workspace, "task-flow", "Private copy.", "Private body.")
 
-    assert tools.list_skills()["skills"] == [
+    assert tools.list_skills() == [
         {
             "name": "task-flow",
             "description": "Private copy.",
@@ -137,7 +138,7 @@ def test_editing_a_skill_shows_up_on_the_next_read(world) -> None:
     assert "Second body." in payload["content"]
     assert "First body." not in payload["content"]
     assert payload["description"] == "Second description."
-    assert [item["description"] for item in tools.list_skills()["skills"]] == [
+    assert [item["description"] for item in tools.list_skills()] == [
         "Second description."
     ]
 
@@ -161,7 +162,7 @@ def test_broken_skills_do_not_break_the_list(world) -> None:
     (skills / "empty").mkdir(parents=True)
     (skills / "empty" / "notes.txt").write_text("not a skill\n", encoding="utf-8")
 
-    assert tools.list_skills()["skills"] == [
+    assert tools.list_skills() == [
         {"name": "broken", "description": "broken", "source": "workspace"},
         {
             "name": "undecodable",
@@ -180,25 +181,50 @@ def test_broken_skills_do_not_break_the_list(world) -> None:
     assert "cannot be read" in str(error.value)
 
 
-def test_an_empty_source_says_so(world) -> None:
-    tools, _, _ = world
-    assert tools.list_skills() == {
-        "skills": [],
-        "note": "No skills are available.",
-    }
-
-
-def test_an_unknown_name_points_back_to_the_list(world) -> None:
+def test_an_unknown_name_points_back_to_the_instructions(world) -> None:
     tools, _, _ = world
     with pytest.raises(DomainError) as error:
         tools.read_skill("no-such-skill")
     assert error.value.code == ErrorCode.NOT_FOUND
     assert 'No skill named "no-such-skill"' in str(error.value)
-    assert "action=list" in str(error.value)
+    assert "Your instructions list the skills" in str(error.value)
 
 
-def test_the_resident_prompt_only_points_at_the_tool() -> None:
-    mentions = [line for line in SYSTEM_PROMPT.splitlines() if "skill" in line.lower()]
-    assert mentions == ["Skills are loaded on demand with the skills tool."]
+def test_the_instructions_carry_the_rules_and_every_skill(world) -> None:
+    tools, library, workspace = world
+    (library / "AGENTS.md").write_text("Shared rule.\n", encoding="utf-8")
+    (workspace / "AGENTS.md").write_text("Own rule.\n", encoding="utf-8")
+    write_skill(library, "task-flow", "Runs a task.\n  Use when starting one.", "Body.")
+    write_skill(workspace, "notes", "Keeps notes.", "Body.")
+
+    instructions = read_instructions(
+        tools, DirectoryTree(library), DirectoryTree(workspace)
+    )
+
+    assert instructions is not None
+    assert instructions.index("Shared rule.") < instructions.index("Own rule.")
+    assert "- notes (workspace): Keeps notes." in instructions
+    assert "- task-flow (library): Runs a task. Use when starting one." in instructions
+    assert "Body." not in instructions
+
+
+def test_the_instructions_follow_the_files_on_every_read(world) -> None:
+    tools, library, workspace = world
+    trees = (DirectoryTree(library), DirectoryTree(workspace))
+    assert read_instructions(tools, *trees) is None
+
+    (library / "AGENTS.md").write_text("First rule.\n", encoding="utf-8")
+    write_skill(library, "task-flow", "Runs a task.", "Body.")
+    first = read_instructions(tools, *trees)
+    (library / "AGENTS.md").write_text("Second rule.\n", encoding="utf-8")
+    write_skill(library, "review", "Reviews a change.", "Body.")
+    second = read_instructions(tools, *trees)
+
+    assert first is not None and second is not None
+    assert "First rule." in first and "review" not in first
+    assert "Second rule." in second and "- review (library):" in second
+
+
+def test_the_system_prompt_names_no_skill() -> None:
     for name in ("task-flow", "privacy-guard"):
         assert name not in SYSTEM_PROMPT

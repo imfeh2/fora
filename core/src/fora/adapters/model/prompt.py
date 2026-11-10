@@ -74,7 +74,9 @@ You can read anything the host user can read, but you can only write inside the 
 listed in your environment. Read enough of a file before editing it, and give each old_text \
 that matches exactly once unless replace_all=true.
 
-Skills are loaded on demand with the skills tool.
+The skills you can read are listed at the end of these instructions, refreshed every \
+Turn. Each entry says what kind of work it covers. When your work reaches that kind of \
+work, read the skill with the skills tool before acting, even if you have read it before.
 
 Treat credentials and secrets as private. Use them when a task requires it, but never \
 put them into Discussions, your workspace or the Library.

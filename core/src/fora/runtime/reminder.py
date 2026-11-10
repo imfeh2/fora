@@ -182,7 +182,9 @@ def render_resident(
     return "\n\n".join(parts)
 
 
-def read_instructions(library: FileTree, workspace: FileTree) -> str | None:
+def read_instructions(
+    tools: AgentTools, library: FileTree, workspace: FileTree
+) -> str | None:
     parts = []
     for tree in (library, workspace):
         try:
@@ -195,6 +197,17 @@ def read_instructions(library: FileTree, workspace: FileTree) -> str | None:
             ) from error
         if content.strip():
             parts.append(content)
+    skills = tools.list_skills()
+    if skills:
+        parts.append(
+            "Skills you can read with the skills tool. Read a skill before starting"
+            " the kind of work it covers:\n"
+            + "\n".join(
+                f"- {skill['name']} ({skill['source']}):"
+                f" {' '.join(skill['description'].split())}"
+                for skill in skills
+            )
+        )
     return "\n\n".join(parts) if parts else None
 
 

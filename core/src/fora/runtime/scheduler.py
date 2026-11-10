@@ -795,19 +795,19 @@ class Scheduler:
         try:
             if startup_error is not None:
                 raise startup_error
+            tools = self.tools_for_actor(
+                Actor(agent_id, True), TurnBinding(agent_id, run.sequence)
+            )
             request = replace(
                 request,
                 resident=self.resident_block(agent_id),
                 instructions=read_instructions(
-                    self._deps.library_tree, self._deps.workspace_tree_for(agent_id)
+                    tools,
+                    self._deps.library_tree,
+                    self._deps.workspace_tree_for(agent_id),
                 ),
             )
-            outcome = self._runner.run(
-                request,
-                self.tools_for_actor(
-                    Actor(agent_id, True), TurnBinding(agent_id, run.sequence)
-                ),
-            )
+            outcome = self._runner.run(request, tools)
             usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
             overflow_context = outcome.overflow_context

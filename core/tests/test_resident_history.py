@@ -113,7 +113,7 @@ def test_the_saved_history_has_no_adjacent_requests(
     assert kinds == ["request", "response"] * 3
 
 
-def test_the_scheduler_reads_the_rules_again_every_turn(
+def test_the_scheduler_reads_the_rules_and_skills_again_every_turn(
     tmp_path: Path,
 ) -> None:
     library = tmp_path / "library"
@@ -175,6 +175,12 @@ def test_the_scheduler_reads_the_rules_again_every_turn(
             assert record is not None
             assert record.status == "completed", record
         (library / "AGENTS.md").write_text(CHANGED, encoding="utf-8")
+        skill = library / "skills" / "task-flow"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: task-flow\ndescription: Runs a task.\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
         database.append_message(discussion.id, human.id, "@Stub last turn")
         assert scheduler.run_turn(agent.id) is not None
     finally:
@@ -184,3 +190,4 @@ def test_the_scheduler_reads_the_rules_again_every_turn(
     assert len(sent) == 4
     assert all(AGENTS in instructions for instructions in sent[:3])
     assert CHANGED in sent[3] and AGENTS not in sent[3]
+    assert "- task-flow (library): Runs a task." in sent[3]

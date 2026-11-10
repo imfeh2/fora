@@ -1327,25 +1327,15 @@ class PydanticModelRunner:
         @tool(
             sequential=True,
             description=(
-                "List and read the skills you can use. action=list returns every skill "
-                "with its name, one-line description and whether it lives in the shared "
-                "Library or in your own workspace; action=read returns one skill's full "
-                "text from disk at the moment you call it, so edits take effect without "
-                "a new context window. Read a skill before starting the kind of work it "
-                "covers."
+                "Read one skill by name. Your instructions list every skill you can "
+                "read, with what it covers and whether it lives in the shared Library "
+                "or in your own workspace. The full text is read from disk at the moment "
+                "you call this, so edits take effect immediately. Read a skill before "
+                "starting the kind of work it covers."
             ),
         )
-        def skills(
-            ctx: RunContext[AgentTools],
-            action: str,
-            name: str | None = None,
-        ) -> Any:
-            tools = ctx.deps
-            if action == "list":
-                return _guard(tools.list_skills)
-            if action == "read":
-                return _guard(lambda: tools.read_skill(_required(name, "name", action)))
-            raise ToolFailed(f"skills has no action {action}")
+        def skills(ctx: RunContext[AgentTools], name: str) -> Any:
+            return _guard(lambda: ctx.deps.read_skill(name))
 
         @tool(
             sequential=True,
