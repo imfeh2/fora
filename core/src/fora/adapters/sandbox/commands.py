@@ -30,6 +30,7 @@ def linux_command(
     argv: Sequence[str],
     cwd: Path | str,
     write_directories: Sequence[Path],
+    protected: Sequence[Path] = (),
     *,
     bwrap: str | None = None,
     root: bool | None = None,
@@ -48,9 +49,12 @@ def linux_command(
         "/proc",
         "--unshare-user",
     ]
-    for directory in bind_order(write_directories):
+    writable = set(write_directories)
+    for directory in bind_order([*write_directories, *protected]):
         rendered = directory.as_posix()
-        command.extend(("--bind", rendered, rendered))
+        command.extend(
+            ("--bind" if directory in writable else "--ro-bind", rendered, rendered)
+        )
     working = cwd.as_posix() if isinstance(cwd, PurePath) else str(cwd)
     command.extend(("--chdir", working, "--cap-drop", "ALL"))
     if root:

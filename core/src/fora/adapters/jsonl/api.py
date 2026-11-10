@@ -107,6 +107,7 @@ class Api:
             discussion_set=Resource("discussion"),
             model_settings=Resource("settings", "model"),
             attachments=Resource("attachments", HUMAN_ID),
+            permissions=Resource("permissions"),
         )
 
         register(
@@ -208,6 +209,7 @@ class Api:
                     Resource("member", int(params["agent_id"])),
                     context.discussion_set,
                     context.model_settings,
+                    context.permissions,
                 )
             ),
         )
@@ -359,6 +361,38 @@ class Api:
         )
 
         register(
+            "permissions.catalog",
+            lambda params: self._human().permission_catalog(),
+            scope=lambda params: RequestScope(),
+        )
+
+        register(
+            "permissions.list",
+            lambda params: self._human().list_permissions(
+                _integer_param(params, "member_id")
+            ),
+            scope=lambda params: RequestScope(reads=(context.permissions,)),
+        )
+
+        register(
+            "permissions.grant",
+            lambda params: self._human().grant_permissions(
+                _required_integer(params, "member_id"), params.get("entries")
+            ),
+            scope=lambda params: RequestScope(
+                reads=(context.member_set,), writes=(context.permissions,)
+            ),
+        )
+
+        register(
+            "permissions.revoke",
+            lambda params: self._human().revoke_permissions(
+                _required_integer(params, "grant_id")
+            ),
+            scope=lambda params: RequestScope(writes=(context.permissions,)),
+        )
+
+        register(
             "settings.get",
             partial(settings_get, context),
             scope=partial(setting_query, context),
@@ -390,6 +424,7 @@ class _Context(NamedTuple):
     discussion_set: Resource
     model_settings: Resource
     attachments: Resource
+    permissions: Resource
 
 
 def info_get(context: _Context, params: dict[str, Any]) -> Any:

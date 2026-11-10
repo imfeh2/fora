@@ -33,8 +33,13 @@ class BoundExecution:
     def write_directories(self) -> tuple[str, ...]:
         return self._lookup().write_directories
 
-    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
-        return self._lookup().describe_environment(labeled)
+    def describe_environment(
+        self,
+        labeled: Sequence[tuple[str, str]] = (),
+        writable: Sequence[str] | None = None,
+        protected: Sequence[str] = (),
+    ) -> str:
+        return self._lookup().describe_environment(labeled, writable, protected)
 
     def resolve_path(self, value: str, *, base: str) -> str:
         return self._lookup().resolve_path(value, base=base)
@@ -51,9 +56,14 @@ class BoundExecution:
         cwd: str,
         timeout: int | None = None,
         write_directories: Sequence[str] | None = None,
+        protected_directories: Sequence[str] = (),
     ) -> RunResult:
         return self._lookup().run(
-            argv, cwd=cwd, timeout=timeout, write_directories=write_directories
+            argv,
+            cwd=cwd,
+            timeout=timeout,
+            write_directories=write_directories,
+            protected_directories=protected_directories,
         )
 
     def edit(

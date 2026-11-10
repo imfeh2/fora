@@ -27,7 +27,12 @@ class ExecutionEnvironment(Protocol):
     @property
     def write_directories(self) -> tuple[str, ...]: ...
 
-    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str: ...
+    def describe_environment(
+        self,
+        labeled: Sequence[tuple[str, str]] = (),
+        writable: Sequence[str] | None = None,
+        protected: Sequence[str] = (),
+    ) -> str: ...
 
     def resolve_path(self, value: str, *, base: str) -> str: ...
 
@@ -42,6 +47,7 @@ class ExecutionEnvironment(Protocol):
         cwd: str,
         timeout: int | None = None,
         write_directories: Sequence[str] | None = None,
+        protected_directories: Sequence[str] = (),
     ) -> RunResult: ...
 
     def edit(

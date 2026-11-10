@@ -63,7 +63,11 @@ class ExecutionBackend:
         self.name = sys.platform
 
     def wrap(
-        self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        roots: tuple[Path, ...],
+        protected: tuple[Path, ...] = (),
     ) -> list[str]:
         raise DomainError(
             ErrorCode.SANDBOX_UNAVAILABLE,
@@ -76,11 +80,14 @@ class ExecutionBackend:
         cwd: Path,
         roots: tuple[Path, ...],
         *,
+        protected: tuple[Path, ...] = (),
         piped_input: bool,
         input_data: bytes | None = None,
     ) -> subprocess.Popen[bytes]:
         command = (
-            self.wrap(argv, cwd, tuple(root for root in roots if root.is_dir()))
+            self.wrap(
+                argv, cwd, tuple(root for root in roots if root.is_dir()), protected
+            )
             if self._enforce
             else list(argv)
         )
@@ -120,17 +127,35 @@ class ExecutionBackend:
         pass
 
 
+def unsupported_protection(protected: tuple[Path, ...]) -> None:
+    if protected:
+        raise DomainError(
+            ErrorCode.SANDBOX_UNAVAILABLE,
+            "Read-only paths inside writable directories are only enforced on "
+            f"Linux: {', '.join(map(str, protected))}",
+        )
+
+
 class LinuxBackend(ExecutionBackend):
     def wrap(
-        self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        roots: tuple[Path, ...],
+        protected: tuple[Path, ...] = (),
     ) -> list[str]:
-        return linux_command(argv, cwd, roots)
+        return linux_command(argv, cwd, roots, protected)
 
 
 class MacOSBackend(ExecutionBackend):
     def wrap(
-        self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        roots: tuple[Path, ...],
+        protected: tuple[Path, ...] = (),
     ) -> list[str]:
+        unsupported_protection(protected)
         return macos_command(argv, roots)
 
 
@@ -234,8 +259,13 @@ class WindowsBackend(ExecutionBackend):
         record.stage = stage
 
     def wrap(
-        self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        roots: tuple[Path, ...],
+        protected: tuple[Path, ...] = (),
     ) -> list[str]:
+        unsupported_protection(protected)
         return windows_command(self._access(roots).sid, argv, entrypoint())
 
     def _access(self, roots: tuple[Path, ...]) -> WindowsWriteAccess:
@@ -254,11 +284,14 @@ class WindowsBackend(ExecutionBackend):
         cwd: Path,
         roots: tuple[Path, ...],
         *,
+        protected: tuple[Path, ...] = (),
         piped_input: bool,
         input_data: bytes | None = None,
     ) -> subprocess.Popen[bytes]:
         from fora.adapters.windows import WindowsJob
 
+        if self._enforce:
+            unsupported_protection(protected)
         record = ExecutionRecord(tuple(root for root in roots if root.is_dir()))
         with self._lock:
             if self._closed:

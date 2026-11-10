@@ -402,16 +402,17 @@ class Scheduler:
             ) from failure
         return self.agent_status(agent_id)
 
-    def resume(self, agent_id: int, is_agent: bool = False) -> dict[str, Any]:
+    def resume(self, agent_id: int, can_recover: bool = True) -> dict[str, Any]:
         recovered: tuple[int, tuple[str, ...]] | None = None
         with self.member_lock(agent_id):
             self._require_agent(agent_id)
-            if is_agent and (
+            if not can_recover and (
                 self.history.pause_reason(agent_id) is not None
                 or agent_id in self._blocked
             ):
                 raise DomainError(
-                    ErrorCode.NOT_PERMITTED, "Only a Human can recover this Agent"
+                    ErrorCode.NOT_PERMITTED,
+                    "member:resume_safety is needed to recover this Agent",
                 )
             active = agent_id in self._active
             with self.history.transaction():
@@ -623,17 +624,23 @@ class Scheduler:
 
     def environment_facts(self, agent_id: int) -> str | None:
         try:
-            return self._deps.execution.snapshot().describe_environment(
+            execution = self._deps.execution.snapshot()
+            plan = self.tools_for_actor(Actor(agent_id, True)).write_plan(execution)
+            library = self._deps.library_tree.root.resolve()
+            labeled = [
                 (
-                    (
-                        str(self._deps.workspace_tree_for(agent_id).root),
-                        "your workspace, private",
-                    ),
-                    (
-                        str(self._deps.library_tree.root),
-                        "Library, shared with the whole organization",
-                    ),
+                    str(self._deps.workspace_tree_for(agent_id).root.resolve()),
+                    "your workspace, private",
                 )
+            ]
+            if library in plan.writable:
+                labeled.append(
+                    (str(library), "Library, shared with the whole organization")
+                )
+            return execution.describe_environment(
+                labeled,
+                [str(path) for path in plan.writable],
+                [str(path) for path in plan.protected],
             )
         except DomainError:
             return None

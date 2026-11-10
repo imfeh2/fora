@@ -95,7 +95,7 @@
     },
     "organization.delete_agent": {
       "handler": "partial:delete_agent",
-      "scope": "lambda:7318437137dfdf55"
+      "scope": "lambda:074d44cdebc9c54e"
     },
     "organization.get": {
       "handler": "partial:organization_get",
@@ -116,6 +116,22 @@
     "organization.set_model": {
       "handler": "partial:organization_set_model",
       "scope": "lambda:3268606e9d45a5ec"
+    },
+    "permissions.catalog": {
+      "handler": "lambda:bad053f484e2ad6f",
+      "scope": "lambda:1d5dcf0f2fe9b250"
+    },
+    "permissions.grant": {
+      "handler": "lambda:99f3c985a38785c3",
+      "scope": "lambda:670b8cbf87982e35"
+    },
+    "permissions.list": {
+      "handler": "lambda:6ed35269e28e7d20",
+      "scope": "lambda:dd386e8ec6032fa0"
+    },
+    "permissions.revoke": {
+      "handler": "lambda:f6943a6127b7767e",
+      "scope": "lambda:fa42af89851ad34b"
     },
     "ping": {
       "handler": "lambda:b117a067ebfe1e51",
@@ -234,6 +250,10 @@
     "organization.rename_member",
     "organization.resume_agent",
     "organization.set_model",
+    "permissions.catalog",
+    "permissions.grant",
+    "permissions.list",
+    "permissions.revoke",
     "ping",
     "settings.get",
     "settings.list_models",

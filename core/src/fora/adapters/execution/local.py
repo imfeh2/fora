@@ -143,11 +143,26 @@ class LocalExecution:
             if errors:
                 raise ExceptionGroup("Execution cleanup failed", errors)
 
-    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
+    def describe_environment(
+        self,
+        labeled: Sequence[tuple[str, str]] = (),
+        writable: Sequence[str] | None = None,
+        protected: Sequence[str] = (),
+    ) -> str:
         entries = [f"- {path} ({label})" for path, label in labeled]
-        entries.extend(f"- {item}" for item in self.write_directories)
+        named = {path for path, _ in labeled}
+        entries.extend(
+            f"- {item}"
+            for item in (self.write_directories if writable is None else writable)
+            if item not in named
+        )
         listing = "\n".join(entries) or "- none"
-        return f"Commands run on {self._backend.name}\nWritable directories:\n{listing}"
+        text = f"Commands run on {self._backend.name}\nWritable directories:\n{listing}"
+        if protected:
+            text += "\nRead-only inside them:\n" + "\n".join(
+                f"- {item}" for item in protected
+            )
+        return text
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
         if cwd is None or not Path(cwd).is_absolute():
@@ -164,6 +179,7 @@ class LocalExecution:
         timeout: int | None,
         data: bytes | None = None,
         write_directories: Sequence[str] | None = None,
+        protected_directories: Sequence[str] = (),
     ) -> tuple[int, bytes, bytes]:
         if not argv or not all(
             isinstance(item, str) and "\0" not in item for item in argv
@@ -198,6 +214,7 @@ class LocalExecution:
                     argv,
                     directory,
                     roots,
+                    protected=normalize_directories(protected_directories),
                     piped_input=data is not None,
                     input_data=data,
                 )
@@ -250,9 +267,14 @@ class LocalExecution:
         cwd: str | None = None,
         timeout: int | None = None,
         write_directories: Sequence[str] | None = None,
+        protected_directories: Sequence[str] = (),
     ) -> RunResult:
         code, output, errors = self._execute(
-            argv, cwd, timeout, write_directories=write_directories
+            argv,
+            cwd,
+            timeout,
+            write_directories=write_directories,
+            protected_directories=protected_directories,
         )
         stdout, stderr = (
             output.decode("utf-8", "replace"),

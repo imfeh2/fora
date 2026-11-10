@@ -462,6 +462,12 @@ class EditOperation(TypedDict):
     replace_all: NotRequired[bool]
 
 
+class PermissionEntry(TypedDict):
+    sign: Literal["+", "-"]
+    node: list[str]
+    delegable: NotRequired[bool]
+
+
 UNAVAILABLE = "Configure a model in Settings before running Agents"
 
 
@@ -1140,6 +1146,49 @@ class PydanticModelRunner:
         @tool(
             sequential=True,
             description=(
+                "View and hand out permissions. A permission is a node in a tree, "
+                "shown with colons such as files:write:project:fora or "
+                "library:write:rules, and holding a node covers everything below it. "
+                "catalog lists the actions that exist and what their next parts mean. "
+                "list shows what a Member holds (you, when member_id is omitted) as "
+                "lines starting with + for granted and - for excluded branches, plus "
+                "the grants it has made. grant gives member_id the entries you pass; "
+                "each entry has sign + or -, node as a list of parts such as "
+                '["library", "write", "rules"], and delegable for + entries. You can '
+                "only grant nodes that one of your own grants lets you delegate. "
+                "revoke takes grant_id and also ends every grant made from it."
+            ),
+        )
+        def permissions(
+            ctx: RunContext[AgentTools],
+            action: str,
+            member_id: int | None = None,
+            entries: list[PermissionEntry] | None = None,
+            grant_id: int | None = None,
+        ) -> Any:
+            tools = ctx.deps
+            if action == "catalog":
+                return _guard(tools.permission_catalog)
+            if action == "list":
+                return _guard(lambda: tools.list_permissions(member_id))
+            if action == "grant":
+                return _guard(
+                    lambda: tools.grant_permissions(
+                        _required(member_id, "member_id", action),
+                        _required(entries, "entries", action),
+                    )
+                )
+            if action == "revoke":
+                return _guard(
+                    lambda: tools.revoke_permissions(
+                        _required(grant_id, "grant_id", action)
+                    )
+                )
+            raise ToolFailed(f"permissions has no action {action}")
+
+        @tool(
+            sequential=True,
+            description=(
                 "Manage discussions and messages. List returns discussions ordered by last message time "
                 "newest first, empty discussions last; limit defaults to 20 and must be positive. "
                 "Read defaults to 20 messages and 16000 characters for the complete result; "
@@ -1377,6 +1426,7 @@ class PydanticModelRunner:
 
         for tool in (
             organization,
+            permissions,
             discussion,
             view_image,
             run,

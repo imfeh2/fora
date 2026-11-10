@@ -6,6 +6,23 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from fora.core.actions import (
+    BUILTIN,
+    DISCUSSION_ARCHIVE,
+    DISCUSSION_CREATE,
+    DISCUSSION_MEMBERS,
+    LIBRARY_WRITE,
+    MEMBER_CREATE,
+    MEMBER_DELETE,
+    MEMBER_HISTORY,
+    MEMBER_MODEL,
+    MEMBER_PAUSE,
+    MEMBER_RENAME,
+    MEMBER_RESUME,
+    MEMBER_RESUME_SAFETY,
+    TOOLS_RUN,
+    WORKSPACE_READ,
+)
 from fora.core.attachment import (
     MAX_IMAGE_BYTES,
     ImageData,
@@ -16,9 +33,11 @@ from fora.core.discussion import Discussion, Message, validate_body, validate_to
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import validate_name
+from fora.core.permissions import parse_entries, render_entry
 from fora.ports.agent import HistoryStore, SettingsStore
 from fora.ports.execution import ExecutionControl, ExecutionEnvironment
 from fora.ports.files import FileTree
+from fora.ports.permissions import PermissionStore
 from fora.ports.store import OrganizationStore, UnreadCounts
 from fora.services.history import History
 from fora.services.library import Library
@@ -27,6 +46,7 @@ from fora.services.workspace import Workspace
 from fora.tools.authorize import Actor, Authorizer
 from fora.tools.discussion_read import DiscussionReader, integer, read_position
 from fora.tools.skills import LIBRARY, WORKSPACE, discover, load
+from fora.tools.writes import WritePlan, WriteScope, relative_parts, require_existing
 
 
 @dataclass
@@ -86,8 +106,11 @@ class AgentTools:
             self._turn.agent_id, self._turn.sequence, tool, summary
         )
 
-    def _check(self, capability: str, target: object = None) -> None:
-        self._auth.check(self._actor, capability, target)
+    def _require(self, *node: str) -> None:
+        self._auth.check(self._actor, node)
+
+    def _allows(self, *node: str) -> bool:
+        return self._auth.allows(self._actor, node)
 
     def _discussion(self, discussion_id: int) -> Discussion:
         discussion = self._deps.store.get_discussion(discussion_id)
@@ -107,11 +130,7 @@ class AgentTools:
     def authorize_agent_history(
         self, agent_id: int, *, include_deleted: bool = False
     ) -> None:
-        self._check("agent.history", agent_id)
-        if self._actor.is_agent:
-            raise DomainError(
-                ErrorCode.NOT_PERMITTED, "Agent history is restricted to Humans"
-            )
+        self._require(*MEMBER_HISTORY, str(agent_id))
         member = self._deps.store.get_member(agent_id)
         if (
             member is None
@@ -123,7 +142,6 @@ class AgentTools:
     def list_member_records(
         self, include_deleted: bool = False
     ) -> list[dict[str, Any]]:
-        self._check("organization.list_members")
         return [
             {
                 "id": item.id,
@@ -145,17 +163,15 @@ class AgentTools:
     def create_agent(
         self, name: str, model_config: object | None = None
     ) -> dict[str, Any]:
-        self._check("organization.create_agent")
+        self._require(*MEMBER_CREATE)
         validated = validate_name(name)
         result = self._deps.settings.create_agent_with_model(validated, model_config)
         return self._changed("member.created", result)
 
     def list_models(self) -> dict[str, object]:
-        self._check("organization.list_models")
         return self._deps.settings.model_catalog()
 
     def get_agent_model(self, agent_id: int) -> dict[str, object]:
-        self._check("organization.get_model", agent_id)
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent or member.deleted:
             raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
@@ -164,7 +180,7 @@ class AgentTools:
     def set_agent_model(
         self, agent_id: int, model_config: object | None
     ) -> dict[str, object]:
-        self._check("organization.set_model", agent_id)
+        self._require(*MEMBER_MODEL, str(agent_id))
         if model_config is None:
             values: dict[str, object] = {}
         elif isinstance(model_config, Mapping):
@@ -183,7 +199,7 @@ class AgentTools:
         return self.get_agent_model(agent_id)
 
     def rename_member(self, member_id: int, name: str) -> dict[str, Any]:
-        self._check("organization.rename_member", member_id)
+        self._require(*MEMBER_RENAME, str(member_id))
         validated = validate_name(name)
         existing = self._deps.store.get_member(member_id)
         if existing is None:
@@ -194,25 +210,24 @@ class AgentTools:
         return {"id": member.id, "name": member.name}
 
     def pause_agent(self, agent_id: int) -> dict[str, Any]:
-        self._check("organization.pause_agent", agent_id)
+        self._require(*MEMBER_PAUSE, str(agent_id))
         if self._pause is not None:
             return self._pause(agent_id)
         self._deps.store.set_agent_state(agent_id, "paused")
         return {"id": agent_id, "state": "paused"}
 
     def resume_agent(self, agent_id: int) -> dict[str, Any]:
-        self._check("organization.resume_agent", agent_id)
+        self._require(*MEMBER_RESUME, str(agent_id))
+        can_recover = self._allows(*MEMBER_RESUME_SAFETY, str(agent_id))
         if self._resume is not None:
-            return self._resume(agent_id, self._actor.is_agent)
+            return self._resume(agent_id, can_recover)
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent:
             raise DomainError(ErrorCode.NOT_FOUND, f"Agent {agent_id} does not exist")
-        if (
-            self._deps.history.pause_reason(agent_id) is not None
-            and self._actor.is_agent
-        ):
+        if self._deps.history.pause_reason(agent_id) is not None and not can_recover:
             raise DomainError(
-                ErrorCode.NOT_PERMITTED, "Only a Human can resume a safety-paused Agent"
+                ErrorCode.NOT_PERMITTED,
+                "member:resume_safety is needed to recover this Agent",
             )
         runs = self._deps.history.run_summaries(agent_id, limit=1)
         if runs and runs[0].status == "running":
@@ -226,7 +241,7 @@ class AgentTools:
         return {"id": agent_id, "state": "idle"}
 
     def delete_agent(self, agent_id: int) -> dict[str, Any]:
-        self._check("organization.delete_agent", agent_id)
+        self._require(*MEMBER_DELETE, str(agent_id))
         with (
             self._member_guard(agent_id)
             if self._member_guard is not None
@@ -248,15 +263,85 @@ class AgentTools:
                 ErrorCode.AGENT_RUNNING,
                 "Pause the Agent and let its Turn finish before deleting",
             )
-        self._deps.settings.delete_agent_with_model(agent_id)
+        store = self._auth.store
+        if store is None:
+            self._deps.settings.delete_agent_with_model(agent_id)
+        else:
+            with store.transaction():
+                store.revoke_held(agent_id, self._actor.member_id)
+                self._deps.settings.delete_agent_with_model(agent_id)
+            self._changed("permissions.updated", {"holder_id": agent_id})
         if self._member_deleted is not None:
             self._member_deleted(agent_id)
         return {"id": agent_id, "deleted": True}
 
+    def _permission_store(self) -> PermissionStore:
+        store = self._auth.store
+        if store is None:
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED, "This organization does not track permissions"
+            )
+        return store
+
+    def permission_catalog(self) -> list[dict[str, object]]:
+        return [action.payload() for action in BUILTIN]
+
+    def list_permissions(self, member_id: int | None = None) -> dict[str, Any]:
+        permissions = self._permission_store().permissions()
+        target = self._actor.member_id if member_id is None else member_id
+        if self._deps.store.get_member(target) is None:
+            raise DomainError(ErrorCode.NOT_FOUND, f"Member {target} does not exist")
+        return {
+            "member_id": target,
+            "owner": target == permissions.owner_id,
+            "grants": [grant.payload() for grant in permissions.grants_of(target)],
+            "granted": [
+                grant.payload()
+                for grant in permissions.active()
+                if grant.granted_by == target
+            ],
+        }
+
+    def grant_permissions(self, member_id: int, entries: object) -> dict[str, Any]:
+        parsed = parse_entries(entries)
+        member = self._deps.store.get_member(member_id)
+        if member is None or member.deleted:
+            raise DomainError(ErrorCode.NOT_FOUND, f"Member {member_id} does not exist")
+        if member_id == self._actor.member_id:
+            raise DomainError(
+                ErrorCode.INVALID_PERMISSION, "A Member cannot grant itself permissions"
+            )
+        store = self._permission_store()
+        with store.transaction():
+            permissions = store.permissions()
+            if member_id == permissions.owner_id:
+                raise DomainError(
+                    ErrorCode.INVALID_PERMISSION, "The owner already holds everything"
+                )
+            parent = permissions.parent_for(self._actor.member_id, parsed)
+            grant = store.add_grant(member_id, self._actor.member_id, parent, parsed)
+        self._record(
+            "permissions.grant",
+            f"Member {member_id}: {', '.join(map(render_entry, grant.entries))}",
+        )
+        return self._changed("permissions.updated", grant.payload())
+
+    def revoke_permissions(self, grant_id: int) -> dict[str, Any]:
+        store = self._permission_store()
+        with store.transaction():
+            if not store.permissions().can_revoke(self._actor.member_id, grant_id):
+                raise DomainError(
+                    ErrorCode.NOT_PERMITTED,
+                    f"Only the granter or someone upstream can revoke grant {grant_id}",
+                )
+            grant = store.revoke_grant(grant_id, self._actor.member_id)
+        self._record("permissions.revoke", f"Grant {grant_id}")
+        return self._changed("permissions.updated", grant.payload())
+
     def create_discussion(
         self, topic: str, member_ids: Sequence[int]
     ) -> dict[str, Any]:
-        self._check("discussion.create")
+        self._require(*DISCUSSION_CREATE)
         validated = validate_topic(topic)
         others = [
             item for item in dict.fromkeys(member_ids) if item != self._actor.member_id
@@ -284,7 +369,6 @@ class AgentTools:
     def list_discussions(
         self, include_archived: bool = False, *, limit: int | None = None
     ) -> list[dict[str, Any]]:
-        self._check("discussion.list")
         if limit is not None and (type(limit) is not int or limit < 1):
             raise DomainError(
                 ErrorCode.INVALID_PAGINATION, "limit must be an integer >= 1"
@@ -321,7 +405,6 @@ class AgentTools:
         cursor: str | None = None,
         _result_size: Callable[[dict[str, Any]], int] | None = None,
     ) -> dict[str, Any]:
-        self._check("discussion.read", discussion_id)
         integer("discussion_id", discussion_id, 1)
         effective_limit = integer("limit", 20 if limit is None else limit, 1, 100)
         budget = integer(
@@ -379,8 +462,7 @@ class AgentTools:
             ],
         }
 
-    def _human_discussion(self, capability: str, discussion_id: int) -> None:
-        self._check(capability, discussion_id)
+    def _human_discussion(self, discussion_id: int) -> None:
         if self._actor.is_agent:
             raise DomainError(
                 ErrorCode.NOT_PERMITTED, "This operation is for the Human interface"
@@ -407,7 +489,7 @@ class AgentTools:
         after: int | None = None,
         metadata: bool = False,
     ) -> dict[str, Any]:
-        self._human_discussion("discussion.page", discussion_id)
+        self._human_discussion(discussion_id)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise DomainError(
                 ErrorCode.INVALID_PAGINATION, "limit must be an integer from 1 to 100"
@@ -458,7 +540,7 @@ class AgentTools:
         return result
 
     def mark_read(self, discussion_id: int, message_id: int) -> dict[str, Any]:
-        self._human_discussion("discussion.mark_read", discussion_id)
+        self._human_discussion(discussion_id)
         self._message_id(message_id)
         watermark = self._deps.store.mark_read(
             discussion_id, self._actor.member_id, message_id
@@ -470,14 +552,12 @@ class AgentTools:
         }
 
     def view_image(self, path: str) -> ViewedImage:
-        self._check("view_image", path)
         execution = self._deps.execution.snapshot()
         image = self._deps.decode_image(execution.read_file(path, MAX_IMAGE_BYTES))
         self._record("view_image", f"Image path: {path}")
         return ViewedImage(path, image)
 
     def organization_uuid(self) -> str:
-        self._check("organization.get")
         return self._deps.store.organization_uuid()
 
     def _uploads(self) -> Uploads:
@@ -492,7 +572,7 @@ class AgentTools:
         size: int,
         media_type: str,
     ) -> dict[str, Any]:
-        self._human_discussion("upload.create", discussion_id)
+        self._human_discussion(discussion_id)
         self._require_membership(discussion_id)
         return asdict(
             self._uploads().create(
@@ -506,7 +586,6 @@ class AgentTools:
         )
 
     def upload_status(self, upload_ids: Sequence[str]) -> list[dict[str, Any]]:
-        self._check("upload.status")
         if len(upload_ids) > 40:
             raise DomainError(ErrorCode.INVALID_UPLOADS, "Query at most 40 uploads")
         result = []
@@ -521,14 +600,12 @@ class AgentTools:
         return result
 
     def cancel_uploads(self, upload_ids: Sequence[str]) -> dict[str, int]:
-        self._check("upload.cancel")
         self.upload_status(upload_ids)
         for upload_id in upload_ids:
             self._uploads().cancel(upload_id, self._actor.member_id)
         return {"cancelled": len(upload_ids)}
 
     def send_status(self, discussion_id: int, client_message_id: str) -> dict[str, Any]:
-        self._check("discussion.send_status", discussion_id)
         self._require_membership(discussion_id)
         state, result = self._deps.store.send_outcome(
             discussion_id, self._actor.member_id, identifier(client_message_id)
@@ -539,7 +616,6 @@ class AgentTools:
         }
 
     def cancel_send(self, discussion_id: int, client_message_id: str) -> dict[str, Any]:
-        self._check("discussion.cancel_send", discussion_id)
         self._require_membership(discussion_id)
         state, result = self._deps.store.cancel_send(
             discussion_id, self._actor.member_id, identifier(client_message_id)
@@ -558,7 +634,6 @@ class AgentTools:
         attachment_ids: Sequence[str] = (),
         client_message_id: str | None = None,
     ) -> dict[str, Any]:
-        self._check("discussion.send", discussion_id)
         self._require_membership(discussion_id)
         if type(mark_read) is not bool or (self._actor.is_agent and not mark_read):
             raise DomainError(
@@ -628,7 +703,6 @@ class AgentTools:
         )
 
     def ack(self, discussion_id: int, message_ids: Sequence[int]) -> dict[str, Any]:
-        self._check("discussion.ack", discussion_id)
         self._require_membership(discussion_id)
         watermark = self._deps.store.watermark(discussion_id, self._actor.member_id)
         unread = [item for item in message_ids if item > watermark]
@@ -647,7 +721,6 @@ class AgentTools:
     def revoke_ack(
         self, discussion_id: int, message_ids: Sequence[int]
     ) -> dict[str, Any]:
-        self._check("discussion.revoke_ack", discussion_id)
         self._require_membership(discussion_id)
         revoked = self._deps.store.revoke_ack(
             discussion_id, message_ids, self._actor.member_id
@@ -665,7 +738,7 @@ class AgentTools:
     def set_discussion_members(
         self, discussion_id: int, member_ids: Sequence[int]
     ) -> dict[str, Any]:
-        self._check("discussion.set_members", discussion_id)
+        self._require(*DISCUSSION_MEMBERS, str(discussion_id))
         self._discussion(discussion_id)
         self._member_ids(member_ids)
         updated = self._deps.store.set_discussion_members(discussion_id, member_ids)
@@ -677,7 +750,7 @@ class AgentTools:
     def add_members(
         self, discussion_id: int, member_ids: Sequence[int]
     ) -> dict[str, Any]:
-        self._check("discussion.add_members", discussion_id)
+        self._require(*DISCUSSION_MEMBERS, str(discussion_id))
         self._member_ids(member_ids)
         updated = self._deps.store.change_discussion_members(discussion_id, member_ids)
         return self._changed(
@@ -688,7 +761,7 @@ class AgentTools:
     def remove_members(
         self, discussion_id: int, member_ids: Sequence[int]
     ) -> dict[str, Any]:
-        self._check("discussion.remove_members", discussion_id)
+        self._require(*DISCUSSION_MEMBERS, str(discussion_id))
         self._member_ids(member_ids)
         updated = self._deps.store.change_discussion_members(
             discussion_id, member_ids, remove=True
@@ -701,9 +774,7 @@ class AgentTools:
     def archive_discussion(
         self, discussion_id: int, archived: bool = True
     ) -> dict[str, Any]:
-        self._check(
-            "discussion.archive" if archived else "discussion.unarchive", discussion_id
-        )
+        self._require(*DISCUSSION_ARCHIVE, str(discussion_id))
         self._discussion(discussion_id)
         self._deps.store.set_archived(discussion_id, archived)
         return self._changed(
@@ -716,7 +787,6 @@ class AgentTools:
         sender_id: int | None = None,
         discussion_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        self._check("discussion.search", discussion_id)
         mine = {
             item.id
             for item in self._deps.store.list_discussions(
@@ -739,14 +809,24 @@ class AgentTools:
             if item.discussion_id in mine
         ]
 
-    def _write_directories(self, execution: ExecutionEnvironment) -> list[str]:
-        roots = (
-            self._deps.workspace_tree_for(self._actor.member_id).root,
-            self._deps.library_tree.root,
-        )
-        for root in roots:
+    def _write_scope(self, execution: ExecutionEnvironment) -> WriteScope:
+        own = self._deps.workspace_tree_for(self._actor.member_id).root
+        library = self._deps.library_tree.root
+        for root in (own, library):
             root.mkdir(parents=True, exist_ok=True)
-        return [*execution.write_directories, *(str(root) for root in roots)]
+        return WriteScope(
+            roots=tuple(Path(item).resolve() for item in execution.write_directories),
+            library=library.resolve(),
+            workspaces=self._deps.agent_directory_for(self._actor.member_id)
+            .resolve()
+            .parent,
+            own=own.resolve(),
+        )
+
+    def write_plan(self, execution: ExecutionEnvironment) -> WritePlan:
+        return self._write_scope(execution).plan(
+            self._auth.permissions(), self._actor.member_id
+        )
 
     @contextmanager
     def _library_updates(self) -> Iterator[None]:
@@ -770,15 +850,20 @@ class AgentTools:
         cwd: str | None = None,
         timeout: int | None = None,
     ) -> dict[str, Any]:
-        self._check("run")
+        self._require(*TOOLS_RUN)
         execution = self._deps.execution.snapshot()
         base = str(self._deps.agent_directory_for(self._actor.member_id))
         cwd = base if cwd is None else execution.resolve_path(cwd, base=base)
-        directories = self._write_directories(execution)
+        plan = self.write_plan(execution)
+        require_existing(plan.protected, Path.exists)
         try:
             with self._library_updates():
                 result = execution.run(
-                    list(argv), cwd=cwd, timeout=timeout, write_directories=directories
+                    list(argv),
+                    cwd=cwd,
+                    timeout=timeout,
+                    write_directories=[str(path) for path in plan.writable],
+                    protected_directories=[str(path) for path in plan.protected],
                 )
         finally:
             self._changed("workspace.changed", {"agent_id": self._actor.member_id})
@@ -796,17 +881,24 @@ class AgentTools:
         edits: Sequence[Mapping[str, object]],
         create: bool = False,
     ) -> dict[str, Any]:
-        self._check("edit", path)
         execution = self._deps.execution.snapshot()
         path = execution.resolve_path(
             path, base=str(self._deps.agent_directory_for(self._actor.member_id))
         )
-        directories = self._write_directories(execution)
+        scope = self._write_scope(execution)
+        if not scope.writable(
+            self._auth.permissions(), self._actor.member_id, Path(path).resolve()
+        ):
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED,
+                f"Writing {path} is not permitted for this Member",
+            )
+        plan = scope.plan(self._auth.permissions(), self._actor.member_id)
         with self._library_updates():
             result = execution.edit(
                 path,
                 edits,
-                write_directories=directories,
+                write_directories=[str(item) for item in plan.writable],
                 create=create,
             )
         target = Path(result.path).resolve()
@@ -834,17 +926,17 @@ class AgentTools:
             "created": create,
         }
 
-    def _workspace(self, agent_id: int | None = None) -> Workspace:
+    def _workspace(
+        self, agent_id: int | None = None, path: str | None = None
+    ) -> Workspace:
         if agent_id is None:
             agent_id = self._actor.member_id
-        if self._actor.is_agent and agent_id != self._actor.member_id:
-            raise DomainError(ErrorCode.NOT_ALLOWED, "Workspace is private")
+        self._require(*WORKSPACE_READ, str(agent_id), *relative_parts(path))
         return Workspace(self._deps.workspace_tree_for(agent_id))
 
     def list_workspace(
         self, path: str | None = None, *, agent_id: int | None = None
     ) -> list[dict[str, Any]]:
-        self._check("workspace.list")
         return [
             {
                 "path": item.path,
@@ -852,19 +944,16 @@ class AgentTools:
                 "size": item.size,
                 "modified_at": item.modified_at,
             }
-            for item in self._workspace(agent_id).list(path)
+            for item in self._workspace(agent_id, path).list(path)
         ]
 
     def read_workspace(
         self, path: str, *, agent_id: int | None = None
     ) -> dict[str, Any]:
-        self._check("workspace.read", path)
-        content, digest = self._workspace(agent_id).read(path)
+        content, digest = self._workspace(agent_id, path).read(path)
         return {"path": path, "content": content, "hash": digest}
 
     def list_skills(self) -> list[dict[str, str]]:
-        self._check("workspace.list")
-        self._check("library.list")
         return [
             skill.payload()
             for skill in discover(
@@ -874,7 +963,6 @@ class AgentTools:
         ]
 
     def read_skill(self, name: str) -> dict[str, str]:
-        self._check("workspace.read", name)
         try:
             return load(
                 self._deps.workspace_tree_for(self._actor.member_id),
@@ -884,7 +972,6 @@ class AgentTools:
         except DomainError as error:
             if error.code != ErrorCode.NOT_FOUND:
                 raise
-        self._check("library.read", name)
         return load(self._deps.library_tree, LIBRARY, name)
 
     @property
@@ -901,7 +988,6 @@ class AgentTools:
             return None
 
     def list_library(self, path: str | None = None) -> list[dict[str, Any]]:
-        self._check("library.list")
         return [
             {
                 "path": item.path,
@@ -913,7 +999,6 @@ class AgentTools:
         ]
 
     def read_library(self, path: str) -> dict[str, Any]:
-        self._check("library.read", path)
         document = self._library().read(path)
         return {
             "path": document.path,
@@ -924,7 +1009,7 @@ class AgentTools:
     def write_library(
         self, path: str, content: str, expected_hash: str | None = None
     ) -> dict[str, Any]:
-        self._check("library.write", path)
+        self._require(*LIBRARY_WRITE, *relative_parts(path))
         try:
             entry = self._library().write(path, content, expected_hash=expected_hash)
         except DomainError as conflict:
@@ -946,7 +1031,7 @@ class AgentTools:
     def edit_library(
         self, path: str, old_text: str, new_text: str, replace_all: bool = False
     ) -> dict[str, Any]:
-        self._check("library.edit", path)
+        self._require(*LIBRARY_WRITE, *relative_parts(path))
         entry, diff = self._library().edit(
             path, old_text, new_text, replace_all=replace_all
         )
@@ -958,19 +1043,20 @@ class AgentTools:
         return {**updated, "diff": diff}
 
     def mkdir_library(self, path: str) -> dict[str, Any]:
-        self._check("library.mkdir", path)
+        self._require(*LIBRARY_WRITE, *relative_parts(path))
         entry = self._library().mkdir(path)
         self._record("library.mkdir", entry.path)
         return self._changed("library.updated", {"path": entry.path, "hash": None})
 
     def delete_library(self, path: str) -> dict[str, Any]:
-        self._check("library.delete", path)
+        self._require(*LIBRARY_WRITE, *relative_parts(path))
         self._library().delete(path)
         self._record("library.delete", path)
         return self._changed("library.updated", {"path": path, "deleted": True})
 
     def move_library(self, source: str, destination: str) -> dict[str, Any]:
-        self._check("library.move", source)
+        self._require(*LIBRARY_WRITE, *relative_parts(source))
+        self._require(*LIBRARY_WRITE, *relative_parts(destination))
         entry = self._library().move(source, destination)
         self._record("library.move", f"{source} to {entry.path}")
         self._changed("library.updated", {"path": source, "deleted": True})
@@ -983,7 +1069,6 @@ class AgentTools:
         return History(self._deps.history, self._actor.member_id)
 
     def search_history(self, query: str, offset: int = 0) -> dict[str, Any]:
-        self._check("history.search")
         found, next_offset = self._history().search(query, offset)
         return {
             "turns": [
@@ -998,7 +1083,6 @@ class AgentTools:
         }
 
     def read_history(self, sequence: int, offset: int | None = None) -> dict[str, Any]:
-        self._check("history.read", sequence)
         run = self._history().read(sequence, offset)
         if run is None:
             raise DomainError(ErrorCode.NOT_FOUND, f"Run {sequence} does not exist")

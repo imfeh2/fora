@@ -237,12 +237,14 @@ def main(argv: list[str] | None = None) -> int:
     from fora.adapters.jsonl.protocol import Dispatcher
     from fora.adapters.model.runner import PydanticModelRunner
     from fora.adapters.sqlite.agent import SqliteAgentStore
+    from fora.adapters.sqlite.permissions import SqlitePermissionStore
     from fora.adapters.sqlite.store import SqliteStore
     from fora.adapters.voice.endpoint import VoiceEndpoint
     from fora.adapters.websocket.server import WebServer, webui_directory
     from fora.runtime.scheduler import Scheduler
     from fora.services.uploads import Uploads
     from fora.tools import Dependencies
+    from fora.tools.authorize import Authorizer
 
     directory = data_directory(options.data_dir)
     run_file = directory / "run.json"
@@ -274,6 +276,9 @@ def main(argv: list[str] | None = None) -> int:
         uploads.cleanup(restart=True)
         if store.get_member(HUMAN_ID) is None:
             store.create_member("human", "You")
+        permission_store = SqlitePermissionStore(store._db)
+        if permission_store.owner_id() is None:
+            permission_store.set_owner(HUMAN_ID)
 
         def agent_directory_for(member_id: int) -> Path:
             path = directory / "agents" / str(member_id)
@@ -313,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         scheduler = Scheduler(
             deps,
             PydanticModelRunner(agent_store),
+            authorizer=Authorizer(permission_store),
             on_event=lambda name, payload: dispatcher.emit(name, payload),
         )
         scheduler.parameters()
