@@ -20,6 +20,7 @@ class Action:
         }
 
 
+FILES_READ: Node = ("files", "read")
 FILES_WRITE: Node = ("files", "write")
 LIBRARY_WRITE: Node = ("library", "write")
 WORKSPACE_READ: Node = ("workspace", "read")
@@ -37,6 +38,13 @@ MEMBER_MODEL: Node = ("member", "model")
 MEMBER_HISTORY: Node = ("member", "history")
 
 BUILTIN: tuple[Action, ...] = (
+    Action(
+        FILES_READ,
+        "path",
+        "Read files under an absolute path, beyond the organization's readable "
+        "directories. Fora's own data directory stays hidden except the Library, "
+        "uploads and Member workspaces.",
+    ),
     Action(
         FILES_WRITE,
         "path",

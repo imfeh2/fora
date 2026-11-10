@@ -35,7 +35,12 @@ from fora.core.errors import DomainError
 from fora.core.member import validate_name
 from fora.core.permissions import parse_entries, render_entry
 from fora.ports.agent import HistoryStore, SettingsStore
-from fora.ports.execution import ExecutionControl, ExecutionEnvironment
+from fora.ports.execution import (
+    Access,
+    ExecutionControl,
+    ExecutionEnvironment,
+    Sandbox,
+)
 from fora.ports.files import FileTree
 from fora.ports.permissions import PermissionStore
 from fora.ports.store import OrganizationStore, UnreadCounts
@@ -43,10 +48,15 @@ from fora.services.history import History
 from fora.services.library import Library
 from fora.services.uploads import Uploads
 from fora.services.workspace import Workspace
+from fora.tools.access import (
+    AccessScope,
+    real_path,
+    require_protected,
+    tree_node,
+)
 from fora.tools.authorize import Actor, Authorizer
 from fora.tools.discussion_read import DiscussionReader, integer, read_position
 from fora.tools.skills import LIBRARY, WORKSPACE, discover, load
-from fora.tools.writes import WritePlan, WriteScope, relative_parts, require_existing
 
 
 @dataclass
@@ -61,6 +71,7 @@ class Dependencies:
     decode_image: Callable[[bytes], ImageData]
     uploads: Uploads | None = None
     reading: Callable[[], AbstractContextManager[None]] = nullcontext
+    data_directory: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -553,7 +564,20 @@ class AgentTools:
 
     def view_image(self, path: str) -> ViewedImage:
         execution = self._deps.execution.snapshot()
-        image = self._deps.decode_image(execution.read_file(path, MAX_IMAGE_BYTES))
+        scope = self._access_scope(execution)
+        permissions = self._auth.permissions()
+        if Path(path).is_absolute() and (
+            scope.access(permissions, real_path(Path(path))) is Access.HIDDEN
+        ):
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED,
+                f"Reading {path} is not permitted for this Member",
+            )
+        image = self._deps.decode_image(
+            execution.read_file(
+                path, MAX_IMAGE_BYTES, sandbox=scope.sandbox(permissions)
+            )
+        )
         self._record("view_image", f"Image path: {path}")
         return ViewedImage(path, image)
 
@@ -809,24 +833,26 @@ class AgentTools:
             if item.discussion_id in mine
         ]
 
-    def _write_scope(self, execution: ExecutionEnvironment) -> WriteScope:
-        own = self._deps.workspace_tree_for(self._actor.member_id).root
+    def _access_scope(self, execution: ExecutionEnvironment) -> AccessScope:
+        workspace = self._deps.workspace_tree_for(self._actor.member_id).root
         library = self._deps.library_tree.root
-        for root in (own, library):
+        for root in (workspace, library):
             root.mkdir(parents=True, exist_ok=True)
-        return WriteScope(
-            roots=tuple(Path(item).resolve() for item in execution.write_directories),
+        data = self._deps.data_directory
+        return AccessScope(
+            writes=tuple(Path(item).resolve() for item in execution.write_directories),
+            reads=tuple(Path(item).resolve() for item in execution.read_directories),
             library=library.resolve(),
-            workspaces=self._deps.agent_directory_for(self._actor.member_id)
-            .resolve()
-            .parent,
-            own=own.resolve(),
+            own=self._deps.agent_directory_for(self._actor.member_id).resolve(),
+            workspace=workspace.resolve(),
+            member_id=self._actor.member_id,
+            data=data.resolve() if data is not None else None,
+            uploads=(data / "uploads").resolve() if data is not None else None,
+            links=execution.read_links,
         )
 
-    def write_plan(self, execution: ExecutionEnvironment) -> WritePlan:
-        return self._write_scope(execution).plan(
-            self._auth.permissions(), self._actor.member_id
-        )
+    def sandbox(self, execution: ExecutionEnvironment) -> Sandbox:
+        return self._access_scope(execution).sandbox(self._auth.permissions())
 
     @contextmanager
     def _library_updates(self) -> Iterator[None]:
@@ -854,16 +880,12 @@ class AgentTools:
         execution = self._deps.execution.snapshot()
         base = str(self._deps.agent_directory_for(self._actor.member_id))
         cwd = base if cwd is None else execution.resolve_path(cwd, base=base)
-        plan = self.write_plan(execution)
-        require_existing(plan.protected, Path.exists)
+        sandbox = self.sandbox(execution)
+        require_protected(sandbox)
         try:
             with self._library_updates():
                 result = execution.run(
-                    list(argv),
-                    cwd=cwd,
-                    timeout=timeout,
-                    write_directories=[str(path) for path in plan.writable],
-                    protected_directories=[str(path) for path in plan.protected],
+                    list(argv), cwd=cwd, timeout=timeout, sandbox=sandbox
                 )
         finally:
             self._changed("workspace.changed", {"agent_id": self._actor.member_id})
@@ -885,21 +907,16 @@ class AgentTools:
         path = execution.resolve_path(
             path, base=str(self._deps.agent_directory_for(self._actor.member_id))
         )
-        scope = self._write_scope(execution)
-        if not scope.writable(
-            self._auth.permissions(), self._actor.member_id, Path(path).resolve()
-        ):
+        target = real_path(Path(path))
+        scope = self._access_scope(execution)
+        if scope.access(self._auth.permissions(), target) is not Access.WRITE:
             raise DomainError(
                 ErrorCode.NOT_PERMITTED,
                 f"Writing {path} is not permitted for this Member",
             )
-        plan = scope.plan(self._auth.permissions(), self._actor.member_id)
         with self._library_updates():
             result = execution.edit(
-                path,
-                edits,
-                write_directories=[str(item) for item in plan.writable],
-                create=create,
+                str(target), edits, write_directories=[str(target)], create=create
             )
         target = Path(result.path).resolve()
         workspace_root = self._deps.workspace_tree_for(
@@ -931,12 +948,19 @@ class AgentTools:
     ) -> Workspace:
         if agent_id is None:
             agent_id = self._actor.member_id
-        self._require(*WORKSPACE_READ, str(agent_id), *relative_parts(path))
-        return Workspace(self._deps.workspace_tree_for(agent_id))
+        # 先确认成员存在，打开工作区会创建目录，不能为任意编号创建
+        member = self._deps.store.get_member(agent_id)
+        if member is None or member.deleted:
+            raise DomainError(ErrorCode.NOT_FOUND, f"Member {agent_id} does not exist")
+        tree = self._deps.workspace_tree_for(agent_id)
+        self._require(*WORKSPACE_READ, str(agent_id), *tree_node(tree.root, path))
+        return Workspace(tree)
 
     def list_workspace(
         self, path: str | None = None, *, agent_id: int | None = None
     ) -> list[dict[str, Any]]:
+        owner = str(self._actor.member_id if agent_id is None else agent_id)
+        allows = self._auth.checker(self._actor)
         return [
             {
                 "path": item.path,
@@ -945,6 +969,7 @@ class AgentTools:
                 "modified_at": item.modified_at,
             }
             for item in self._workspace(agent_id, path).list(path)
+            if allows((*WORKSPACE_READ, owner, *item.path.split("/")))
         ]
 
     def read_workspace(
@@ -981,6 +1006,17 @@ class AgentTools:
     def _library(self) -> Library:
         return Library(self._deps.library_tree)
 
+    def _require_library(self, path: str, *, whole: bool = False) -> None:
+        # 删除和移动作用在条目本身，不跟随符号链接，并且会带走下面的所有内容
+        node = (
+            *LIBRARY_WRITE,
+            *tree_node(self._deps.library_tree.root, path, follow_symlinks=not whole),
+        )
+        if whole:
+            self._auth.check_within(self._actor, node)
+        else:
+            self._require(*node)
+
     def _library_hash(self, path: str) -> str | None:
         try:
             return self._library().read(path).content_hash
@@ -1009,7 +1045,7 @@ class AgentTools:
     def write_library(
         self, path: str, content: str, expected_hash: str | None = None
     ) -> dict[str, Any]:
-        self._require(*LIBRARY_WRITE, *relative_parts(path))
+        self._require_library(path)
         try:
             entry = self._library().write(path, content, expected_hash=expected_hash)
         except DomainError as conflict:
@@ -1031,7 +1067,7 @@ class AgentTools:
     def edit_library(
         self, path: str, old_text: str, new_text: str, replace_all: bool = False
     ) -> dict[str, Any]:
-        self._require(*LIBRARY_WRITE, *relative_parts(path))
+        self._require_library(path)
         entry, diff = self._library().edit(
             path, old_text, new_text, replace_all=replace_all
         )
@@ -1043,20 +1079,20 @@ class AgentTools:
         return {**updated, "diff": diff}
 
     def mkdir_library(self, path: str) -> dict[str, Any]:
-        self._require(*LIBRARY_WRITE, *relative_parts(path))
+        self._require_library(path)
         entry = self._library().mkdir(path)
         self._record("library.mkdir", entry.path)
         return self._changed("library.updated", {"path": entry.path, "hash": None})
 
     def delete_library(self, path: str) -> dict[str, Any]:
-        self._require(*LIBRARY_WRITE, *relative_parts(path))
+        self._require_library(path, whole=True)
         self._library().delete(path)
         self._record("library.delete", path)
         return self._changed("library.updated", {"path": path, "deleted": True})
 
     def move_library(self, source: str, destination: str) -> dict[str, Any]:
-        self._require(*LIBRARY_WRITE, *relative_parts(source))
-        self._require(*LIBRARY_WRITE, *relative_parts(destination))
+        self._require_library(source, whole=True)
+        self._require_library(destination, whole=True)
         entry = self._library().move(source, destination)
         self._record("library.move", f"{source} to {entry.path}")
         self._changed("library.updated", {"path": source, "deleted": True})

@@ -308,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
             decode_image=decode_image,
             uploads=uploads,
             reading=store._db.read,
+            data_directory=directory,
             library_tree=DirectoryTree(directory / "library"),
             workspace_tree_for=lambda member_id: DirectoryTree(
                 directory / "agents" / str(member_id) / "workspace"

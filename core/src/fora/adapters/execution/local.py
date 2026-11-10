@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -10,10 +11,15 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from fora.adapters.execution.editing import edit_file
 from fora.adapters.execution.platforms import create_backend, entrypoint
-from fora.adapters.sandbox.paths import normalize_directories, normalize_tolerantly
+from fora.adapters.sandbox.paths import (
+    default_read_directories,
+    interpreter_directories,
+    normalize_directories,
+    normalize_tolerantly,
+)
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.ports.execution import EditResult, RunResult
+from fora.ports.execution import Access, EditResult, Mount, RunResult, Sandbox
 
 MAX_OUTPUT = 200_000
 DEFAULT_TIMEOUT = 120
@@ -68,6 +74,7 @@ class LocalExecution:
     def __init__(
         self,
         write_directories: Sequence[str] = (),
+        read_directories: Sequence[str] | None = None,
         *,
         enforce: bool = True,
         tolerant: bool = False,
@@ -77,21 +84,55 @@ class LocalExecution:
         self._processes: set[subprocess.Popen[bytes]] = set()
         self._closed = False
         self.skipped: tuple[tuple[str, str], ...] = ()
+        self.skipped_reads: tuple[tuple[str, str], ...] = ()
+        listed = [
+            *(
+                default_read_directories()
+                if read_directories is None
+                else read_directories
+            ),
+            *interpreter_directories(),
+        ]
         if tolerant:
             result = normalize_tolerantly(write_directories)
             self._roots = result.accepted
             self.skipped = result.skipped
+            reads = normalize_tolerantly(listed, kind="Readable")
+            self._reads = reads.accepted
+            self.skipped_reads = reads.skipped
         else:
             self._roots = normalize_directories(write_directories)
+            self._reads = normalize_directories(listed, kind="Readable")
+        self._links = tuple(
+            (Path(item), os.readlink(item))
+            for item in dict.fromkeys(listed)
+            if Path(item).is_absolute() and Path(item).is_symlink()
+        )
 
     @property
     def write_directories(self) -> tuple[str, ...]:
         return tuple(str(item) for item in self._roots)
 
+    @property
+    def read_directories(self) -> tuple[str, ...]:
+        return tuple(str(item) for item in self._reads)
+
+    @property
+    def read_links(self) -> tuple[tuple[Path, str], ...]:
+        return self._links
+
     def apply_configuration(self, candidate: LocalExecution) -> None:
         with self._lock:
             self._roots = candidate._roots
+            self._reads = candidate._reads
+            self._links = candidate._links
             self.skipped = candidate.skipped
+            self.skipped_reads = candidate.skipped_reads
+
+    def _default_sandbox(self) -> Sandbox:
+        return Sandbox(
+            Access.READ, tuple(Mount(root, Access.WRITE) for root in self._roots)
+        )
 
     def resolve_path(self, value: str, *, base: str) -> str:
         if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
@@ -99,7 +140,12 @@ class LocalExecution:
         return str(Path(base) / value)
 
     def read_file(
-        self, path: str, max_bytes: int, *, timeout: int | None = None
+        self,
+        path: str,
+        max_bytes: int,
+        *,
+        timeout: int | None = None,
+        sandbox: Sandbox | None = None,
     ) -> bytes:
         if not isinstance(path, str) or "\0" in path or not Path(path).is_absolute():
             raise DomainError(
@@ -114,6 +160,7 @@ class LocalExecution:
             [*entrypoint(), "--read-file", path, str(max_bytes)],
             cwd=str(Path(sys.executable).resolve().parent),
             timeout=timeout,
+            sandbox=sandbox,
         )
         if code == 0:
             if stderr or len(stdout) > max_bytes + 1:
@@ -146,21 +193,32 @@ class LocalExecution:
     def describe_environment(
         self,
         labeled: Sequence[tuple[str, str]] = (),
-        writable: Sequence[str] | None = None,
-        protected: Sequence[str] = (),
+        sandbox: Sandbox | None = None,
     ) -> str:
+        plan = self._default_sandbox() if sandbox is None else sandbox
         entries = [f"- {path} ({label})" for path, label in labeled]
         named = {path for path, _ in labeled}
         entries.extend(
             f"- {item}"
-            for item in (self.write_directories if writable is None else writable)
+            for item in map(str, plan.paths(Access.WRITE))
             if item not in named
         )
         listing = "\n".join(entries) or "- none"
         text = f"Commands run on {self._backend.name}\nWritable directories:\n{listing}"
+        protected = plan.protected()
         if protected:
             text += "\nRead-only inside them:\n" + "\n".join(
                 f"- {item}" for item in protected
+            )
+        if plan.root is Access.HIDDEN and self._backend.restricts_reads:
+            readable = [
+                mount.path
+                for mount in plan.ordered()
+                if mount.access is Access.READ
+                and plan.inherited(mount.path) is Access.HIDDEN
+            ]
+            text += "\nReadable directories (nothing else exists):\n" + "\n".join(
+                f"- {item}" for item in readable
             )
         return text
 
@@ -178,8 +236,7 @@ class LocalExecution:
         cwd: str | None,
         timeout: int | None,
         data: bytes | None = None,
-        write_directories: Sequence[str] | None = None,
-        protected_directories: Sequence[str] = (),
+        sandbox: Sandbox | None = None,
     ) -> tuple[int, bytes, bytes]:
         if not argv or not all(
             isinstance(item, str) and "\0" not in item for item in argv
@@ -205,16 +262,10 @@ class LocalExecution:
                     raise DomainError(
                         ErrorCode.EXECUTION_CLOSED, "Execution environment is closed"
                     )
-                roots = (
-                    self._roots
-                    if write_directories is None
-                    else normalize_directories(write_directories)
-                )
                 process = self._backend.spawn(
                     argv,
                     directory,
-                    roots,
-                    protected=normalize_directories(protected_directories),
+                    self._default_sandbox() if sandbox is None else sandbox,
                     piped_input=data is not None,
                     input_data=data,
                 )
@@ -266,16 +317,9 @@ class LocalExecution:
         *,
         cwd: str | None = None,
         timeout: int | None = None,
-        write_directories: Sequence[str] | None = None,
-        protected_directories: Sequence[str] = (),
+        sandbox: Sandbox | None = None,
     ) -> RunResult:
-        code, output, errors = self._execute(
-            argv,
-            cwd,
-            timeout,
-            write_directories=write_directories,
-            protected_directories=protected_directories,
-        )
+        code, output, errors = self._execute(argv, cwd, timeout, sandbox=sandbox)
         stdout, stderr = (
             output.decode("utf-8", "replace"),
             errors.decode("utf-8", "replace"),

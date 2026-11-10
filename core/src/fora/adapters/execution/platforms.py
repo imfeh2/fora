@@ -20,6 +20,7 @@ from fora.adapters.sandbox.commands import (
 )
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
+from fora.ports.execution import Access, Sandbox
 
 if TYPE_CHECKING:
     from fora.adapters.sandbox.windows import WindowsWriteAccess
@@ -57,18 +58,13 @@ def dispatch_helper(argv: list[str]) -> int | None:
 
 class ExecutionBackend:
     manages_cleanup = False
+    restricts_reads = False
 
     def __init__(self, enforce: bool) -> None:
         self._enforce = enforce
         self.name = sys.platform
 
-    def wrap(
-        self,
-        argv: Sequence[str],
-        cwd: Path,
-        roots: tuple[Path, ...],
-        protected: tuple[Path, ...] = (),
-    ) -> list[str]:
+    def wrap(self, argv: Sequence[str], cwd: Path, sandbox: Sandbox) -> list[str]:
         raise DomainError(
             ErrorCode.SANDBOX_UNAVAILABLE,
             "Filesystem write protection is unavailable on this platform",
@@ -78,19 +74,12 @@ class ExecutionBackend:
         self,
         argv: Sequence[str],
         cwd: Path,
-        roots: tuple[Path, ...],
+        sandbox: Sandbox,
         *,
-        protected: tuple[Path, ...] = (),
         piped_input: bool,
         input_data: bytes | None = None,
     ) -> subprocess.Popen[bytes]:
-        command = (
-            self.wrap(
-                argv, cwd, tuple(root for root in roots if root.is_dir()), protected
-            )
-            if self._enforce
-            else list(argv)
-        )
+        command = self.wrap(argv, cwd, sandbox) if self._enforce else list(argv)
         return subprocess.Popen(
             command,
             cwd=cwd,
@@ -127,36 +116,29 @@ class ExecutionBackend:
         pass
 
 
-def unsupported_protection(protected: tuple[Path, ...]) -> None:
-    if protected:
-        raise DomainError(
-            ErrorCode.SANDBOX_UNAVAILABLE,
-            "Read-only paths inside writable directories are only enforced on "
-            f"Linux: {', '.join(map(str, protected))}",
-        )
-
-
 class LinuxBackend(ExecutionBackend):
-    def wrap(
-        self,
-        argv: Sequence[str],
-        cwd: Path,
-        roots: tuple[Path, ...],
-        protected: tuple[Path, ...] = (),
-    ) -> list[str]:
-        return linux_command(argv, cwd, roots, protected)
+    restricts_reads = True
+
+    def wrap(self, argv: Sequence[str], cwd: Path, sandbox: Sandbox) -> list[str]:
+        return linux_command(argv, cwd, sandbox)
 
 
 class MacOSBackend(ExecutionBackend):
-    def wrap(
-        self,
-        argv: Sequence[str],
-        cwd: Path,
-        roots: tuple[Path, ...],
-        protected: tuple[Path, ...] = (),
-    ) -> list[str]:
-        unsupported_protection(protected)
-        return macos_command(argv, roots)
+    restricts_reads = True
+
+    def wrap(self, argv: Sequence[str], cwd: Path, sandbox: Sandbox) -> list[str]:
+        return macos_command(argv, sandbox)
+
+
+def windows_roots(sandbox: Sandbox, *, enforce: bool = True) -> tuple[Path, ...]:
+    protected = sandbox.protected()
+    if enforce and protected:
+        raise DomainError(
+            ErrorCode.SANDBOX_UNAVAILABLE,
+            "Read-only paths inside writable directories are not enforced on "
+            f"Windows: {', '.join(map(str, protected))}",
+        )
+    return tuple(path for path in sandbox.paths(Access.WRITE) if path.is_dir())
 
 
 @dataclass(eq=False)
@@ -258,15 +240,10 @@ class WindowsBackend(ExecutionBackend):
     def _stage(record: ExecutionRecord, stage: str) -> None:
         record.stage = stage
 
-    def wrap(
-        self,
-        argv: Sequence[str],
-        cwd: Path,
-        roots: tuple[Path, ...],
-        protected: tuple[Path, ...] = (),
-    ) -> list[str]:
-        unsupported_protection(protected)
-        return windows_command(self._access(roots).sid, argv, entrypoint())
+    def wrap(self, argv: Sequence[str], cwd: Path, sandbox: Sandbox) -> list[str]:
+        return windows_command(
+            self._access(windows_roots(sandbox)).sid, argv, entrypoint()
+        )
 
     def _access(self, roots: tuple[Path, ...]) -> WindowsWriteAccess:
         from fora.adapters.sandbox.windows import WindowsWriteAccess
@@ -282,17 +259,14 @@ class WindowsBackend(ExecutionBackend):
         self,
         argv: Sequence[str],
         cwd: Path,
-        roots: tuple[Path, ...],
+        sandbox: Sandbox,
         *,
-        protected: tuple[Path, ...] = (),
         piped_input: bool,
         input_data: bytes | None = None,
     ) -> subprocess.Popen[bytes]:
         from fora.adapters.windows import WindowsJob
 
-        if self._enforce:
-            unsupported_protection(protected)
-        record = ExecutionRecord(tuple(root for root in roots if root.is_dir()))
+        record = ExecutionRecord(windows_roots(sandbox, enforce=self._enforce))
         with self._lock:
             if self._closed:
                 raise DomainError(
@@ -628,11 +602,15 @@ class WindowsBackend(ExecutionBackend):
             )
 
 
-def create_backend(enforce: bool) -> ExecutionBackend:
+def backend_type() -> type[ExecutionBackend]:
     if sys.platform.startswith("linux"):
-        return LinuxBackend(enforce)
+        return LinuxBackend
     if sys.platform == "darwin":
-        return MacOSBackend(enforce)
+        return MacOSBackend
     if os.name == "nt":
-        return WindowsBackend(enforce)
-    return ExecutionBackend(enforce)
+        return WindowsBackend
+    return ExecutionBackend
+
+
+def create_backend(enforce: bool) -> ExecutionBackend:
+    return backend_type()(enforce)

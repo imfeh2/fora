@@ -20,7 +20,7 @@ from fora.ports.agent import (
     ModelRequestHandle,
     SettingsStore,
 )
-from fora.ports.execution import ExecutionControl
+from fora.ports.execution import Access, ExecutionControl
 from fora.ports.store import OrganizationStore
 from fora.runtime.live import LiveSnapshots
 from fora.runtime.reminder import (
@@ -625,7 +625,7 @@ class Scheduler:
     def environment_facts(self, agent_id: int) -> str | None:
         try:
             execution = self._deps.execution.snapshot()
-            plan = self.tools_for_actor(Actor(agent_id, True)).write_plan(execution)
+            sandbox = self.tools_for_actor(Actor(agent_id, True)).sandbox(execution)
             library = self._deps.library_tree.root.resolve()
             labeled = [
                 (
@@ -633,15 +633,11 @@ class Scheduler:
                     "your workspace, private",
                 )
             ]
-            if library in plan.writable:
+            if library in sandbox.paths(Access.WRITE):
                 labeled.append(
                     (str(library), "Library, shared with the whole organization")
                 )
-            return execution.describe_environment(
-                labeled,
-                [str(path) for path in plan.writable],
-                [str(path) for path in plan.protected],
-            )
+            return execution.describe_environment(labeled, sandbox)
         except DomainError:
             return None
 

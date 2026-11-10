@@ -70,8 +70,8 @@ each replacement; set replace_all=true when one old_text should replace every ma
 items use the same original file content, so provide the full array in one call. For creation, \
 pass create=true and one edits item with old_text="" and the complete file body as \
 new_text; the parent directory must already exist, and existing paths are protected. \
-You can read anything the host user can read, but you can only write inside the directories \
-listed in your environment. Read enough of a file before editing it, and give each old_text \
+Your environment lists the directories you can write and, when reading is limited, the \
+directories you can read. Read enough of a file before editing it, and give each old_text \
 that matches exactly once unless replace_all=true.
 
 What you may change is set by the permissions you hold, which the permissions tool shows. \
