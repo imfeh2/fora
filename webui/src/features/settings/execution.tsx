@@ -1,5 +1,6 @@
 import {
   type KeyboardEvent,
+  type RefObject,
   useCallback,
   useEffect,
   useId,
@@ -26,7 +27,10 @@ import { BackendError, backend } from "@/lib/backend";
 
 export type ExecutionSettings = {
   write_directories: string[];
+  read_directories: string[];
+  restricts_reads: boolean;
   unusable_write_directories: { path: string; reason: string }[];
+  unusable_read_directories: { path: string; reason: string }[];
   error: string | null;
 };
 
@@ -53,11 +57,14 @@ function sameDirectories(left: string[], right: string[]): boolean {
   );
 }
 
-export function executionUpdate(directories: string[]) {
+export function cleanDirectories(directories: string[]): string[] {
+  return [...new Set(directories.map((path) => path.trim()).filter(Boolean))];
+}
+
+export function executionUpdate(writes: string[], reads: string[]) {
   return {
-    write_directories: [
-      ...new Set(directories.map((path) => path.trim()).filter(Boolean)),
-    ],
+    write_directories: cleanDirectories(writes),
+    read_directories: cleanDirectories(reads),
   };
 }
 
@@ -71,52 +78,32 @@ function completedRows(rows: DirectoryRow[]): DirectoryRow[] {
   });
 }
 
-export function ExecutionForm({
-  initial,
-  onSave,
+function DirectoryList({
+  label,
+  draft,
+  onChange,
+  saving,
+  nextId,
+  reasons = [],
+  focusAfterSave,
 }: {
-  initial: ExecutionSettings;
-  onSave: (
-    values: ReturnType<typeof executionUpdate>,
-  ) => Promise<ExecutionSettings>;
+  label: string;
+  draft: DirectoryDraft;
+  onChange: (draft: DirectoryDraft) => void;
+  saving: RefObject<boolean>;
+  nextId: RefObject<number>;
+  reasons?: { path: string; reason: string }[];
+  focusAfterSave?: RefObject<(() => void) | null>;
 }) {
   const id = useId();
-  const nextId = useRef(0);
-  const createDraft = useCallback((paths: string[]): DirectoryDraft => {
-    return {
-      rows: paths.map((path) => ({ id: nextId.current++, path })),
-      editing: null,
-      adding: null,
-    };
-  }, []);
   const editInput = useRef<HTMLInputElement>(null);
   const addInput = useRef<HTMLInputElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
   const editButtons = useRef(new Map<number, HTMLButtonElement>());
   const focusTarget = useRef<FocusTarget | null>(null);
-  const saving = useRef(false);
-  const [info, setInfo] = useState(initial);
-  const [draft, setDraft] = useState(() =>
-    createDraft(initial.write_directories),
-  );
-  const [busy, setBusy] = useState(false);
-  useReportSettingsSave("execution", busy);
-  const previous = useRef(initial);
-  useEffect(() => {
-    const old = previous.current;
-    if (initial === old) return;
-    previous.current = initial;
-    if (saving.current) return;
-    setDraft((current) =>
-      sameDirectories(draftDirectories(current), old.write_directories)
-        ? createDraft(initial.write_directories)
-        : current,
-    );
-    setInfo(initial);
-  }, [initial, createDraft]);
   useLayoutEffect(() => {
     const target = focusTarget.current;
-    if (target === null || busy) return;
+    if (target === null || saving.current) return;
     focusTarget.current = null;
     if (target === "new") addInput.current?.focus();
     else if (target === "add") (addInput.current ?? addButton.current)?.focus();
@@ -128,10 +115,9 @@ export function ExecutionForm({
         addButton.current
       )?.focus();
   });
-  const values = executionUpdate(draftDirectories(draft));
-  const changed =
-    !sameDirectories(values.write_directories, info.write_directories) ||
-    info.error !== null;
+  if (focusAfterSave)
+    focusAfterSave.current = () =>
+      (editInput.current ?? addInput.current ?? addButton.current)?.focus();
   const completeEdit = () => {
     if (!draft.editing || saving.current) return;
     const editing = draft.editing;
@@ -142,12 +128,12 @@ export function ExecutionForm({
     );
     const target = rows.find((row) => row.path === editing.value.trim());
     focusTarget.current = target ? { id: target.id } : "add";
-    setDraft({ ...draft, rows, editing: null });
+    onChange({ ...draft, rows, editing: null });
   };
   const cancelEdit = () => {
     if (!draft.editing || saving.current) return;
     focusTarget.current = { id: draft.editing.id };
-    setDraft({ ...draft, editing: null });
+    onChange({ ...draft, editing: null });
   };
   const completeAdd = () => {
     if (saving.current) return;
@@ -155,20 +141,20 @@ export function ExecutionForm({
     const rows = [...draft.rows];
     if (
       path &&
-      !executionUpdate(
+      !cleanDirectories(
         rows
           .filter((row) => row.id !== draft.editing?.id)
           .map((row) => row.path),
-      ).write_directories.includes(path)
+      ).includes(path)
     )
       rows.push({ id: nextId.current++, path });
     focusTarget.current = "add";
-    setDraft({ ...draft, rows, adding: null });
+    onChange({ ...draft, rows, adding: null });
   };
   const cancelAdd = () => {
     if (saving.current) return;
     focusTarget.current = "add";
-    setDraft({ ...draft, adding: null });
+    onChange({ ...draft, adding: null });
   };
   const inputKey = (
     event: KeyboardEvent<HTMLInputElement>,
@@ -188,6 +174,205 @@ export function ExecutionForm({
       cancel();
     }
   };
+  return (
+    <Field label={<span id={id}>{label}</span>}>
+      <ul
+        aria-labelledby={id}
+        className="m-0 flex min-w-0 list-none flex-col gap-2 p-0"
+      >
+        {draft.rows.map((row) => {
+          const editing = draft.editing?.id === row.id;
+          const path = editing ? draft.editing?.value : row.path;
+          const reason = reasons.find((item) => item.path === path)?.reason;
+          return (
+            <li
+              key={row.id}
+              className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-surface p-3"
+            >
+              {editing ? (
+                <>
+                  <Input
+                    ref={editInput}
+                    aria-label="Edit directory path"
+                    value={draft.editing?.value ?? ""}
+                    onChange={(event) => {
+                      if (saving.current) return;
+                      onChange({
+                        ...draft,
+                        editing: { id: row.id, value: event.target.value },
+                      });
+                    }}
+                    onKeyDown={(event) =>
+                      inputKey(event, completeEdit, cancelEdit)
+                    }
+                  />
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button size="sm" onClick={cancelEdit}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={completeEdit}>
+                      Done
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex min-w-0 flex-wrap items-start gap-2">
+                  <span className="min-w-0 flex-1 basis-40 whitespace-pre-wrap font-mono text-sm wrap-anywhere">
+                    {row.path}
+                  </span>
+                  <div className="flex min-w-0 max-w-full flex-wrap gap-1">
+                    <Button
+                      ref={(button) => {
+                        if (button) editButtons.current.set(row.id, button);
+                        else editButtons.current.delete(row.id);
+                      }}
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Edit ${row.path}`}
+                      onClick={() => {
+                        if (saving.current) return;
+                        const rows = draft.rows.map((item) =>
+                          item.id === draft.editing?.id
+                            ? { ...item, path: draft.editing.value }
+                            : item,
+                        );
+                        focusTarget.current = { id: row.id };
+                        onChange({
+                          ...draft,
+                          rows,
+                          editing: { id: row.id, value: row.path },
+                        });
+                      }}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Delete ${row.path}`}
+                      onClick={() => {
+                        if (saving.current) return;
+                        const index = draft.rows.findIndex(
+                          (item) => item.id === row.id,
+                        );
+                        const rows = draft.rows.filter(
+                          (item) => item.id !== row.id,
+                        );
+                        const target = rows[Math.min(index, rows.length - 1)];
+                        focusTarget.current = target
+                          ? { id: target.id }
+                          : "add";
+                        onChange({ ...draft, rows });
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {reason ? (
+                <div className="flex min-w-0 flex-wrap gap-2 [&>span]:h-auto [&>span]:min-h-5 [&>span]:min-w-0 [&>span]:max-w-full [&>span]:whitespace-normal [&>span]:wrap-anywhere [&>span]:leading-body">
+                  <Chip tone="warning">{reason}</Chip>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {draft.adding !== null ? (
+        <div className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-surface p-3">
+          <Input
+            ref={addInput}
+            aria-label="New directory path"
+            value={draft.adding}
+            onChange={(event) => {
+              if (saving.current) return;
+              onChange({ ...draft, adding: event.target.value });
+            }}
+            onKeyDown={(event) => inputKey(event, completeAdd, cancelAdd)}
+          />
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button size="sm" onClick={cancelAdd}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={completeAdd}>
+              Done
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      <div>
+        <Button
+          ref={addButton}
+          size="sm"
+          disabled={draft.adding !== null}
+          onClick={() => {
+            if (saving.current) return;
+            focusTarget.current = "new";
+            onChange({ ...draft, adding: "" });
+          }}
+        >
+          Add directory
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
+export function ExecutionForm({
+  initial,
+  onSave,
+}: {
+  initial: ExecutionSettings;
+  onSave: (
+    values: ReturnType<typeof executionUpdate>,
+  ) => Promise<ExecutionSettings>;
+}) {
+  const nextId = useRef(0);
+  const createDraft = useCallback((paths: string[]): DirectoryDraft => {
+    return {
+      rows: paths.map((path) => ({ id: nextId.current++, path })),
+      editing: null,
+      adding: null,
+    };
+  }, []);
+  const saving = useRef(false);
+  const writeFocus = useRef<(() => void) | null>(null);
+  const [info, setInfo] = useState(initial);
+  const [writes, setWrites] = useState(() =>
+    createDraft(initial.write_directories),
+  );
+  const [reads, setReads] = useState(() =>
+    createDraft(initial.read_directories),
+  );
+  const [busy, setBusy] = useState(false);
+  useReportSettingsSave("execution", busy);
+  const previous = useRef(initial);
+  useEffect(() => {
+    const old = previous.current;
+    if (initial === old) return;
+    previous.current = initial;
+    if (saving.current) return;
+    setWrites((current) =>
+      sameDirectories(draftDirectories(current), old.write_directories)
+        ? createDraft(initial.write_directories)
+        : current,
+    );
+    setReads((current) =>
+      sameDirectories(draftDirectories(current), old.read_directories)
+        ? createDraft(initial.read_directories)
+        : current,
+    );
+    setInfo(initial);
+  }, [initial, createDraft]);
+  const values = executionUpdate(
+    draftDirectories(writes),
+    draftDirectories(reads),
+  );
+  const changed =
+    !sameDirectories(values.write_directories, info.write_directories) ||
+    !sameDirectories(values.read_directories, info.read_directories) ||
+    info.error !== null;
   const save = async () => {
     if (saving.current || !changed) return;
     saving.current = true;
@@ -196,8 +381,8 @@ export function ExecutionForm({
       const result = await onSave(values);
       previous.current = result;
       setInfo(result);
-      setDraft(createDraft(result.write_directories));
-      focusTarget.current = "add";
+      setWrites(createDraft(result.write_directories));
+      setReads(createDraft(result.read_directories));
     } catch (failure) {
       if (failure instanceof BackendError && failure.transport)
         backend.reportFailure(failure);
@@ -212,9 +397,7 @@ export function ExecutionForm({
       saving.current = false;
       setBusy(false);
       requestAnimationFrame(() => {
-        if (document.activeElement === document.body) {
-          (editInput.current ?? addInput.current ?? addButton.current)?.focus();
-        }
+        if (document.activeElement === document.body) writeFocus.current?.();
       });
     }
   };
@@ -239,150 +422,25 @@ export function ExecutionForm({
         className="m-0 flex w-full max-w-[720px] min-w-0 flex-col gap-4 border-0 p-0"
         disabled={busy}
       >
-        <Field label={<span id={id}>Writable directories</span>}>
-          <ul
-            aria-labelledby={id}
-            className="m-0 flex min-w-0 list-none flex-col gap-2 p-0"
-          >
-            {draft.rows.map((row) => {
-              const editing = draft.editing?.id === row.id;
-              const path = editing ? draft.editing?.value : row.path;
-              const reason = info.unusable_write_directories.find(
-                (item) => item.path === path,
-              )?.reason;
-              return (
-                <li
-                  key={row.id}
-                  className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-surface p-3"
-                >
-                  {editing ? (
-                    <>
-                      <Input
-                        ref={editInput}
-                        aria-label="Edit directory path"
-                        value={draft.editing?.value ?? ""}
-                        onChange={(event) => {
-                          if (saving.current) return;
-                          setDraft({
-                            ...draft,
-                            editing: { id: row.id, value: event.target.value },
-                          });
-                        }}
-                        onKeyDown={(event) =>
-                          inputKey(event, completeEdit, cancelEdit)
-                        }
-                      />
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button size="sm" onClick={cancelEdit}>
-                          Cancel
-                        </Button>
-                        <Button size="sm" onClick={completeEdit}>
-                          Done
-                        </Button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex min-w-0 flex-wrap items-start gap-2">
-                      <span className="min-w-0 flex-1 basis-40 whitespace-pre-wrap font-mono text-sm wrap-anywhere">
-                        {row.path}
-                      </span>
-                      <div className="flex min-w-0 max-w-full flex-wrap gap-1">
-                        <Button
-                          ref={(button) => {
-                            if (button) editButtons.current.set(row.id, button);
-                            else editButtons.current.delete(row.id);
-                          }}
-                          size="sm"
-                          variant="ghost"
-                          aria-label={`Edit ${row.path}`}
-                          onClick={() => {
-                            if (saving.current) return;
-                            const rows = draft.rows.map((item) =>
-                              item.id === draft.editing?.id
-                                ? { ...item, path: draft.editing.value }
-                                : item,
-                            );
-                            focusTarget.current = { id: row.id };
-                            setDraft({
-                              ...draft,
-                              rows,
-                              editing: { id: row.id, value: row.path },
-                            });
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          aria-label={`Delete ${row.path}`}
-                          onClick={() => {
-                            if (saving.current) return;
-                            const index = draft.rows.findIndex(
-                              (item) => item.id === row.id,
-                            );
-                            const rows = draft.rows.filter(
-                              (item) => item.id !== row.id,
-                            );
-                            const target =
-                              rows[Math.min(index, rows.length - 1)];
-                            focusTarget.current = target
-                              ? { id: target.id }
-                              : "add";
-                            setDraft({ ...draft, rows });
-                          }}
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  {reason ? (
-                    <div className="flex min-w-0 flex-wrap gap-2 [&>span]:h-auto [&>span]:min-h-5 [&>span]:min-w-0 [&>span]:max-w-full [&>span]:whitespace-normal [&>span]:wrap-anywhere [&>span]:leading-body">
-                      <Chip tone="warning">{reason}</Chip>
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-          {draft.adding !== null ? (
-            <div className="flex min-w-0 flex-col gap-2 rounded-md border border-line bg-surface p-3">
-              <Input
-                ref={addInput}
-                aria-label="New directory path"
-                value={draft.adding}
-                onChange={(event) => {
-                  if (saving.current) return;
-                  setDraft({ ...draft, adding: event.target.value });
-                }}
-                onKeyDown={(event) => inputKey(event, completeAdd, cancelAdd)}
-              />
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button size="sm" onClick={cancelAdd}>
-                  Cancel
-                </Button>
-                <Button size="sm" onClick={completeAdd}>
-                  Done
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          <div>
-            <Button
-              ref={addButton}
-              size="sm"
-              disabled={draft.adding !== null}
-              onClick={() => {
-                if (saving.current) return;
-                focusTarget.current = "new";
-                setDraft({ ...draft, adding: "" });
-              }}
-            >
-              Add directory
-            </Button>
-          </div>
-        </Field>
+        <DirectoryList
+          label="Writable directories"
+          draft={writes}
+          onChange={setWrites}
+          saving={saving}
+          nextId={nextId}
+          reasons={info.unusable_write_directories}
+          focusAfterSave={writeFocus}
+        />
+        {info.restricts_reads ? (
+          <DirectoryList
+            label="Readable directories"
+            draft={reads}
+            onChange={setReads}
+            saving={saving}
+            nextId={nextId}
+            reasons={info.unusable_read_directories}
+          />
+        ) : null}
         <div className="flex min-w-0 flex-wrap items-center gap-3 pt-1 [&>button]:min-h-8">
           <Button
             variant="primary"
@@ -458,7 +516,10 @@ export function ExecutionPanel() {
           try {
             const result = (await backend.updateSettings(
               "execution",
-              values,
+              info.restricts_reads &&
+                !sameDirectories(values.read_directories, info.read_directories)
+                ? values
+                : { write_directories: values.write_directories },
             )) as ExecutionSettings;
             setInfo(result);
             return result;
