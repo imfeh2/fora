@@ -5,6 +5,7 @@ import {
   Play,
   Plus,
   Search,
+  ShieldCheck,
   SquarePen,
   Trash2,
   User,
@@ -35,6 +36,7 @@ import {
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { Segmented } from "@/components/ui/segmented";
 import { StatePanel } from "@/components/ui/state-panel";
+import { PermissionsDialog } from "@/features/members/permissions";
 import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
 import { BackendError, backend, type Member } from "@/lib/backend";
@@ -49,7 +51,12 @@ const FILTERS: { value: Filter; label: string }[] = [
 
 export function memberActions(
   member: Member,
-  on: { toggle: () => void; rename: () => void; remove: () => void },
+  on: {
+    toggle: () => void;
+    rename: () => void;
+    remove: () => void;
+    permissions: () => void;
+  },
 ): MenuAction[] {
   const rename: MenuAction = {
     id: "rename",
@@ -57,7 +64,13 @@ export function memberActions(
     icon: <SquarePen size={15} />,
     onSelect: on.rename,
   };
-  if (member.type !== "agent") return [rename];
+  const permissions: MenuAction = {
+    id: "permissions",
+    label: "Permissions",
+    icon: <ShieldCheck size={15} />,
+    onSelect: on.permissions,
+  };
+  if (member.type !== "agent") return [rename, permissions];
   const paused = canResume(member);
   return [
     {
@@ -67,6 +80,7 @@ export function memberActions(
       onSelect: on.toggle,
     },
     rename,
+    permissions,
     {
       id: "delete",
       label: "Delete",
@@ -86,6 +100,7 @@ export function MembersPage() {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<Member | null>(null);
   const [doomed, setDoomed] = useState<Member | null>(null);
+  const [inspecting, setInspecting] = useState<Member | null>(null);
   const toggle = async (member: Member) => {
     const resume = canResume(member);
     try {
@@ -213,6 +228,7 @@ export function MembersPage() {
                 onToggle={() => void toggle(member)}
                 onRename={() => setRenaming(member)}
                 onDelete={() => setDoomed(member)}
+                onPermissions={() => setInspecting(member)}
               />
             ))}
           </div>
@@ -228,12 +244,20 @@ export function MembersPage() {
                 onToggle={() => void toggle(member)}
                 onRename={() => setRenaming(member)}
                 onDelete={() => setDoomed(member)}
+                onPermissions={() => setInspecting(member)}
               />
             ))}
           </ul>
         )}
       </PageBody>
 
+      {inspecting && members ? (
+        <PermissionsDialog
+          member={inspecting}
+          members={members}
+          onClose={() => setInspecting(null)}
+        />
+      ) : null}
       {creating ? (
         <AgentCreateDialog
           onClose={() => setCreating(false)}
@@ -274,11 +298,13 @@ export function MemberCard({
   onToggle,
   onRename,
   onDelete,
+  onPermissions,
 }: {
   member: Member;
   onToggle: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onPermissions: () => void;
 }) {
   const agent = member.type === "agent";
 
@@ -312,6 +338,7 @@ export function MemberCard({
               toggle: onToggle,
               rename: onRename,
               remove: onDelete,
+              permissions: onPermissions,
             })}
           />
         </div>
@@ -347,11 +374,13 @@ export function MemberRow({
   onToggle,
   onRename,
   onDelete,
+  onPermissions,
 }: {
   member: Member;
   onToggle: () => void | Promise<void>;
   onRename: () => void;
   onDelete: () => void;
+  onPermissions: () => void;
 }) {
   const agent = member.type === "agent";
   const paused = canResume(member);
@@ -431,6 +460,7 @@ export function MemberRow({
             toggle: onToggle,
             rename: onRename,
             remove: onDelete,
+            permissions: onPermissions,
           }).filter((action) => action.id !== "toggle")}
         />
       </div>

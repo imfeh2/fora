@@ -57,6 +57,37 @@ export type Member = AgentStatus & {
   name: string;
 };
 
+export type PermissionEntry = {
+  sign: "+" | "-";
+  node: string[];
+  delegable?: boolean;
+};
+
+export type PermissionGrant = {
+  id: number;
+  holder_id: number;
+  granted_by: number;
+  parent_id: number | null;
+  entries: PermissionEntry[];
+  lines: string[];
+  created_at: string;
+  revoked_at: string | null;
+};
+
+export type MemberPermissions = {
+  member_id: number;
+  owner: boolean;
+  grants: PermissionGrant[];
+  granted: PermissionGrant[];
+};
+
+export type PermissionAction = {
+  node: string[];
+  name: string;
+  target: string | null;
+  description: string;
+};
+
 export type DiscussionSummary = {
   id: number;
   topic: string;
@@ -320,6 +351,8 @@ const READ_METHODS = new Set([
   "workspace.read",
   "settings.get",
   "settings.list_models",
+  "permissions.catalog",
+  "permissions.list",
 ]);
 
 function unconfirmed(method: string): BackendError {
@@ -831,6 +864,25 @@ export class Backend {
 
   deleteAgent(agent_id: number) {
     return this.call<{ id: number }>("organization.delete_agent", { agent_id });
+  }
+
+  permissionCatalog() {
+    return this.call<PermissionAction[]>("permissions.catalog");
+  }
+
+  permissions(member_id: number) {
+    return this.call<MemberPermissions>("permissions.list", { member_id });
+  }
+
+  grantPermissions(member_id: number, entries: PermissionEntry[]) {
+    return this.call<PermissionGrant>("permissions.grant", {
+      member_id,
+      entries,
+    });
+  }
+
+  revokePermissions(grant_id: number) {
+    return this.call<PermissionGrant>("permissions.revoke", { grant_id });
   }
 
   discussions(include_archived = false) {
