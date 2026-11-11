@@ -487,6 +487,30 @@ def test_commands_run_under_a_broad_grant_with_fora_data_hidden(
     assert not (library / "specs" / "context.md").exists()
 
 
+@linux
+def test_a_grant_on_a_symlink_does_not_open_where_it_points(
+    sandboxed: World,
+) -> None:
+    library = sandboxed.root / "library"
+    (library / "drafts").symlink_to(library / "rules")
+    sandboxed.tools(OWNER).grant_permissions(
+        LEAD,
+        [
+            {"sign": "+", "node": ["tools", "run"]},
+            {"sign": "+", "node": ["library", "write", "drafts"]},
+        ],
+    )
+    lead = sandboxed.tools(LEAD)
+
+    result = lead.run(
+        ["sh", "-c", f"echo started; touch {library / 'drafts' / 'x.md'} && echo wrote"]
+    )
+
+    assert result["stdout"].split() == ["started"], result["stderr"]
+    assert not (library / "rules" / "x.md").exists()
+    denied(lambda: lead.write_library("drafts/x.md", "Mine.\n"))
+
+
 def test_library_exclusions_cover_whole_branches_and_real_paths(
     world: World,
 ) -> None:

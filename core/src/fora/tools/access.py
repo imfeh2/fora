@@ -211,8 +211,10 @@ class FileAccess:
         root_access = self.access(root)
         states: dict[Path, Access] = {root: root_access}
         mounts: list[Mount] = []
+        # 挂载时会跟随符号链接，所以挂载点也要换成真实路径，判定的才是实际挂上的位置
+        candidates = {real_path(path) for path in self._candidates()}
         for path in sorted(
-            self._candidates() - {root},
+            candidates - {root},
             key=lambda item: (len(item.parts), str(item)),
         ):
             state = self.access(path)
