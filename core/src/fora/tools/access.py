@@ -105,6 +105,14 @@ class FileAccess:
     def _allows(self, node: Node) -> bool:
         return self.rights.allows(node)
 
+    def label(self, path: Path) -> str | None:
+        layout = self.layout
+        if layout.workspace is not None and path.is_relative_to(layout.workspace):
+            return "your workspace, private"
+        if path.is_relative_to(layout.library):
+            return "Library, shared with the whole organization"
+        return None
+
     def access(self, path: Path) -> Access:
         if path not in self._cache:
             self._cache[path] = self._decide(path)

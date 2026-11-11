@@ -862,6 +862,19 @@ class AgentTools:
     def sandbox(self, execution: ExecutionEnvironment) -> Sandbox:
         return self._files(execution).sandbox
 
+    def describe_environment(self, execution: ExecutionEnvironment) -> str:
+        files = self._files(execution)
+        workspace = files.layout.workspace
+        labeled = [(workspace, "your workspace, private")] if workspace else []
+        labeled.extend(
+            (path, label)
+            for path in files.sandbox.writable()
+            if path != workspace and (label := files.label(path)) is not None
+        )
+        return execution.describe_environment(
+            [(str(path), label) for path, label in labeled], files.sandbox
+        )
+
     @contextmanager
     def _library_updates(self) -> Iterator[None]:
         library = self._library()
