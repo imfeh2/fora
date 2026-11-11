@@ -334,7 +334,7 @@ def test_a_broad_grant_opens_the_whole_machine_but_not_fora_data(
     assert sandbox.access(data / "library" / "rules") is Access.WRITE
     assert sandbox.access(data / "library" / "specs") is Access.READ
     assert sandbox.access(world.workspace(REVIEWER).resolve()) is Access.READ
-    assert sandbox.access(data / "uploads") is Access.READ
+    assert sandbox.access(data / "uploads") is Access.HIDDEN
 
 
 @linux
@@ -712,3 +712,18 @@ def test_a_refused_starting_grant_creates_no_agent(world: World) -> None:
 
     names = [member["name"] for member in world.tools(OWNER).list_members()]
     assert "Helper" not in names
+
+
+def test_attachments_are_readable_only_in_the_member_s_discussions(
+    world: World,
+) -> None:
+    owner = world.tools(OWNER)
+    joined = owner.create_discussion("Joined", [LEAD])["id"]
+    other = owner.create_discussion("Other", [REVIEWER])["id"]
+    uploads = world.root.resolve() / "uploads"
+
+    sandbox = world.tools(LEAD).sandbox(world.deps.execution.snapshot())
+
+    assert sandbox.access(uploads) is Access.HIDDEN
+    assert sandbox.access(uploads / str(joined) / "file") is Access.READ
+    assert sandbox.access(uploads / str(other) / "file") is Access.HIDDEN

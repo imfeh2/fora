@@ -72,6 +72,7 @@ class Layout:
     workspace: Path | None = None
     data: Path | None = None
     uploads: Path | None = None
+    discussions: tuple[Path, ...] = ()
     links: tuple[tuple[Path, str], ...] = ()
 
 
@@ -118,7 +119,9 @@ class FileAccess:
                 return Access.READ
             return Access.HIDDEN
         if layout.uploads is not None and path.is_relative_to(layout.uploads):
-            return Access.READ
+            if any(path.is_relative_to(item) for item in layout.discussions):
+                return Access.READ
+            return Access.HIDDEN
         if layout.data is not None and path.is_relative_to(layout.data):
             return Access.HIDDEN
         node = path_node(path)
@@ -153,7 +156,7 @@ class FileAccess:
 
     def _candidates(self) -> set[Path]:
         layout = self.layout
-        found = {layout.library}
+        found = {layout.library, *layout.discussions}
         found.update(
             item
             for item in (

@@ -896,6 +896,14 @@ class AgentTools:
             workspace=workspace,
             data=real_path(data) if data is not None else None,
             uploads=real_path(data / "uploads") if data is not None else None,
+            discussions=tuple(
+                real_path(data / "uploads" / str(discussion.id))
+                for discussion in self._deps.store.list_discussions(
+                    member_id=self._actor.member_id, include_archived=True
+                )
+            )
+            if data is not None
+            else (),
         )
         if execution is not None:
             layout = replace(layout, links=execution.links)
