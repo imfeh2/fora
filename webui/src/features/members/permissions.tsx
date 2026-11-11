@@ -39,8 +39,14 @@ export function draftEntry(
   draft: Draft,
   catalog: PermissionAction[],
 ): PermissionEntry {
-  const action = catalog.find((item) => item.name === draft.action);
-  const node = [...(action?.node ?? []), ...targetParts(draft.target)];
+  const action =
+    draft.action === EVERYTHING
+      ? { node: [] }
+      : catalog.find((item) => item.name === draft.action);
+  if (action === undefined) {
+    throw new Error(`Unknown action ${draft.action}`);
+  }
+  const node = [...action.node, ...targetParts(draft.target)];
   return draft.sign === "+"
     ? { sign: "+", node, delegable: draft.delegable }
     : { sign: "-", node };

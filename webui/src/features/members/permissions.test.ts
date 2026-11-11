@@ -45,4 +45,19 @@ describe("permission entries", () => {
       ),
     ).toEqual({ sign: "-", node: [] });
   });
+
+  it("refuses an action the catalog does not know", () => {
+    expect(() =>
+      draftEntry(
+        {
+          key: 3,
+          sign: "+",
+          action: "library:delete",
+          target: "",
+          delegable: false,
+        },
+        catalog,
+      ),
+    ).toThrow("Unknown action library:delete");
+  });
 });
