@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from functools import cached_property
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from fora.core.actions import FILES_READ, FILES_WRITE, LIBRARY_WRITE, WORKSPACE_READ
 from fora.core.error_codes import ErrorCode
@@ -13,19 +13,6 @@ from fora.ports.execution import Access, Mount, Sandbox
 from fora.tools.authorize import Rights
 
 WORKSPACE = "workspace"
-
-
-def relative_parts(path: str | None) -> tuple[str, ...]:
-    if path is None:
-        return ()
-    parts = tuple(
-        part for part in PurePosixPath(path.replace("\\", "/")).parts if part != "/"
-    )
-    if any(part in (".", "..") for part in parts):
-        raise DomainError(
-            ErrorCode.INVALID_PATH, "Paths cannot contain . or .. segments"
-        )
-    return parts
 
 
 def _real_name(directory: Path, name: str) -> str:
@@ -58,17 +45,6 @@ def real_path(path: Path, *, follow_symlinks: bool = True) -> Path:
     for part in resolved.parts[1:]:
         current = current / _real_name(current, part)
     return current
-
-
-def tree_path(root: Path, path: str | None, *, follow_symlinks: bool = True) -> Path:
-    base = real_path(root)
-    parts = relative_parts(path)
-    if not parts:
-        return base
-    target = real_path(base.joinpath(*parts), follow_symlinks=follow_symlinks)
-    if not target.is_relative_to(base):
-        raise DomainError(ErrorCode.INVALID_PATH, "Path must stay inside the tree")
-    return target
 
 
 def real_node(node: Node, action: Node, template: Path) -> Node:

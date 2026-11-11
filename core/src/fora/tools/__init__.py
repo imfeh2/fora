@@ -55,7 +55,6 @@ from fora.tools.access import (
     real_node,
     real_path,
     require_protected,
-    tree_path,
 )
 from fora.tools.authorize import Actor, Authorizer, Rights
 from fora.tools.discussion_read import DiscussionReader, integer, read_position
@@ -992,7 +991,7 @@ class AgentTools:
         tree = self._deps.workspace_tree_for(agent_id)
         files = self._files()
         files.require(
-            tree_path(tree.root, path), Access.READ, shown=path or "this workspace"
+            real_path(tree.locate(path)), Access.READ, shown=path or "this workspace"
         )
         return Workspace(tree), files, real_path(tree.root)
 
@@ -1048,9 +1047,8 @@ class AgentTools:
 
     def _require_library(self, path: str, *, whole: bool = False) -> None:
         # 删除和移动作用在条目本身，不跟随符号链接，并且会带走下面的所有内容
-        target = tree_path(
-            self._deps.library_tree.root, path, follow_symlinks=not whole
-        )
+        located = self._deps.library_tree.locate(path, follow_symlinks=not whole)
+        target = real_path(located, follow_symlinks=not whole)
         self._files().require(target, Access.WRITE, whole=whole, shown=path)
 
     def _library_hash(self, path: str) -> str | None:

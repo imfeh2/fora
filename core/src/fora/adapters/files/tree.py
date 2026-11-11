@@ -45,6 +45,12 @@ class DirectoryTree:
     def root(self) -> Path:
         return self._root
 
+    def locate(self, path: str | None, *, follow_symlinks: bool = True) -> Path:
+        # 返回各项操作实际会作用到的位置，权限检查用它，保证检查和操作是同一个文件
+        if path is None:
+            return self._root
+        return self._resolve(path, allow_root=True, follow_symlinks=follow_symlinks)
+
     def _resolve(
         self, path: str, *, allow_root: bool = False, follow_symlinks: bool = True
     ) -> Path:
