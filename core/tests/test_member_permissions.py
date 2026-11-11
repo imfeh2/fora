@@ -22,6 +22,7 @@ from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.execution import Access, Mount, Sandbox
 from fora.tools import AgentTools, Dependencies
+from fora.tools.access import path_node
 from fora.tools.authorize import Actor, Authorizer
 
 OWNER = 1
@@ -126,7 +127,7 @@ def denied(action) -> DomainError:
 
 
 def path_entry(sign: str, action: str, path: Path) -> dict[str, object]:
-    return {"sign": sign, "node": ["files", action, *path.resolve().parts[1:]]}
+    return {"sign": sign, "node": ["files", action, *path_node(path.resolve())]}
 
 
 def test_a_new_agent_can_read_and_keep_notes_but_change_nothing_shared(
