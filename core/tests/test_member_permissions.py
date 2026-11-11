@@ -177,6 +177,41 @@ def test_an_excluded_branch_stays_closed_through_every_write_path(
     ]
 
 
+@pytest.mark.parametrize(
+    "node",
+    [
+        ["files", "read", "home/user/docs"],
+        ["workspace", "read", "lead"],
+        ["member", "pause", "2", "extra"],
+        ["tools", "run", "sh"],
+        ["library", "delete"],
+    ],
+)
+def test_grants_that_could_never_match_are_refused(
+    world: World, node: list[str]
+) -> None:
+    with pytest.raises(DomainError) as error:
+        world.tools(OWNER).grant_permissions(LEAD, [{"sign": "+", "node": node}])
+
+    assert error.value.code == ErrorCode.INVALID_PERMISSION
+    assert world.tools(LEAD).list_permissions()["grants"] == []
+
+
+def test_grants_accept_every_well_formed_target(world: World) -> None:
+    world.tools(OWNER).grant_permissions(
+        LEAD,
+        [
+            {"sign": "+", "node": []},
+            {"sign": "+", "node": ["library"]},
+            {"sign": "-", "node": ["files", "write", "home", "user", "docs"]},
+            {"sign": "-", "node": ["workspace", "read", "3", "notes"]},
+            {"sign": "-", "node": ["discussion", "archive", "1"]},
+        ],
+    )
+
+    assert len(world.tools(LEAD).list_permissions()["grants"]) == 1
+
+
 def test_a_grant_passes_on_only_what_the_granter_may_delegate(world: World) -> None:
     lead_holds_everything_except_specs(world)
     lead = world.tools(LEAD)

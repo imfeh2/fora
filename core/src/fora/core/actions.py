@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fora.core.permissions import Node, render
+from fora.core.error_codes import ErrorCode
+from fora.core.errors import DomainError
+from fora.core.permissions import OWNER, Node, render, within
 
 
 @dataclass(frozen=True)
@@ -79,3 +81,32 @@ BUILTIN: tuple[Action, ...] = (
     Action(MEMBER_MODEL, "member", "Change an Agent's model selection."),
     Action(MEMBER_HISTORY, "member", "Read an Agent's turn history."),
 )
+
+
+def _invalid(node: Node, reason: str) -> DomainError:
+    return DomainError(ErrorCode.INVALID_PERMISSION, f"{render(node)}: {reason}")
+
+
+def check_node(node: Node) -> None:
+    # 节点在动作之后的部分按动作声明的目标类型检查，格式不对的授权永远匹配不上
+    if within(node, OWNER):
+        return
+    matches = [action for action in BUILTIN if within(node, action.node)]
+    if not matches:
+        if any(within(action.node, node) for action in BUILTIN):
+            return
+        raise _invalid(node, "no such action")
+    action = max(matches, key=lambda item: len(item.node))
+    target = node[len(action.node) :]
+    if not target:
+        return
+    if action.target is None:
+        raise _invalid(node, f"{render(action.node)} takes no target")
+    if action.target in ("member", "discussion", "member/path"):
+        if not target[0].isdigit():
+            raise _invalid(node, f"the {action.target.split('/')[0]} must be an id")
+        if action.target != "member/path" and len(target) > 1:
+            raise _invalid(node, f"{render(action.node)} takes only an id")
+        target = target[1:]
+    if any("/" in part or "\\" in part for part in target):
+        raise _invalid(node, "give each folder of a path as its own part")

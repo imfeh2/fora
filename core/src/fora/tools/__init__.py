@@ -20,6 +20,7 @@ from fora.core.actions import (
     MEMBER_RESUME,
     MEMBER_RESUME_SAFETY,
     TOOLS_RUN,
+    check_node,
 )
 from fora.core.attachment import (
     MAX_IMAGE_BYTES,
@@ -315,6 +316,8 @@ class AgentTools:
 
     def grant_permissions(self, member_id: int, entries: object) -> dict[str, Any]:
         parsed = parse_entries(entries)
+        for entry in parsed:
+            check_node(entry.node)
         member = self._deps.store.get_member(member_id)
         if member is None or member.deleted:
             raise DomainError(ErrorCode.NOT_FOUND, f"Member {member_id} does not exist")
