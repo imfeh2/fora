@@ -184,6 +184,7 @@ def test_an_excluded_branch_stays_closed_through_every_write_path(
         ["workspace", "read", "lead"],
         ["member", "pause", "2", "extra"],
         ["tools", "run", "sh"],
+        ["member", "pause", "007"],
         ["library", "delete"],
     ],
 )

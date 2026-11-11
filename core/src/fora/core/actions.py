@@ -103,7 +103,10 @@ def check_node(node: Node) -> None:
     if action.target is None:
         raise _invalid(node, f"{render(action.node)} takes no target")
     if action.target in ("member", "discussion", "member/path"):
-        if not target[0].isdigit():
+        # 判定时比较的是 str(编号)，所以只接受这种写法，例如 7，不接受 007
+        if not (target[0].isascii() and target[0].isdigit()) or target[0] != str(
+            int(target[0])
+        ):
             raise _invalid(node, f"the {action.target.split('/')[0]} must be an id")
         if action.target != "member/path" and len(target) > 1:
             raise _invalid(node, f"{render(action.node)} takes only an id")
