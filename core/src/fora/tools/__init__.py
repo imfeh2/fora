@@ -478,7 +478,11 @@ class AgentTools:
                 member_id,
                 effective_limit,
                 budget,
-                (lambda attachment_id: self._uploads().files.path(attachment_id))
+                (
+                    lambda attachment_id: self._uploads().files.path(
+                        discussion_id, attachment_id
+                    )
+                )
                 if self._actor.is_agent
                 else None,
                 _result_size,
@@ -509,7 +513,11 @@ class AgentTools:
             "attachments": [
                 asdict(attachment)
                 | (
-                    {"path": self._uploads().files.path(attachment.id)}
+                    {
+                        "path": self._uploads().files.path(
+                            attachment.discussion_id, attachment.id
+                        )
+                    }
                     if self._actor.is_agent
                     else {}
                 )

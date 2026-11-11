@@ -19,6 +19,7 @@ IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 @dataclass(frozen=True)
 class Attachment:
     id: str
+    discussion_id: int
     name: str
     size: int
     media_type: str

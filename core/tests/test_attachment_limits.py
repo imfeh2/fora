@@ -19,6 +19,7 @@ PLAIN = "application/octet-stream"
 def held(size: int, name: str = "file.bin") -> Attachment:
     return Attachment(
         id="00000000-0000-4000-8000-000000000000",
+        discussion_id=1,
         name=name,
         size=size,
         media_type=PLAIN,

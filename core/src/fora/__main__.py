@@ -273,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_store = SqliteAgentStore(store._db)
 
         uploads = Uploads(store, DirectoryUploads(directory / "uploads"))
+        uploads.relocate()
         uploads.cleanup(restart=True)
         if store.get_member(HUMAN_ID) is None:
             store.create_member("human", "You")

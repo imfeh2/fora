@@ -599,6 +599,7 @@ class SqliteStore:
                 row[key]
                 for key in (
                     "id",
+                    "discussion_id",
                     "name",
                     "size",
                     "media_type",
@@ -764,6 +765,13 @@ class SqliteStore:
                 self._upload(row)
                 for row in db.execute("SELECT * FROM uploads WHERE state = 'deleting'")
             )
+
+    @reading
+    def upload_discussions(self) -> tuple[tuple[str, int], ...]:
+        return tuple(
+            (str(row["id"]), int(row["discussion_id"]))
+            for row in self._db.execute("SELECT id, discussion_id FROM uploads")
+        )
 
     def release_upload(self, upload_id: str) -> None:
         with self._write() as db:

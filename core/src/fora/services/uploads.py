@@ -74,11 +74,10 @@ class Uploads:
             record = self.store.start_upload(upload_id, owner_id)
             self._active.add(upload_id)
             try:
-                return record, self.files.writer(upload_id)
+                return record, self.files.writer(record)
             except BaseException:
                 self._active.remove(upload_id)
-                self.store.cancel_upload(upload_id, owner_id)
-                self._discard(upload_id)
+                self._discard(self.store.cancel_upload(upload_id, owner_id))
                 raise
 
     def complete(self, record: Upload) -> Attachment:
@@ -97,27 +96,30 @@ class Uploads:
             self._active.discard(record.id)
             current = self.store.get_upload(record.id, record.owner_id)
             if current.state == "receiving":
-                self.store.cancel_upload(record.id, record.owner_id)
-                self._discard(record.id)
+                self._discard(self.store.cancel_upload(record.id, record.owner_id))
             elif current.state == "deleting":
-                self._discard(record.id)
+                self._discard(current)
 
     def cancel(self, upload_id: str, owner_id: int) -> None:
         identifier(upload_id)
         with self._lock:
             record = self.store.cancel_upload(upload_id, owner_id)
             if record.state == "deleting" and upload_id not in self._active:
-                self._discard(upload_id)
+                self._discard(record)
 
-    def _discard(self, upload_id: str) -> None:
-        self.files.discard(upload_id)
-        self.store.release_upload(upload_id)
+    def _discard(self, record: Upload) -> None:
+        self.files.discard(record)
+        self.store.release_upload(record.id)
+
+    def relocate(self) -> None:
+        for upload_id, discussion_id in self.store.upload_discussions():
+            self.files.relocate(upload_id, discussion_id)
 
     def cleanup(self, *, restart: bool = False) -> None:
         with self._lock:
             for record in self.store.abandoned_uploads(restart=restart):
                 if record.id not in self._active:
-                    self._discard(record.id)
+                    self._discard(record)
 
     def read(
         self,

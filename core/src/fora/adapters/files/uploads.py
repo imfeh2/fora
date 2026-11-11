@@ -68,18 +68,30 @@ class DirectoryUploads:
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def path(self, attachment_id: str) -> str:
-        return str(self.root / identifier(attachment_id))
+    def path(self, discussion_id: int, attachment_id: str) -> str:
+        return str(self.root / str(discussion_id) / identifier(attachment_id))
 
-    def writer(self, upload_id: str) -> BinaryIO:
-        return Path(self.path(upload_id) + ".part").open("xb")
+    def writer(self, upload: Upload) -> BinaryIO:
+        target = Path(self.path(upload.discussion_id, upload.id) + ".part")
+        target.parent.mkdir(exist_ok=True)
+        return target.open("xb")
 
-    def discard(self, upload_id: str) -> None:
-        Path(self.path(upload_id) + ".part").unlink(missing_ok=True)
-        Path(self.path(upload_id)).unlink(missing_ok=True)
+    def discard(self, upload: Upload) -> None:
+        stored = self.path(upload.discussion_id, upload.id)
+        Path(stored + ".part").unlink(missing_ok=True)
+        Path(stored).unlink(missing_ok=True)
+
+    def relocate(self, upload_id: str, discussion_id: int) -> None:
+        for suffix in ("", ".part"):
+            legacy = self.root / (identifier(upload_id) + suffix)
+            if legacy.exists():
+                target = Path(self.path(discussion_id, upload_id) + suffix)
+                target.parent.mkdir(exist_ok=True)
+                os.replace(legacy, target)
 
     def complete(self, upload: Upload) -> Attachment:
-        temporary = Path(self.path(upload.id) + ".part")
+        stored = self.path(upload.discussion_id, upload.id)
+        temporary = Path(stored + ".part")
         with temporary.open("rb") as source:
             if os.fstat(source.fileno()).st_size != upload.size:
                 raise DomainError(
@@ -92,19 +104,26 @@ class DirectoryUploads:
             with temporary.open("rb") as source:
                 image = decode_image(source.read(MAX_IMAGE_BYTES + 1))
             media_type, width, height = image.media_type, image.width, image.height
-        os.replace(temporary, self.path(upload.id))
+        os.replace(temporary, stored)
         if sys.platform != "win32":
-            descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+            descriptor = os.open(Path(stored).parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
         return Attachment(
-            upload.id, upload.name, upload.size, media_type, digest, width, height
+            upload.id,
+            upload.discussion_id,
+            upload.name,
+            upload.size,
+            media_type,
+            digest,
+            width,
+            height,
         )
 
     def reader(self, attachment: Attachment) -> BinaryIO:
-        path = Path(self.path(attachment.id))
+        path = Path(self.path(attachment.discussion_id, attachment.id))
         try:
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_size != attachment.size:

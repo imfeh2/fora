@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from fora.adapters.files.uploads import DirectoryUploads
 from fora.adapters.sqlite.store import (
     UPLOAD_COUNT,
     UPLOAD_OWNER_BYTES,
@@ -73,3 +74,16 @@ def test_one_byte_over_the_owner_cap_is_still_rejected(
         reserve(store, discussion_id, owner_id, 9, 1)
 
     assert caught.value.code == ErrorCode.UPLOAD_CAPACITY
+
+
+def test_existing_attachments_move_into_their_discussion_folder(
+    tmp_path: Path,
+) -> None:
+    files = DirectoryUploads(tmp_path / "uploads")
+    attachment = "00000000-0000-4000-8000-000000000001"
+    (files.root / attachment).write_bytes(b"pasted")
+
+    files.relocate(attachment, 3)
+
+    assert not (files.root / attachment).exists()
+    assert Path(files.path(3, attachment)).read_bytes() == b"pasted"
