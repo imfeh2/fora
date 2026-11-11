@@ -40,10 +40,12 @@ def _real_name(directory: Path, name: str) -> str:
     entry = os.lstat(directory / name)
     if not os.path.samestat(entry, os.lstat(directory / other)):
         return name
+    # 只认大小写不同的同名条目，同一文件的其他硬链接不算
     return next(
         item
         for item in os.listdir(directory)
-        if os.path.samestat(os.lstat(directory / item), entry)
+        if item.casefold() == name.casefold()
+        and os.path.samestat(os.lstat(directory / item), entry)
     )
 
 
