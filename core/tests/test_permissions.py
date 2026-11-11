@@ -87,24 +87,6 @@ def test_the_reserved_owner_branch_is_never_reached_through_a_grant() -> None:
         permissions.parent_for(LEAD, [plus("owner")])
 
 
-def test_a_whole_branch_is_allowed_only_without_exclusions_below_it() -> None:
-    permissions = organization(
-        grant(
-            1,
-            LEAD,
-            OWNER,
-            None,
-            plus("library", "write"),
-            minus("library", "write", "docs", "secret"),
-        )
-    )
-
-    assert permissions.allows(LEAD, ("library", "write", "docs"))
-    assert not permissions.allows_within(LEAD, ("library", "write", "docs"))
-    assert permissions.allows_within(LEAD, ("library", "write", "notes"))
-    assert permissions.allows_within(OWNER, ("library", "write"))
-
-
 def test_only_the_delegable_part_can_be_granted_on() -> None:
     permissions = organization(
         grant(

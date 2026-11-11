@@ -177,13 +177,6 @@ class Permissions:
             for grant in self.grants_of(member_id)
         )
 
-    def allows_within(self, member_id: int, node: Node) -> bool:
-        # 删除或移动目录会带走下面所有内容，所以下面每个边界节点也都要允许
-        return all(
-            self.allows(member_id, boundary)
-            for boundary in self.boundaries(member_id, node)
-        )
-
     def parent_for(self, granter_id: int, entries: Sequence[Entry]) -> int | None:
         included = [entry.node for entry in entries if entry.sign == "+"]
         if any(within(node, OWNER) for node in included):

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path, PurePosixPath
 
 from fora.core.actions import FILES_READ, FILES_WRITE, LIBRARY_WRITE, WORKSPACE_READ
@@ -56,15 +57,15 @@ def real_path(path: Path, *, follow_symlinks: bool = True) -> Path:
     return current
 
 
-def tree_node(root: Path, path: str | None, *, follow_symlinks: bool = True) -> Node:
+def tree_path(root: Path, path: str | None, *, follow_symlinks: bool = True) -> Path:
+    base = real_path(root)
     parts = relative_parts(path)
     if not parts:
-        return ()
-    base = real_path(root)
+        return base
     target = real_path(base.joinpath(*parts), follow_symlinks=follow_symlinks)
     if not target.is_relative_to(base):
         raise DomainError(ErrorCode.INVALID_PATH, "Path must stay inside the tree")
-    return target.relative_to(base).parts
+    return target
 
 
 def path_node(path: Path) -> Node:
@@ -81,101 +82,140 @@ def node_path(node: Node, template: Path) -> Path:
 
 
 @dataclass(frozen=True)
-class AccessScope:
-    writes: tuple[Path, ...]
-    reads: tuple[Path, ...]
+class Layout:
     library: Path
-    own: Path
-    workspace: Path
-    member_id: int
+    agents: Path | None
+    own: Path | None = None
+    workspace: Path | None = None
+    writes: tuple[Path, ...] = ()
+    reads: tuple[Path, ...] = ()
     data: Path | None = None
     uploads: Path | None = None
     links: tuple[tuple[Path, str], ...] = ()
 
-    @property
-    def agents(self) -> Path:
-        return self.own.parent
 
-    def access(self, permissions: Permissions | None, path: Path) -> Access:
-        def allows(node: Node) -> bool:
-            return permissions is None or permissions.allows(self.member_id, node)
+@dataclass(frozen=True)
+class FileAccess:
+    # 一个请求里所有文件权限都在这里按真实路径判定，用的是同一份权限快照
+    layout: Layout
+    member_id: int
+    permissions: Permissions | None
+    _cache: dict[Path, Access] = field(default_factory=dict, compare=False)
 
-        if path.is_relative_to(self.workspace):
+    def _allows(self, node: Node) -> bool:
+        return self.permissions is None or self.permissions.allows(self.member_id, node)
+
+    def access(self, path: Path) -> Access:
+        if path not in self._cache:
+            self._cache[path] = self._decide(path)
+        return self._cache[path]
+
+    def _decide(self, path: Path) -> Access:
+        layout = self.layout
+        if layout.workspace is not None and path.is_relative_to(layout.workspace):
             return Access.WRITE
-        if path.is_relative_to(self.library):
-            relative = path.relative_to(self.library).parts
-            return Access.WRITE if allows((*LIBRARY_WRITE, *relative)) else Access.READ
-        if path.is_relative_to(self.own):
+        if path.is_relative_to(layout.library):
+            relative = path.relative_to(layout.library).parts
+            if self._allows((*LIBRARY_WRITE, *relative)):
+                return Access.WRITE
             return Access.READ
-        if path != self.agents and path.is_relative_to(self.agents):
-            member, *rest = path.relative_to(self.agents).parts
-            if rest[:1] != [WORKSPACE]:
+        if layout.own is not None and path.is_relative_to(layout.own):
+            return Access.READ
+        if layout.agents is not None and path.is_relative_to(layout.agents):
+            if path == layout.agents:
                 return Access.HIDDEN
-            return (
-                Access.READ
-                if allows((*WORKSPACE_READ, member, *rest[1:]))
-                else Access.HIDDEN
-            )
-        if path.is_relative_to(self.agents):
+            member, *rest = path.relative_to(layout.agents).parts
+            if rest[:1] == [WORKSPACE] and self._allows(
+                (*WORKSPACE_READ, member, *rest[1:])
+            ):
+                return Access.READ
             return Access.HIDDEN
-        if self.uploads is not None and path.is_relative_to(self.uploads):
+        if layout.uploads is not None and path.is_relative_to(layout.uploads):
             return Access.READ
-        if self.data is not None and path.is_relative_to(self.data):
+        if layout.data is not None and path.is_relative_to(layout.data):
             return Access.HIDDEN
         node = path_node(path)
-        if any(path.is_relative_to(root) for root in self.writes) and allows(
+        if any(path.is_relative_to(root) for root in layout.writes) and self._allows(
             (*FILES_WRITE, *node)
         ):
             return Access.WRITE
-        if any(path.is_relative_to(root) for root in self.reads) or allows(
+        if any(path.is_relative_to(root) for root in layout.reads) or self._allows(
             (*FILES_READ, *node)
         ):
             return Access.READ
         return Access.HIDDEN
 
-    def _candidates(self, permissions: Permissions | None) -> set[Path]:
-        found = {
-            *self.writes,
-            *self.reads,
-            self.library,
-            self.agents,
-            self.own,
-            self.workspace,
-        }
-        found.update(item for item in (self.data, self.uploads) if item is not None)
-        if self.agents.is_dir():
-            for entry in self.agents.iterdir():
+    def require(
+        self, path: Path, needed: Access, *, whole: bool = False, shown: str = ""
+    ) -> None:
+        # whole 用于删除和移动：会带走下面的所有内容，所以下面也不能有权限更低的地方
+        verb = "Writing" if needed is Access.WRITE else "Reading"
+        name = shown or str(path)
+        if self.access(path) < needed:
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED,
+                f"{verb} {name} is not permitted for this Member",
+            )
+        if whole and any(
+            mount.access < needed
+            and mount.path != path
+            and mount.path.is_relative_to(path)
+            for mount in self.sandbox.mounts
+        ):
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED,
+                f"{verb} everything inside {name} is not permitted for this Member",
+            )
+
+    def _candidates(self) -> set[Path]:
+        layout = self.layout
+        found = {*layout.writes, *layout.reads, layout.library}
+        found.update(
+            item
+            for item in (
+                layout.agents,
+                layout.own,
+                layout.workspace,
+                layout.data,
+                layout.uploads,
+            )
+            if item is not None
+        )
+        if layout.agents is not None and layout.agents.is_dir():
+            for entry in layout.agents.iterdir():
                 found.update((entry, entry / WORKSPACE))
-        if permissions is None:
+        if self.permissions is None:
             return found
         for action in (FILES_WRITE, FILES_READ):
             found.update(
-                node_path(node[len(action) :], self.library)
-                for node in permissions.boundaries(self.member_id, action)
+                node_path(node[len(action) :], layout.library)
+                for node in self.permissions.boundaries(self.member_id, action)
                 if len(node) > len(action)
             )
         found.update(
-            self.library.joinpath(*node[len(LIBRARY_WRITE) :])
-            for node in permissions.boundaries(self.member_id, LIBRARY_WRITE)
+            layout.library.joinpath(*node[len(LIBRARY_WRITE) :])
+            for node in self.permissions.boundaries(self.member_id, LIBRARY_WRITE)
             if len(node) > len(LIBRARY_WRITE)
         )
-        for node in permissions.boundaries(self.member_id, WORKSPACE_READ):
-            parts = node[len(WORKSPACE_READ) :]
-            if parts:
-                found.add(self.agents / parts[0])
-                found.add(self.agents.joinpath(parts[0], WORKSPACE, *parts[1:]))
+        if layout.agents is not None:
+            for node in self.permissions.boundaries(self.member_id, WORKSPACE_READ):
+                parts = node[len(WORKSPACE_READ) :]
+                if parts:
+                    found.add(layout.agents / parts[0])
+                    found.add(layout.agents.joinpath(parts[0], WORKSPACE, *parts[1:]))
         return found
 
-    def sandbox(self, permissions: Permissions | None) -> Sandbox:
-        root = Path(self.library.anchor)
-        root_access = self.access(permissions, root)
+    @cached_property
+    def sandbox(self) -> Sandbox:
+        root = Path(self.layout.library.anchor)
+        root_access = self.access(root)
         states: dict[Path, Access] = {root: root_access}
         mounts: list[Mount] = []
         for path in sorted(
-            self._candidates(permissions) - {root},
+            self._candidates() - {root},
             key=lambda item: (len(item.parts), str(item)),
         ):
-            state = self.access(permissions, path)
+            state = self.access(path)
             inherited = next(
                 (states[parent] for parent in path.parents if parent in states),
                 root_access,
@@ -183,7 +223,7 @@ class AccessScope:
             states[path] = state
             if state != inherited:
                 mounts.append(Mount(path, state))
-        return Sandbox(root_access, tuple(mounts), self.links)
+        return Sandbox(root_access, tuple(mounts), self.layout.links)
 
 
 def require_protected(sandbox: Sandbox) -> None:

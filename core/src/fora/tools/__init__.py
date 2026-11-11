@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +11,6 @@ from fora.core.actions import (
     DISCUSSION_ARCHIVE,
     DISCUSSION_CREATE,
     DISCUSSION_MEMBERS,
-    LIBRARY_WRITE,
     MEMBER_CREATE,
     MEMBER_DELETE,
     MEMBER_HISTORY,
@@ -21,7 +20,6 @@ from fora.core.actions import (
     MEMBER_RESUME,
     MEMBER_RESUME_SAFETY,
     TOOLS_RUN,
-    WORKSPACE_READ,
 )
 from fora.core.attachment import (
     MAX_IMAGE_BYTES,
@@ -49,10 +47,11 @@ from fora.services.library import Library
 from fora.services.uploads import Uploads
 from fora.services.workspace import Workspace
 from fora.tools.access import (
-    AccessScope,
+    FileAccess,
+    Layout,
     real_path,
     require_protected,
-    tree_node,
+    tree_path,
 )
 from fora.tools.authorize import Actor, Authorizer
 from fora.tools.discussion_read import DiscussionReader, integer, read_position
@@ -564,19 +563,11 @@ class AgentTools:
 
     def view_image(self, path: str) -> ViewedImage:
         execution = self._deps.execution.snapshot()
-        scope = self._access_scope(execution)
-        permissions = self._auth.permissions()
-        if Path(path).is_absolute() and (
-            scope.access(permissions, real_path(Path(path))) is Access.HIDDEN
-        ):
-            raise DomainError(
-                ErrorCode.NOT_PERMITTED,
-                f"Reading {path} is not permitted for this Member",
-            )
+        files = self._files(execution)
+        if Path(path).is_absolute():
+            files.require(real_path(Path(path)), Access.READ, shown=path)
         image = self._deps.decode_image(
-            execution.read_file(
-                path, MAX_IMAGE_BYTES, sandbox=scope.sandbox(permissions)
-            )
+            execution.read_file(path, MAX_IMAGE_BYTES, sandbox=files.sandbox)
         )
         self._record("view_image", f"Image path: {path}")
         return ViewedImage(path, image)
@@ -833,26 +824,42 @@ class AgentTools:
             if item.discussion_id in mine
         ]
 
-    def _access_scope(self, execution: ExecutionEnvironment) -> AccessScope:
-        workspace = self._deps.workspace_tree_for(self._actor.member_id).root
+    def _files(self, execution: ExecutionEnvironment | None = None) -> FileAccess:
+        # 不运行命令的工具不传 execution：Library 和工作区的判定用不到可读写目录的设置
         library = self._deps.library_tree.root
-        for root in (workspace, library):
-            root.mkdir(parents=True, exist_ok=True)
+        library.mkdir(parents=True, exist_ok=True)
         data = self._deps.data_directory
-        return AccessScope(
-            writes=tuple(Path(item).resolve() for item in execution.write_directories),
-            reads=tuple(Path(item).resolve() for item in execution.read_directories),
-            library=library.resolve(),
-            own=self._deps.agent_directory_for(self._actor.member_id).resolve(),
-            workspace=workspace.resolve(),
-            member_id=self._actor.member_id,
-            data=data.resolve() if data is not None else None,
-            uploads=(data / "uploads").resolve() if data is not None else None,
-            links=execution.read_links,
+        own = workspace = None
+        agents = real_path(data / "agents") if data is not None else None
+        if self._actor.is_agent:
+            directory = self._deps.workspace_tree_for(self._actor.member_id).root
+            directory.mkdir(parents=True, exist_ok=True)
+            workspace = real_path(directory)
+            own = real_path(self._deps.agent_directory_for(self._actor.member_id))
+            agents = own.parent
+        layout = Layout(
+            library=real_path(library),
+            agents=agents,
+            own=own,
+            workspace=workspace,
+            data=real_path(data) if data is not None else None,
+            uploads=real_path(data / "uploads") if data is not None else None,
         )
+        if execution is not None:
+            layout = replace(
+                layout,
+                writes=tuple(
+                    real_path(Path(item)) for item in execution.write_directories
+                ),
+                reads=tuple(
+                    real_path(Path(item)) for item in execution.read_directories
+                ),
+                links=execution.read_links,
+            )
+        return FileAccess(layout, self._actor.member_id, self._auth.permissions())
 
     def sandbox(self, execution: ExecutionEnvironment) -> Sandbox:
-        return self._access_scope(execution).sandbox(self._auth.permissions())
+        return self._files(execution).sandbox
 
     @contextmanager
     def _library_updates(self) -> Iterator[None]:
@@ -908,12 +915,7 @@ class AgentTools:
             path, base=str(self._deps.agent_directory_for(self._actor.member_id))
         )
         target = real_path(Path(path))
-        scope = self._access_scope(execution)
-        if scope.access(self._auth.permissions(), target) is not Access.WRITE:
-            raise DomainError(
-                ErrorCode.NOT_PERMITTED,
-                f"Writing {path} is not permitted for this Member",
-            )
+        self._files(execution).require(target, Access.WRITE, shown=path)
         with self._library_updates():
             result = execution.edit(
                 str(target), edits, write_directories=[str(target)], create=create
@@ -944,8 +946,8 @@ class AgentTools:
         }
 
     def _workspace(
-        self, agent_id: int | None = None, path: str | None = None
-    ) -> Workspace:
+        self, agent_id: int | None, path: str | None
+    ) -> tuple[Workspace, FileAccess, Path]:
         if agent_id is None:
             agent_id = self._actor.member_id
         # 先确认成员存在，打开工作区会创建目录，不能为任意编号创建
@@ -953,14 +955,16 @@ class AgentTools:
         if member is None or member.deleted:
             raise DomainError(ErrorCode.NOT_FOUND, f"Member {agent_id} does not exist")
         tree = self._deps.workspace_tree_for(agent_id)
-        self._require(*WORKSPACE_READ, str(agent_id), *tree_node(tree.root, path))
-        return Workspace(tree)
+        files = self._files()
+        files.require(
+            tree_path(tree.root, path), Access.READ, shown=path or "this workspace"
+        )
+        return Workspace(tree), files, real_path(tree.root)
 
     def list_workspace(
         self, path: str | None = None, *, agent_id: int | None = None
     ) -> list[dict[str, Any]]:
-        owner = str(self._actor.member_id if agent_id is None else agent_id)
-        allows = self._auth.checker(self._actor)
+        workspace, files, root = self._workspace(agent_id, path)
         return [
             {
                 "path": item.path,
@@ -968,14 +972,15 @@ class AgentTools:
                 "size": item.size,
                 "modified_at": item.modified_at,
             }
-            for item in self._workspace(agent_id, path).list(path)
-            if allows((*WORKSPACE_READ, owner, *item.path.split("/")))
+            for item in workspace.list(path)
+            if files.access(root.joinpath(*item.path.split("/"))) is not Access.HIDDEN
         ]
 
     def read_workspace(
         self, path: str, *, agent_id: int | None = None
     ) -> dict[str, Any]:
-        content, digest = self._workspace(agent_id, path).read(path)
+        workspace, _, _ = self._workspace(agent_id, path)
+        content, digest = workspace.read(path)
         return {"path": path, "content": content, "hash": digest}
 
     def list_skills(self) -> list[dict[str, str]]:
@@ -1008,14 +1013,10 @@ class AgentTools:
 
     def _require_library(self, path: str, *, whole: bool = False) -> None:
         # 删除和移动作用在条目本身，不跟随符号链接，并且会带走下面的所有内容
-        node = (
-            *LIBRARY_WRITE,
-            *tree_node(self._deps.library_tree.root, path, follow_symlinks=not whole),
+        target = tree_path(
+            self._deps.library_tree.root, path, follow_symlinks=not whole
         )
-        if whole:
-            self._auth.check_within(self._actor, node)
-        else:
-            self._require(*node)
+        self._files().require(target, Access.WRITE, whole=whole, shown=path)
 
     def _library_hash(self, path: str) -> str | None:
         try:
