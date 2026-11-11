@@ -11,6 +11,8 @@ from fora.core.actions import (
     DISCUSSION_ARCHIVE,
     DISCUSSION_CREATE,
     DISCUSSION_MEMBERS,
+    FILES_READ,
+    FILES_WRITE,
     MEMBER_CREATE,
     MEMBER_DELETE,
     MEMBER_HISTORY,
@@ -32,7 +34,7 @@ from fora.core.discussion import Discussion, Message, validate_body, validate_to
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import validate_name
-from fora.core.permissions import parse_entries, render_entry
+from fora.core.permissions import parse_entries, render_entry, within
 from fora.ports.agent import HistoryStore, SettingsStore
 from fora.ports.execution import (
     Access,
@@ -50,6 +52,7 @@ from fora.services.workspace import Workspace
 from fora.tools.access import (
     FileAccess,
     Layout,
+    real_node,
     real_path,
     require_protected,
     tree_path,
@@ -315,7 +318,21 @@ class AgentTools:
         }
 
     def grant_permissions(self, member_id: int, entries: object) -> dict[str, Any]:
-        parsed = parse_entries(entries)
+        template = self._deps.library_tree.root
+        parsed = tuple(
+            replace(
+                entry,
+                node=next(
+                    (
+                        real_node(entry.node, action, template)
+                        for action in (FILES_READ, FILES_WRITE)
+                        if within(entry.node, action)
+                    ),
+                    entry.node,
+                ),
+            )
+            for entry in parse_entries(entries)
+        )
         for entry in parsed:
             check_node(entry.node)
         member = self._deps.store.get_member(member_id)

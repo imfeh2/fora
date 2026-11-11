@@ -69,6 +69,13 @@ def tree_path(root: Path, path: str | None, *, follow_symlinks: bool = True) -> 
     return target
 
 
+def real_node(node: Node, action: Node, template: Path) -> Node:
+    # 路径授权按真实路径保存：判定时用的也是真实路径，带符号链接的写法会永远匹配不上
+    if len(node) <= len(action):
+        return node
+    return (*action, *path_node(real_path(node_path(node[len(action) :], template))))
+
+
 def path_node(path: Path) -> Node:
     anchor, *rest = path.parts
     head = anchor.rstrip("\\/")

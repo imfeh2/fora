@@ -181,7 +181,6 @@ def test_an_excluded_branch_stays_closed_through_every_write_path(
 @pytest.mark.parametrize(
     "node",
     [
-        ["files", "read", "home/user/docs"],
         ["workspace", "read", "lead"],
         ["member", "pause", "2", "extra"],
         ["tools", "run", "sh"],
@@ -196,6 +195,18 @@ def test_grants_that_could_never_match_are_refused(
 
     assert error.value.code == ErrorCode.INVALID_PERMISSION
     assert world.tools(LEAD).list_permissions()["grants"] == []
+
+
+def test_a_path_grant_is_kept_by_its_real_location(world: World) -> None:
+    (world.project / "fora" / "docs").mkdir()
+    link = world.project / "docs"
+    link.symlink_to(world.project / "fora" / "docs")
+    world.tools(OWNER).grant_permissions(LEAD, [path_entry("+", "read", link)])
+    sandbox = world.tools(LEAD).sandbox(world.deps.execution.snapshot())
+
+    [line] = world.tools(LEAD).list_permissions()["grants"][0]["lines"]
+    assert line.endswith(":fora:docs")
+    assert sandbox.access((world.project / "fora" / "docs").resolve()) >= Access.READ
 
 
 def test_a_path_excluded_from_writing_stays_readable(world: World) -> None:
