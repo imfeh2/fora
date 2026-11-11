@@ -143,10 +143,14 @@ class FileAccess:
         if layout.data is not None and path.is_relative_to(layout.data):
             return Access.HIDDEN
         node = path_node(path)
-        if any(path.is_relative_to(root) for root in layout.writes) and self._allows(
-            (*FILES_WRITE, *node)
-        ):
+        writable = any(path.is_relative_to(root) for root in layout.writes)
+        if writable and self._allows((*FILES_WRITE, *node)):
             return Access.WRITE
+        # 可写区域里被排除写入的位置仍然可读，和 Library 里的排除一致
+        if writable and any(
+            self._allows((*FILES_WRITE, *node[:depth])) for depth in range(len(node))
+        ):
+            return Access.READ
         if any(path.is_relative_to(root) for root in layout.reads) or self._allows(
             (*FILES_READ, *node)
         ):

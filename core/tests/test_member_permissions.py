@@ -198,6 +198,19 @@ def test_grants_that_could_never_match_are_refused(
     assert world.tools(LEAD).list_permissions()["grants"] == []
 
 
+def test_a_path_excluded_from_writing_stays_readable(world: World) -> None:
+    core = world.project / "fora" / "core"
+    world.tools(OWNER).grant_permissions(
+        LEAD,
+        [path_entry("+", "write", world.project), path_entry("-", "write", core)],
+    )
+
+    sandbox = world.tools(LEAD).sandbox(world.deps.execution.snapshot())
+
+    assert sandbox.access(world.project.resolve()) is Access.WRITE
+    assert sandbox.access(core.resolve()) is Access.READ
+
+
 def test_grants_accept_every_well_formed_target(world: World) -> None:
     world.tools(OWNER).grant_permissions(
         LEAD,
