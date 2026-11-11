@@ -72,7 +72,6 @@ class SqlitePermissionStore:
 
     @reading
     def permissions(self) -> Permissions:
-        # 修订号和授权在同一个事务里更新，所以修订号没变时缓存一定是最新的
         revision = int(self._db.execute("SELECT value FROM permission_revision")[0][0])
         cached = self._cached
         if cached is not None and cached[0] == revision:
@@ -88,7 +87,6 @@ class SqlitePermissionStore:
         return loaded
 
     def _changed(self) -> None:
-        # 修订号取随机值，事务回滚后再提交时，修订号也不会和回滚前读到的相同
         self._db.execute(
             "UPDATE permission_revision SET value = ?", (secrets.randbits(62),)
         )

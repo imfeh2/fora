@@ -124,7 +124,6 @@ def denied(action) -> DomainError:
 
 
 def system_reads() -> list[dict[str, object]]:
-    # 成员没有默认权限，命令要运行，得先授给它系统目录的读权限
     return [
         path_entry("+", "read", Path(item)) for item in SYSTEM if Path(item).exists()
     ]

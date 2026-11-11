@@ -9,7 +9,6 @@ import fora
 
 
 def symlinks_on(path: Path) -> tuple[tuple[Path, str], ...]:
-    # 解析路径时经过的每个符号链接；沙箱里要重建它们，否则路径走到一半就断了
     found: list[tuple[Path, str]] = []
     current = Path(path.anchor)
     pending = list(path.parts[1:])
@@ -29,8 +28,6 @@ def symlinks_on(path: Path) -> tuple[tuple[Path, str], ...]:
 
 
 def sandbox_links() -> tuple[tuple[Path, str], ...]:
-    # 根目录下的系统链接（例如 /bin -> usr/bin）和通往解释器的链接；
-    # 链接本身不暴露内容，指向的位置能不能读仍由授权决定
     anchor = Path(Path(sys.executable).anchor)
     rooted = (
         (entry, os.readlink(entry))
@@ -49,8 +46,6 @@ SYSTEM_LIBRARIES: dict[str, tuple[str, ...]] = {
 
 
 def helper_directories() -> tuple[Path, ...]:
-    # 沙箱里读文件的辅助进程运行 `python -m fora`，要用解释器、系统库和 fora 的源码；
-    # 开发安装时 fora 的源码不在解释器目录里，所以单独加上
     system: tuple[str, ...] = next(
         (
             dirs

@@ -2036,8 +2036,6 @@ def _merge_metadata(
 
 
 def _merge_requests(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
-    # pydantic-ai 在每次运行开始时合并相邻的请求，并丢弃应用写入的 metadata。
-    # 这里按同样的条件提前合并并保留双方的 metadata，保存的历史里就不会再有相邻请求。
     merged: list[ModelMessage] = []
     for message in messages:
         last = merged[-1] if merged else None

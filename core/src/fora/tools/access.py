@@ -16,7 +16,6 @@ WORKSPACE = "workspace"
 
 
 def _real_name(directory: Path, name: str) -> str:
-    # 只有在不区分大小写的目录里，换了大小写的名字才会指向同一个文件
     other = name.swapcase()
     if (
         other == name
@@ -27,7 +26,6 @@ def _real_name(directory: Path, name: str) -> str:
     entry = os.lstat(directory / name)
     if not os.path.samestat(entry, os.lstat(directory / other)):
         return name
-    # 只认大小写不同的同名条目，同一文件的其他硬链接不算
     return next(
         item
         for item in os.listdir(directory)
@@ -48,7 +46,6 @@ def real_path(path: Path, *, follow_symlinks: bool = True) -> Path:
 
 
 def real_node(node: Node, action: Node, template: Path) -> Node:
-    # 路径授权按真实路径保存：判定时用的也是真实路径，带符号链接的写法会永远匹配不上
     if len(node) <= len(action):
         return node
     return (*action, *path_node(real_path(node_path(node[len(action) :], template))))
@@ -80,7 +77,6 @@ class Layout:
 
 @dataclass(frozen=True)
 class FileAccess:
-    # 一个请求里所有文件权限都在这里按真实路径判定，用的是同一份权限快照
     layout: Layout
     rights: Rights
     _cache: dict[Path, Access] = field(default_factory=dict, compare=False)
@@ -128,7 +124,6 @@ class FileAccess:
         node = path_node(path)
         if self._allows((*FILES_WRITE, *node)):
             return Access.WRITE
-        # 可写范围里被排除写入的位置仍然可读，和 Library 里的排除一致
         if self._allows((*FILES_READ, *node)) or any(
             self._allows((*FILES_WRITE, *node[:depth])) for depth in range(len(node))
         ):
@@ -138,7 +133,6 @@ class FileAccess:
     def require(
         self, path: Path, needed: Access, *, whole: bool = False, shown: str = ""
     ) -> None:
-        # whole 用于删除和移动：会带走下面的所有内容，所以下面也不能有权限更低的地方
         verb = "Writing" if needed is Access.WRITE else "Reading"
         name = shown or str(path)
         if self.access(path) < needed:
@@ -203,7 +197,6 @@ class FileAccess:
         root_access = self.access(root)
         states: dict[Path, Access] = {root: root_access}
         mounts: list[Mount] = []
-        # 挂载时会跟随符号链接，所以挂载点也要换成真实路径，判定的才是实际挂上的位置
         candidates = {real_path(path) for path in self._candidates()}
         for path in sorted(
             candidates - {root},
@@ -221,7 +214,6 @@ class FileAccess:
 
 
 def require_protected(sandbox: Sandbox) -> None:
-    # 受保护的路径要先存在才能只读挂载；Fora 不知道它该是文件还是目录，所以不替成员创建
     missing = [str(path) for path in sandbox.protected() if not path.exists()]
     if missing:
         raise DomainError(

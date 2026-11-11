@@ -38,7 +38,6 @@ def _read_file_protocol_error(
             ErrorCode.EXECUTION_PROTOCOL, "read_file returned unexpected stdout"
         )
     if exit_code != 3 or not stderr or len(stderr) > 8192:
-        # 辅助进程没能按约定报错，通常是它自己没启动起来；带上它的输出才能看出原因
         shown = stderr[:2000].decode("utf-8", "replace").strip()
         return DomainError(
             ErrorCode.EXECUTION_PROTOCOL,
@@ -82,8 +81,6 @@ class LocalExecution:
         return self._links
 
     def _helper_sandbox(self, sandbox: Sandbox | None) -> Sandbox | None:
-        # 读文件的辅助进程是 Fora 自己的 Python 进程，启动它要用解释器和系统库；
-        # 这些目录只给辅助进程，它只读取已经检查过权限的那个文件
         if sandbox is None:
             return None
         kept = tuple(

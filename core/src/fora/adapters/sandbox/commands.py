@@ -41,15 +41,12 @@ def linux_command(
         command.extend(("--bind", "/", "/"))
     elif sandbox.root is Access.READ:
         command.extend(("--ro-bind", "/", "/"))
-    # 隔离进程：否则宿主机上的进程和它们的命令行参数在沙箱里都能看到
     command.extend(
         ("--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid")
     )
     if sandbox.root is Access.HIDDEN:
         for link, target in sandbox.links:
             command.extend(("--symlink", target, link.as_posix()))
-    # 隐藏目录里面可能还要挂可见的子目录，所以等全部挂载完成后再把它设成只读；
-    # 根目录隐藏时，作为根目录的内存文件系统也一样
     remounts: list[str] = ["--remount-ro", "/"] if sandbox.root is Access.HIDDEN else []
     for mount in sandbox.ordered():
         rendered = mount.path.as_posix()
@@ -119,7 +116,6 @@ def macos_profile(sandbox: Sandbox) -> tuple[str, list[str]]:
         "(version 1)",
         "(allow default)",
         *_denials(sandbox, names, "file-write*", Access.WRITE, '(literal "/dev/null")'),
-        # 只禁止读取内容；查看文件信息仍然允许，否则可读目录的上级目录无法解析路径
         *_denials(sandbox, names, "file-read-data", Access.READ, '(subpath "/dev")'),
         *(
             "(deny file-write-unlink\n"

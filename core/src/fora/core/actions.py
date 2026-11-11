@@ -88,7 +88,6 @@ def _invalid(node: Node, reason: str) -> DomainError:
 
 
 def check_node(node: Node) -> None:
-    # 节点在动作之后的部分按动作声明的目标类型检查，格式不对的授权永远匹配不上
     if within(node, OWNER):
         return
     matches = [action for action in BUILTIN if within(node, action.node)]
@@ -103,7 +102,6 @@ def check_node(node: Node) -> None:
     if action.target is None:
         raise _invalid(node, f"{render(action.node)} takes no target")
     if action.target in ("member", "discussion", "member/path"):
-        # 判定时比较的是 str(编号)，所以只接受这种写法，例如 7，不接受 007
         if not (target[0].isascii() and target[0].isdigit()) or target[0] != str(
             int(target[0])
         ):

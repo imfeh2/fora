@@ -153,7 +153,6 @@ class Permissions:
     def __init__(self, owner_id: int, grants: Iterable[Grant]) -> None:
         self.owner_id = owner_id
         self._grants = {grant.id: grant for grant in grants}
-        # 快照不会变化，有效的授权在创建时按持有人整理好
         self._active = tuple(
             grant for grant in self._grants.values() if self._valid(grant)
         )

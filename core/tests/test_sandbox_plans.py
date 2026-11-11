@@ -35,7 +35,6 @@ def plan(
     levels: dict[Path, Access],
     execution: LocalExecution,
 ) -> Sandbox:
-    # 和 Fora 生成的计划一样，只在权限变化的地方放挂载点
     mounts = (
         [Mount(Path(item).resolve(), Access.READ) for item in SYSTEM]
         if root is Access.HIDDEN
@@ -106,7 +105,6 @@ def test_commands_cannot_see_processes_outside_the_sandbox(
 def test_a_program_reached_through_chained_links_starts_in_a_hidden_root(
     tmp_path: Path, execution: LocalExecution
 ) -> None:
-    # 和 uv 的布局一样：虚拟环境里的链接指向一个版本目录链接，再指向真实目录
     real = tmp_path.resolve() / "cpython-3.13.18"
     real.mkdir()
     program = real / "tool"

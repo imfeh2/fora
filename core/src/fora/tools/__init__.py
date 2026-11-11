@@ -179,7 +179,6 @@ class AgentTools:
         model_config: object | None = None,
         permissions: object | None = None,
     ) -> dict[str, Any]:
-        # 成员的权限在创建时一起定好；授权不成立时整个创建都不生效
         self._require(*MEMBER_CREATE)
         validated = validate_name(name)
         entries = self._grant_entries(permissions) if permissions is not None else ()
@@ -871,7 +870,6 @@ class AgentTools:
         ]
 
     def _files(self, execution: ExecutionEnvironment | None = None) -> FileAccess:
-        # 不运行命令的工具不传 execution：Library 和工作区的判定用不到可读写目录的设置
         library = self._deps.library_tree.root
         library.mkdir(parents=True, exist_ok=True)
         data = self._deps.data_directory
@@ -1001,7 +999,6 @@ class AgentTools:
     ) -> tuple[Workspace, FileAccess, Path]:
         if agent_id is None:
             agent_id = self._actor.member_id
-        # 先确认成员存在，打开工作区会创建目录，不能为任意编号创建
         member = self._deps.store.get_member(agent_id)
         if member is None or member.deleted:
             raise DomainError(ErrorCode.NOT_FOUND, f"Member {agent_id} does not exist")
@@ -1063,7 +1060,6 @@ class AgentTools:
         return Library(self._deps.library_tree)
 
     def _require_library(self, path: str, *, whole: bool = False) -> None:
-        # 删除和移动作用在条目本身，不跟随符号链接，并且会带走下面的所有内容
         located = self._deps.library_tree.locate(path, follow_symlinks=not whole)
         target = real_path(located, follow_symlinks=not whole)
         self._files().require(target, Access.WRITE, whole=whole, shown=path)

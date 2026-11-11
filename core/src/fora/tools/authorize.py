@@ -16,7 +16,6 @@ class Actor:
 
 @dataclass(frozen=True)
 class Rights:
-    # 一个成员在一次请求里的权限快照；同一个请求里的所有判定都用它，结果才一致
     actor: Actor
     permissions: Permissions | None
 
