@@ -685,3 +685,31 @@ def test_the_environment_lists_what_this_member_can_write(world: World) -> None:
 
     assert str((world.root / "library" / "specs").resolve()) in text
     assert "Read-only inside them:" in text
+
+
+def test_an_agent_starts_with_the_permissions_it_was_created_with(
+    world: World,
+) -> None:
+    created = world.tools(OWNER).create_agent(
+        "Builder",
+        permissions=[{"sign": "+", "node": ["tools", "run"]}, *system_reads()],
+    )
+
+    grants = world.tools(OWNER).list_permissions(created["id"])["grants"]
+    assert [grant["granted_by"] for grant in grants] == [OWNER]
+    assert "+ tools:run" in grants[0]["lines"]
+
+
+def test_a_refused_starting_grant_creates_no_agent(world: World) -> None:
+    world.tools(OWNER).grant_permissions(
+        LEAD, [{"sign": "+", "node": ["member", "create"]}]
+    )
+
+    denied(
+        lambda: world.tools(LEAD).create_agent(
+            "Helper", permissions=[{"sign": "+", "node": ["files", "read"]}]
+        )
+    )
+
+    names = [member["name"] for member in world.tools(OWNER).list_members()]
+    assert "Helper" not in names

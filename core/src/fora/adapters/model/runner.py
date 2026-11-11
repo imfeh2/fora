@@ -1080,6 +1080,9 @@ class PydanticModelRunner:
                 "create_agent accepts model_config with optional model_id and thinking fields; "
                 "omitting the object or either field inherits the matching global setting, "
                 "while thinking=default keeps the model's default thinking behavior. "
+                "create_agent also takes permissions, the entries the new Agent starts with, "
+                "granted by you; an Agent holds nothing it was not granted, so include what "
+                "its work needs, such as files:read for the system directories its commands use. "
                 "rename takes member_id and name and changes that Member's name. "
                 "pause, resume and delete take member_id and act on one Agent: "
                 "pause stops model retries and discards in-flight model results; "
@@ -1094,6 +1097,7 @@ class PydanticModelRunner:
             member_id: int | None = None,
             name: str | None = None,
             model_config: AgentModelConfig | None = None,
+            permissions: list[PermissionEntry] | None = None,
         ) -> Any:
             tools = ctx.deps
             if action == "list_members":
@@ -1109,7 +1113,7 @@ class PydanticModelRunner:
             if action == "create_agent":
                 return _guard(
                     lambda: tools.create_agent(
-                        _required(name, "name", action), model_config
+                        _required(name, "name", action), model_config, permissions
                     )
                 )
             if action in ("set_model", "set_agent_model"):

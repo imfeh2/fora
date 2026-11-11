@@ -167,7 +167,7 @@ class Api:
             "organization.create_agent",
             partial(create_agent, context),
             scope=lambda params: RequestScope(
-                writes=(context.member_set, context.model_settings)
+                writes=(context.member_set, context.model_settings, context.permissions)
             ),
         )
 
@@ -451,7 +451,9 @@ def organization_get(context: _Context, params: dict[str, Any]) -> Any:
 
 def create_agent(context: _Context, params: dict[str, Any]) -> Any:
     return context.api._human().create_agent(
-        str(params.get("name", "")), params.get("model_config")
+        str(params.get("name", "")),
+        params.get("model_config"),
+        params.get("permissions"),
     )
 
 

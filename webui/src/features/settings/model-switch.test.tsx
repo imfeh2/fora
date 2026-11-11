@@ -104,14 +104,17 @@ async function agentModelGroup(enabled: boolean): Promise<HTMLOptGroupElement> {
   return group;
 }
 
-beforeAll(() => {
+function stubBackend() {
   vi.spyOn(backend, "onEvent").mockReturnValue(() => {});
-});
+  vi.spyOn(backend, "permissionCatalog").mockResolvedValue([]);
+}
+
+beforeAll(stubBackend);
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  vi.spyOn(backend, "onEvent").mockReturnValue(() => {});
+  stubBackend();
 });
 
 describe("model settings without a per-model switch", () => {

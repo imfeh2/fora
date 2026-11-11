@@ -843,10 +843,15 @@ export class Backend {
     });
   }
 
-  createAgent(name: string, model_config?: AgentModelConfig) {
+  createAgent(
+    name: string,
+    model_config?: AgentModelConfig,
+    permissions?: PermissionEntry[],
+  ) {
     return this.call<Member>("organization.create_agent", {
       name,
       model_config,
+      permissions,
     });
   }
 

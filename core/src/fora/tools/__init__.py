@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fora.core.actions import (
     BUILTIN,
@@ -34,7 +34,7 @@ from fora.core.discussion import Discussion, Message, validate_body, validate_to
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import validate_name
-from fora.core.permissions import parse_entries, render_entry, within
+from fora.core.permissions import Entry, Grant, parse_entries, render_entry, within
 from fora.ports.agent import HistoryStore, SettingsStore
 from fora.ports.execution import (
     Access,
@@ -174,11 +174,30 @@ class AgentTools:
         return members
 
     def create_agent(
-        self, name: str, model_config: object | None = None
+        self,
+        name: str,
+        model_config: object | None = None,
+        permissions: object | None = None,
     ) -> dict[str, Any]:
+        # 成员的权限在创建时一起定好；授权不成立时整个创建都不生效
         self._require(*MEMBER_CREATE)
         validated = validate_name(name)
-        result = self._deps.settings.create_agent_with_model(validated, model_config)
+        entries = self._grant_entries(permissions) if permissions is not None else ()
+        if not entries:
+            result = self._deps.settings.create_agent_with_model(
+                validated, model_config
+            )
+            return self._changed("member.created", result)
+        with self._permission_store().transaction():
+            result = self._deps.settings.create_agent_with_model(
+                validated, model_config
+            )
+            grant = self._add_grant(cast(int, result["id"]), entries)
+        self._record(
+            "permissions.grant",
+            f"Member {result['id']}: {', '.join(map(render_entry, grant.entries))}",
+        )
+        self._changed("permissions.updated", grant.payload())
         return self._changed("member.created", result)
 
     def list_models(self) -> dict[str, object]:
@@ -316,7 +335,7 @@ class AgentTools:
             ],
         }
 
-    def grant_permissions(self, member_id: int, entries: object) -> dict[str, Any]:
+    def _grant_entries(self, entries: object) -> tuple[Entry, ...]:
         template = self._deps.library_tree.root
         parsed = tuple(
             replace(
@@ -334,9 +353,9 @@ class AgentTools:
         )
         for entry in parsed:
             check_node(entry.node)
-        member = self._deps.store.get_member(member_id)
-        if member is None or member.deleted:
-            raise DomainError(ErrorCode.NOT_FOUND, f"Member {member_id} does not exist")
+        return parsed
+
+    def _add_grant(self, member_id: int, parsed: tuple[Entry, ...]) -> Grant:
         if member_id == self._actor.member_id:
             raise DomainError(
                 ErrorCode.INVALID_PERMISSION, "A Member cannot grant itself permissions"
@@ -349,7 +368,14 @@ class AgentTools:
                     ErrorCode.INVALID_PERMISSION, "The owner already holds everything"
                 )
             parent = permissions.parent_for(self._actor.member_id, parsed)
-            grant = store.add_grant(member_id, self._actor.member_id, parent, parsed)
+            return store.add_grant(member_id, self._actor.member_id, parent, parsed)
+
+    def grant_permissions(self, member_id: int, entries: object) -> dict[str, Any]:
+        parsed = self._grant_entries(entries)
+        member = self._deps.store.get_member(member_id)
+        if member is None or member.deleted:
+            raise DomainError(ErrorCode.NOT_FOUND, f"Member {member_id} does not exist")
+        grant = self._add_grant(member_id, parsed)
         self._record(
             "permissions.grant",
             f"Member {member_id}: {', '.join(map(render_entry, grant.entries))}",

@@ -49,6 +49,11 @@ import {
 import { OverflowMenu } from "@/components/ui/menu";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
+import {
+  type Draft,
+  draftEntry,
+  GrantEditor,
+} from "@/features/members/permissions";
 import { parseRequestBody } from "@/features/settings/request-body";
 import {
   reportLoadFailure,
@@ -59,6 +64,7 @@ import {
   BackendError,
   backend,
   type ModelCatalog,
+  type PermissionAction,
   type ProviderConfig,
   type RegisteredModel,
   type Thinking,
@@ -201,15 +207,21 @@ export function AgentCreateDialog({
     model_id: null,
     thinking: null,
   });
+  const [grants, setGrants] = useState<Draft[]>([]);
+  const [actions, setActions] = useState<PermissionAction[]>([]);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const generation = useRef(0);
   const load = useCallback(async () => {
     const current = ++generation.current;
     try {
-      const result = await backend.modelCatalog();
+      const [result, available] = await Promise.all([
+        backend.modelCatalog(),
+        backend.permissionCatalog(),
+      ]);
       if (current !== generation.current) return;
       setCatalog(result);
+      setActions(available);
       setLoadError(null);
     } catch (error) {
       if (current === generation.current)
@@ -231,7 +243,13 @@ export function AgentCreateDialog({
     setBusy(true);
     let created = false;
     try {
-      await backend.createAgent(name.trim(), value);
+      await backend.createAgent(
+        name.trim(),
+        value,
+        grants.length > 0
+          ? grants.map((draft) => draftEntry(draft, actions))
+          : undefined,
+      );
       created = true;
     } catch (error) {
       if (error instanceof BackendError && error.transport)
@@ -271,7 +289,12 @@ export function AgentCreateDialog({
         >
           <Button
             variant="primary"
-            disabled={!catalog || !name.trim() || busy}
+            disabled={
+              !catalog ||
+              !name.trim() ||
+              busy ||
+              grants.some((draft) => draft.action === "")
+            }
             onClick={() => void create()}
           >
             {busy ? <Spinner label="Creating Agent" /> : null}
@@ -303,7 +326,21 @@ export function AgentCreateDialog({
           />
         </Field>
         {catalog ? (
-          <ModelSelection catalog={catalog} value={value} onChange={setValue} />
+          <>
+            <ModelSelection
+              catalog={catalog}
+              value={value}
+              onChange={setValue}
+            />
+            <Field label="Permissions">
+              <GrantEditor
+                label="Permissions"
+                drafts={grants}
+                catalog={actions}
+                onChange={setGrants}
+              />
+            </Field>
+          </>
         ) : !loadError ? (
           <LoadingSkeleton label="Loading models">
             <FieldSkeleton />

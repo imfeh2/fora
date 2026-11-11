@@ -1,4 +1,4 @@
-import { Minus, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import { ConfirmDialog, DialogActions, Modal } from "@/components/ui/dialog";
 import {
@@ -23,7 +23,7 @@ import {
 
 const EVERYTHING = "*";
 
-type Draft = {
+export type Draft = {
   key: number;
   sign: "+" | "-";
   action: string;
@@ -62,7 +62,7 @@ function failed(title: string, failure: unknown) {
 
 let nextKey = 1;
 
-function blankDraft(): Draft {
+export function blankDraft(): Draft {
   return {
     key: nextKey++,
     sign: "+",
@@ -114,13 +114,6 @@ export function PermissionsDialog({
 
   const name = (id: number) =>
     members.find((item) => item.id === id)?.name ?? `Member ${id}`;
-
-  const update = (key: number, change: Partial<Draft>) =>
-    setDrafts((current) =>
-      current.map((draft) =>
-        draft.key === key ? { ...draft, ...change } : draft,
-      ),
-    );
 
   const grant = async () => {
     if (busy) return;
@@ -212,35 +205,13 @@ export function PermissionsDialog({
                 ))
               )}
             </ul>
-            <fieldset className="flex flex-col gap-2">
-              <legend className="sr-only">New grant</legend>
-              {drafts.map((draft) => (
-                <DraftRow
-                  key={draft.key}
-                  draft={draft}
-                  catalog={catalog}
-                  removable={drafts.length > 1}
-                  onChange={(change) => update(draft.key, change)}
-                  onRemove={() =>
-                    setDrafts((current) =>
-                      current.filter((item) => item.key !== draft.key),
-                    )
-                  }
-                />
-              ))}
-              <div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    setDrafts((current) => [...current, blankDraft()])
-                  }
-                >
-                  <Plus size={14} />
-                  Entry
-                </Button>
-              </div>
-            </fieldset>
+            <GrantEditor
+              label="New grant"
+              drafts={drafts}
+              catalog={catalog}
+              onChange={setDrafts}
+              keepOne
+            />
           </div>
         )}
       </Modal>
@@ -260,6 +231,54 @@ export function PermissionsDialog({
   );
 }
 
+export function GrantEditor({
+  label,
+  drafts,
+  catalog,
+  onChange,
+  keepOne = false,
+}: {
+  label: string;
+  drafts: Draft[];
+  catalog: PermissionAction[];
+  onChange: (drafts: Draft[]) => void;
+  keepOne?: boolean;
+}) {
+  return (
+    <fieldset className="flex flex-col gap-2 border-0 p-0">
+      <legend className="sr-only">{label}</legend>
+      {drafts.map((draft) => (
+        <DraftRow
+          key={draft.key}
+          draft={draft}
+          catalog={catalog}
+          removable={!keepOne || drafts.length > 1}
+          onChange={(change) =>
+            onChange(
+              drafts.map((item) =>
+                item.key === draft.key ? { ...item, ...change } : item,
+              ),
+            )
+          }
+          onRemove={() =>
+            onChange(drafts.filter((item) => item.key !== draft.key))
+          }
+        />
+      ))}
+      <div>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onChange([...drafts, blankDraft()])}
+        >
+          <Plus size={14} />
+          Entry
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
+
 function DraftRow({
   draft,
   catalog,
@@ -276,60 +295,66 @@ function DraftRow({
   const id = useId();
   const action = catalog.find((item) => item.name === draft.action);
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Segmented
-        label="Grant or exclude"
-        value={draft.sign}
-        options={[
-          { value: "+", label: "+" },
-          { value: "-", label: "−" },
-        ]}
-        onChange={(sign) => onChange({ sign })}
-      />
-      <div className="w-52 max-w-full">
-        <Select
-          aria-label="Action"
-          value={draft.action}
-          onChange={(event) =>
-            onChange({ action: event.target.value, target: "" })
-          }
-        >
-          <option value="" disabled>
-            Action
-          </option>
-          <option value={EVERYTHING}>{EVERYTHING}</option>
-          {catalog.map((item) => (
-            <option key={item.name} value={item.name} title={item.description}>
-              {item.name}
-            </option>
-          ))}
-        </Select>
-      </div>
-      {action?.target ? (
-        <Input
-          aria-label="Target"
-          className="min-w-40 flex-1"
-          placeholder={action.target}
-          value={draft.target}
-          onChange={(event) => onChange({ target: event.target.value })}
+    <div className="flex items-start gap-2">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+        <Segmented
+          label="Grant or exclude"
+          value={draft.sign}
+          options={[
+            { value: "+", label: "+" },
+            { value: "-", label: "−" },
+          ]}
+          onChange={(sign) => onChange({ sign })}
         />
-      ) : null}
-      {draft.sign === "+" ? (
-        <label
-          htmlFor={id}
-          className="flex items-center gap-2 text-xs text-fg-muted"
-        >
-          <Switch
-            id={id}
-            checked={draft.delegable}
-            onCheckedChange={(delegable) => onChange({ delegable })}
+        <div className="w-52 max-w-full">
+          <Select
+            aria-label="Action"
+            value={draft.action}
+            onChange={(event) =>
+              onChange({ action: event.target.value, target: "" })
+            }
+          >
+            <option value="" disabled>
+              Action
+            </option>
+            <option value={EVERYTHING}>{EVERYTHING}</option>
+            {catalog.map((item) => (
+              <option
+                key={item.name}
+                value={item.name}
+                title={item.description}
+              >
+                {item.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {action?.target ? (
+          <Input
+            aria-label="Target"
+            className="min-w-40 flex-1"
+            placeholder={action.target}
+            value={draft.target}
+            onChange={(event) => onChange({ target: event.target.value })}
           />
-          Delegable
-        </label>
-      ) : null}
+        ) : null}
+        {draft.sign === "+" ? (
+          <label
+            htmlFor={id}
+            className="flex items-center gap-2 text-xs text-fg-muted"
+          >
+            <Switch
+              id={id}
+              checked={draft.delegable}
+              onCheckedChange={(delegable) => onChange({ delegable })}
+            />
+            Delegable
+          </label>
+        ) : null}
+      </div>
       {removable ? (
         <IconButton size="sm" label="Remove entry" onClick={onRemove}>
-          <Minus size={14} />
+          <X size={14} />
         </IconButton>
       ) : null}
     </div>
