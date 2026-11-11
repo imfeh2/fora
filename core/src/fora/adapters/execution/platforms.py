@@ -20,7 +20,7 @@ from fora.adapters.sandbox.commands import (
 )
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.ports.execution import Access, Sandbox
+from fora.ports.execution import Sandbox
 
 if TYPE_CHECKING:
     from fora.adapters.sandbox.windows import WindowsWriteAccess
@@ -138,7 +138,7 @@ def windows_roots(sandbox: Sandbox, *, enforce: bool = True) -> tuple[Path, ...]
             "Read-only paths inside writable directories are not enforced on "
             f"Windows: {', '.join(map(str, protected))}",
         )
-    return tuple(path for path in sandbox.paths(Access.WRITE) if path.is_dir())
+    return tuple(path for path in sandbox.writable() if path.is_dir())
 
 
 @dataclass(eq=False)

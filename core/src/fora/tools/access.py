@@ -223,7 +223,7 @@ class FileAccess:
             states[path] = state
             if state != inherited:
                 mounts.append(Mount(path, state))
-        return Sandbox(root_access, tuple(mounts), self.layout.links)
+        return Sandbox(root_access, tuple(mounts), self.layout.links, root)
 
 
 def require_protected(sandbox: Sandbox) -> None:

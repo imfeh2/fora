@@ -37,7 +37,9 @@ def linux_command(
     if root is None:
         root = hasattr(os, "geteuid") and os.geteuid() == 0
     command = [bwrap or bubblewrap_executable(), "--die-with-parent"]
-    if sandbox.root is not Access.HIDDEN:
+    if sandbox.root is Access.WRITE:
+        command.extend(("--bind", "/", "/"))
+    elif sandbox.root is Access.READ:
         command.extend(("--ro-bind", "/", "/"))
     # 隔离进程：否则宿主机上的进程和它们的命令行参数在沙箱里都能看到
     command.extend(

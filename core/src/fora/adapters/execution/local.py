@@ -199,9 +199,7 @@ class LocalExecution:
         entries = [f"- {path} ({label})" for path, label in labeled]
         named = {path for path, _ in labeled}
         entries.extend(
-            f"- {item}"
-            for item in map(str, plan.paths(Access.WRITE))
-            if item not in named
+            f"- {item}" for item in map(str, plan.writable()) if item not in named
         )
         listing = "\n".join(entries) or "- none"
         text = f"Commands run on {self._backend.name}\nWritable directories:\n{listing}"

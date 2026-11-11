@@ -49,9 +49,7 @@ def plan(
     return Sandbox(root, tuple(mounts), links)
 
 
-@pytest.mark.parametrize(
-    "root", (Access.HIDDEN, Access.READ), ids=lambda root: f"root-{root.name.lower()}"
-)
+@pytest.mark.parametrize("root", STATES, ids=lambda root: f"root-{root.name.lower()}")
 @pytest.mark.parametrize(
     "states",
     list(itertools.product(STATES, repeat=len(LEVELS))),
@@ -91,9 +89,7 @@ def test_commands_see_exactly_what_the_plan_allows(
         assert (path / "new").exists() is (state is Access.WRITE)
 
 
-@pytest.mark.parametrize(
-    "root", (Access.HIDDEN, Access.READ), ids=lambda root: f"root-{root.name.lower()}"
-)
+@pytest.mark.parametrize("root", STATES, ids=lambda root: f"root-{root.name.lower()}")
 def test_commands_cannot_see_processes_outside_the_sandbox(
     execution: LocalExecution, root: Access
 ) -> None:

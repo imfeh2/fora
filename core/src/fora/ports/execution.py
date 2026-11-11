@@ -39,6 +39,12 @@ class Sandbox:
     root: Access
     mounts: tuple[Mount, ...] = ()
     links: tuple[tuple[Path, str], ...] = ()
+    anchor: Path = Path("/")
+
+    def writable(self) -> tuple[Path, ...]:
+        # 根目录可写时，它本身也是一个可写目录
+        rooted = (self.anchor,) if self.root is Access.WRITE else ()
+        return (*rooted, *self.paths(Access.WRITE))
 
     def ordered(self) -> tuple[Mount, ...]:
         return tuple(
