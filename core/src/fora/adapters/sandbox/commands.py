@@ -39,7 +39,10 @@ def linux_command(
     command = [bwrap or bubblewrap_executable(), "--die-with-parent"]
     if sandbox.root is not Access.HIDDEN:
         command.extend(("--ro-bind", "/", "/"))
-    command.extend(("--dev", "/dev", "--proc", "/proc", "--unshare-user"))
+    # 隔离进程：否则宿主机上的进程和它们的命令行参数在沙箱里都能看到
+    command.extend(
+        ("--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid")
+    )
     if sandbox.root is Access.HIDDEN:
         for link, target in sandbox.links:
             command.extend(("--symlink", target, link.as_posix()))

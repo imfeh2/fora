@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -88,3 +89,18 @@ def test_commands_see_exactly_what_the_plan_allows(
     assert result.stdout.split() == expected, result.stderr
     for path, state in levels.items():
         assert (path / "new").exists() is (state is Access.WRITE)
+
+
+@pytest.mark.parametrize(
+    "root", (Access.HIDDEN, Access.READ), ids=lambda root: f"root-{root.name.lower()}"
+)
+def test_commands_cannot_see_processes_outside_the_sandbox(
+    execution: LocalExecution, root: Access
+) -> None:
+    result = execution.run(
+        ["sh", "-c", f"echo started; test -e /proc/{os.getpid()} && echo host"],
+        cwd="/usr",
+        sandbox=plan(root, {}, execution),
+    )
+
+    assert result.stdout.split() == ["started"], result.stderr
