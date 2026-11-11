@@ -53,7 +53,7 @@ from fora.tools.access import (
     require_protected,
     tree_path,
 )
-from fora.tools.authorize import Actor, Authorizer
+from fora.tools.authorize import Actor, Authorizer, Rights
 from fora.tools.discussion_read import DiscussionReader, integer, read_position
 from fora.tools.skills import LIBRARY, WORKSPACE, discover, load
 
@@ -116,11 +116,11 @@ class AgentTools:
             self._turn.agent_id, self._turn.sequence, tool, summary
         )
 
-    def _require(self, *node: str) -> None:
-        self._auth.check(self._actor, node)
+    def _rights(self) -> Rights:
+        return self._auth.rights(self._actor)
 
-    def _allows(self, *node: str) -> bool:
-        return self._auth.allows(self._actor, node)
+    def _require(self, *node: str) -> None:
+        self._rights().check(node)
 
     def _discussion(self, discussion_id: int) -> Discussion:
         discussion = self._deps.store.get_discussion(discussion_id)
@@ -227,8 +227,9 @@ class AgentTools:
         return {"id": agent_id, "state": "paused"}
 
     def resume_agent(self, agent_id: int) -> dict[str, Any]:
-        self._require(*MEMBER_RESUME, str(agent_id))
-        can_recover = self._allows(*MEMBER_RESUME_SAFETY, str(agent_id))
+        rights = self._rights()
+        rights.check((*MEMBER_RESUME, str(agent_id)))
+        can_recover = rights.allows((*MEMBER_RESUME_SAFETY, str(agent_id)))
         if self._resume is not None:
             return self._resume(agent_id, can_recover)
         member = self._deps.store.get_member(agent_id)
@@ -856,7 +857,7 @@ class AgentTools:
                 ),
                 links=execution.read_links,
             )
-        return FileAccess(layout, self._actor.member_id, self._auth.permissions())
+        return FileAccess(layout, self._rights())
 
     def sandbox(self, execution: ExecutionEnvironment) -> Sandbox:
         return self._files(execution).sandbox

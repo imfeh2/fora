@@ -14,6 +14,25 @@ class Actor:
     is_agent: bool
 
 
+@dataclass(frozen=True)
+class Rights:
+    # 一个成员在一次请求里的权限快照；同一个请求里的所有判定都用它，结果才一致
+    actor: Actor
+    permissions: Permissions | None
+
+    def allows(self, node: Node) -> bool:
+        return self.permissions is None or self.permissions.allows(
+            self.actor.member_id, node
+        )
+
+    def check(self, node: Node) -> None:
+        if not self.allows(node):
+            raise DomainError(
+                ErrorCode.NOT_PERMITTED,
+                f"{render(node)} is not permitted for this Member",
+            )
+
+
 class Authorizer:
     def __init__(self, store: PermissionStore | None = None) -> None:
         self._store = store
@@ -22,16 +41,7 @@ class Authorizer:
     def store(self) -> PermissionStore | None:
         return self._store
 
-    def permissions(self) -> Permissions | None:
-        return self._store.permissions() if self._store is not None else None
-
-    def allows(self, actor: Actor, node: Node) -> bool:
-        permissions = self.permissions()
-        return permissions is None or permissions.allows(actor.member_id, node)
-
-    def check(self, actor: Actor, node: Node) -> None:
-        if not self.allows(actor, node):
-            raise DomainError(
-                ErrorCode.NOT_PERMITTED,
-                f"{render(node)} is not permitted for this Member",
-            )
+    def rights(self, actor: Actor) -> Rights:
+        return Rights(
+            actor, self._store.permissions() if self._store is not None else None
+        )

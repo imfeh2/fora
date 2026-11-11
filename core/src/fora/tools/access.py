@@ -8,8 +8,9 @@ from pathlib import Path, PurePosixPath
 from fora.core.actions import FILES_READ, FILES_WRITE, LIBRARY_WRITE, WORKSPACE_READ
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.core.permissions import Node, Permissions
+from fora.core.permissions import Node
 from fora.ports.execution import Access, Mount, Sandbox
+from fora.tools.authorize import Rights
 
 WORKSPACE = "workspace"
 
@@ -98,12 +99,11 @@ class Layout:
 class FileAccess:
     # 一个请求里所有文件权限都在这里按真实路径判定，用的是同一份权限快照
     layout: Layout
-    member_id: int
-    permissions: Permissions | None
+    rights: Rights
     _cache: dict[Path, Access] = field(default_factory=dict, compare=False)
 
     def _allows(self, node: Node) -> bool:
-        return self.permissions is None or self.permissions.allows(self.member_id, node)
+        return self.rights.allows(node)
 
     def access(self, path: Path) -> Access:
         if path not in self._cache:
@@ -184,21 +184,23 @@ class FileAccess:
         if layout.agents is not None and layout.agents.is_dir():
             for entry in layout.agents.iterdir():
                 found.update((entry, entry / WORKSPACE))
-        if self.permissions is None:
+        permissions = self.rights.permissions
+        if permissions is None:
             return found
+        member_id = self.rights.actor.member_id
         for action in (FILES_WRITE, FILES_READ):
             found.update(
                 node_path(node[len(action) :], layout.library)
-                for node in self.permissions.boundaries(self.member_id, action)
+                for node in permissions.boundaries(member_id, action)
                 if len(node) > len(action)
             )
         found.update(
             layout.library.joinpath(*node[len(LIBRARY_WRITE) :])
-            for node in self.permissions.boundaries(self.member_id, LIBRARY_WRITE)
+            for node in permissions.boundaries(member_id, LIBRARY_WRITE)
             if len(node) > len(LIBRARY_WRITE)
         )
         if layout.agents is not None:
-            for node in self.permissions.boundaries(self.member_id, WORKSPACE_READ):
+            for node in permissions.boundaries(member_id, WORKSPACE_READ):
                 parts = node[len(WORKSPACE_READ) :]
                 if parts:
                     found.add(layout.agents / parts[0])
