@@ -23,7 +23,7 @@ STATES = (Access.HIDDEN, Access.READ, Access.WRITE)
 
 @pytest.fixture(scope="module")
 def execution() -> Iterator[LocalExecution]:
-    environment = LocalExecution([], SYSTEM)
+    environment = LocalExecution()
     try:
         yield environment
     finally:
@@ -46,7 +46,7 @@ def plan(
         if state != inherited:
             mounts.append(Mount(path, state))
         inherited = state
-    links = execution.read_links if root is Access.HIDDEN else ()
+    links = execution.links if root is Access.HIDDEN else ()
     return Sandbox(root, tuple(mounts), links)
 
 

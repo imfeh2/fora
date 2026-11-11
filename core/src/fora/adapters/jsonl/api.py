@@ -159,7 +159,6 @@ class Api:
                     context.model_settings,
                     Resource("history"),
                     Resource("settings", "agent"),
-                    Resource("settings", "execution"),
                 )
             ),
         )
@@ -751,8 +750,6 @@ def settings_get(context: _Context, params: dict[str, Any]) -> Any:
             for key, value in values.items()
             if key not in ("secret_key", "public_key")
         } | {"keys_set": bool(values.get("secret_key"))}
-    if section == "execution":
-        return context.api._scheduler.execution.status()
     return values
 
 
@@ -763,12 +760,6 @@ def settings_update(context: _Context, params: dict[str, Any]) -> Any:
         raise DomainError(
             ErrorCode.INVALID_SETTING, "Settings values must be an object"
         )
-    if section == "execution":
-        result = context.api._scheduler.execution.configure(
-            values, lambda stored: context.settings.set_settings("execution", stored)
-        )
-        context.api._dispatcher.emit("settings.updated", {"section": section})
-        return result
     updated = context.settings.update_settings(section, values)
     context.api._dispatcher.emit("settings.updated", {"section": section})
     if section == "model":

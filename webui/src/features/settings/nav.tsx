@@ -5,7 +5,6 @@ import {
   Cpu,
   FlaskConical,
   Server,
-  SlidersHorizontal,
 } from "lucide-react";
 import { type SettingsSection, useNavigate } from "@/app/router";
 import { Nav, NavItem, Sidebar, SidebarBrand } from "@/components/layout/shell";
@@ -18,11 +17,6 @@ const SECTIONS: {
 }[] = [
   { id: "providers", label: "Providers", icon: <Server size={16} /> },
   { id: "models", label: "Models", icon: <Cpu size={16} /> },
-  {
-    id: "execution",
-    label: "Execution",
-    icon: <SlidersHorizontal size={16} />,
-  },
   { id: "agent", label: "Agent", icon: <Bot size={16} /> },
   { id: "langfuse", label: "Langfuse", icon: <FlaskConical size={16} /> },
   { id: "voice", label: "Voice", icon: <AudioLines size={16} /> },

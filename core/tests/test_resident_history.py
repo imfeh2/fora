@@ -130,9 +130,7 @@ def test_the_scheduler_reads_the_rules_and_skills_again_every_turn(
         },
     )
     settings.set_settings("agent", {"no_tool_turns_before_pause": 10})
-    execution = ExecutionManager(
-        settings=settings.get_settings("execution"), tolerant=True
-    )
+    execution = ExecutionManager()
 
     def agent_directory_for(member_id: int) -> Path:
         path = tmp_path / "agents" / str(member_id)

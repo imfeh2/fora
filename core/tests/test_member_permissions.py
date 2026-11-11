@@ -14,7 +14,7 @@ from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
 from fora.adapters.sandbox.commands import linux_command, macos_profile
-from fora.adapters.sandbox.paths import interpreter_directories
+from fora.adapters.sandbox.paths import helper_directories
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.permissions import SqlitePermissionStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -75,10 +75,7 @@ def build(tmp_path: Path, *, enforce: bool) -> Iterator[World]:
 
     for member_id in (LEAD, REVIEWER):
         (agent_directory_for(member_id) / "workspace").mkdir(exist_ok=True)
-    execution = ExecutionManager(
-        settings={"write_directories": [str(project)], "read_directories": SYSTEM},
-        enforce=enforce,
-    )
+    execution = ExecutionManager(enforce=enforce)
     deps = Dependencies(
         store=store,
         history=agent_store,
@@ -124,6 +121,13 @@ def denied(action) -> DomainError:
         action()
     assert error.value.code == ErrorCode.NOT_PERMITTED
     return error.value
+
+
+def system_reads() -> list[dict[str, object]]:
+    # 成员没有默认权限，命令要运行，得先授给它系统目录的读权限
+    return [
+        path_entry("+", "read", Path(item)) for item in SYSTEM if Path(item).exists()
+    ]
 
 
 def path_entry(sign: str, action: str, path: Path) -> dict[str, object]:
@@ -315,17 +319,18 @@ def test_the_sandbox_follows_the_grants(world: World) -> None:
     assert sandbox.access(world.workspace(REVIEWER).resolve()) is Access.HIDDEN
     assert sandbox.access((world.root / "fora.sqlite3").resolve()) is Access.HIDDEN
     if SYSTEM:
-        assert sandbox.access(Path("/usr")) is Access.READ
-        assert sandbox.access(Path("/home")) is Access.HIDDEN
+        assert sandbox.access(Path("/usr")) is Access.HIDDEN
 
 
-def test_a_broad_grant_sees_the_whole_machine_but_not_fora_data(world: World) -> None:
+def test_a_broad_grant_opens_the_whole_machine_but_not_fora_data(
+    world: World,
+) -> None:
     lead_holds_everything_except_specs(world)
 
     sandbox = world.tools(LEAD).sandbox(world.deps.execution.snapshot())
 
     data = world.root.resolve()
-    assert sandbox.root is Access.READ
+    assert sandbox.root is Access.WRITE
     assert sandbox.access(data / "fora.sqlite3") is Access.HIDDEN
     assert sandbox.access(data / "library" / "rules") is Access.WRITE
     assert sandbox.access(data / "library" / "specs") is Access.READ
@@ -391,7 +396,7 @@ def test_the_macos_sandbox_follows_the_plan(tmp_path: Path) -> None:
     for directory in (core, secret):
         directory.mkdir(parents=True)
     (secret / "key.txt").write_text("hidden\n")
-    execution = LocalExecution([str(project)])
+    execution = LocalExecution()
     try:
         result = execution.run(
             [
@@ -427,6 +432,7 @@ def test_commands_cannot_write_into_a_protected_path(sandboxed: World) -> None:
         LEAD,
         [
             {"sign": "+", "node": ["tools", "run"]},
+            *system_reads(),
             path_entry("+", "write", sandboxed.project),
             path_entry("-", "write", core),
         ],
@@ -449,7 +455,7 @@ def test_commands_see_only_what_the_member_may_read(sandboxed: World) -> None:
     (other / "plan.md").write_text("Hidden plan.\n")
     (sandboxed.project / "notes.md").write_text("Project notes.\n")
     sandboxed.tools(OWNER).grant_permissions(
-        LEAD, [{"sign": "+", "node": ["tools", "run"]}]
+        LEAD, [{"sign": "+", "node": ["tools", "run"]}, *system_reads()]
     )
     lead = sandboxed.tools(LEAD)
     script = (
@@ -479,7 +485,7 @@ def test_the_raw_sandbox_keeps_a_protected_path_read_only(tmp_path: Path) -> Non
     writable = tmp_path / "project"
     protected = writable / "core"
     protected.mkdir(parents=True)
-    execution = LocalExecution([str(writable)])
+    execution = LocalExecution()
     try:
         result = execution.run(
             ["sh", "-c", "touch open.txt && echo ok && touch core/closed.txt"],
@@ -561,6 +567,7 @@ def test_a_grant_on_a_symlink_does_not_open_where_it_points(
         LEAD,
         [
             {"sign": "+", "node": ["tools", "run"]},
+            *system_reads(),
             {"sign": "+", "node": ["library", "write", "drafts"]},
         ],
     )
@@ -643,23 +650,7 @@ def test_reading_the_workspace_of_an_unknown_member_creates_nothing(
     assert not (world.root / "agents" / "99").exists()
 
 
-def test_a_broken_execution_setup_still_reports_read_limits() -> None:
-    manager = ExecutionManager(
-        settings={"read_directories": "not a list"}, enforce=False
-    )
-    try:
-        status = manager.status()
-    finally:
-        manager.close()
-
-    assert status["error"]
-    assert status["restricts_reads"] is sys.platform.startswith(("linux", "darwin"))
-
-
 def test_editing_works_when_the_whole_machine_is_writable(world: World) -> None:
-    world.deps.execution.configure(
-        {"write_directories": [world.project.anchor]}, lambda _: None
-    )
     world.tools(OWNER).grant_permissions(
         LEAD, [{"sign": "+", "node": ["files", "write"]}]
     )
@@ -673,36 +664,10 @@ def test_editing_works_when_the_whole_machine_is_writable(world: World) -> None:
     assert (world.project / "new.md").read_text() == "New.\n"
 
 
-def test_readable_directories_are_checked_when_saved(world: World) -> None:
-    with pytest.raises(DomainError) as error:
-        world.deps.execution.configure(
-            {"read_directories": ["relative/path"]}, lambda _: None
-        )
-
-    assert error.value.code == ErrorCode.INVALID_DIRECTORY
-    assert "Readable" in str(error.value)
-
-
-def test_unusable_readable_directories_are_reported_at_startup() -> None:
-    manager = ExecutionManager(
-        settings={"read_directories": ["relative/path"]},
-        enforce=False,
-        tolerant=True,
-    )
-    try:
-        status = manager.status()
-    finally:
-        manager.close()
-
-    assert status["unusable_read_directories"] == [
-        {"path": "relative/path", "reason": ErrorCode.INVALID_DIRECTORY}
-    ]
-
-
 def test_sandboxed_helpers_can_import_fora() -> None:
     source = Path(fora.__file__).resolve().parent.parent
 
-    assert str(source) in interpreter_directories()
+    assert source in helper_directories()
 
 
 def test_viewing_a_hidden_file_is_refused(world: World) -> None:

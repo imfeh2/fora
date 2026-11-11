@@ -19,7 +19,7 @@ class Settings:
 
 @pytest.mark.parametrize("timeout", [MAX_TIMEOUT + 1, 60000])
 def test_rejects_a_timeout_past_the_maximum(tmp_path: Path, timeout: int) -> None:
-    execution = LocalExecution([str(tmp_path)])
+    execution = LocalExecution()
     try:
         with pytest.raises(DomainError) as raised:
             execution.run(["true"], cwd=str(tmp_path), timeout=timeout)
@@ -34,7 +34,7 @@ def test_rejects_a_timeout_past_the_maximum(tmp_path: Path, timeout: int) -> Non
 
 
 def test_accepts_the_maximum_timeout(tmp_path: Path) -> None:
-    execution = LocalExecution([str(tmp_path)])
+    execution = LocalExecution()
     try:
         result = execution.run(
             [sys.executable, "-c", "pass"], cwd=str(tmp_path), timeout=MAX_TIMEOUT
@@ -49,7 +49,7 @@ def test_falls_back_to_the_default_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("fora.adapters.execution.local.DEFAULT_TIMEOUT", 1)
-    execution = LocalExecution([str(tmp_path)])
+    execution = LocalExecution()
     try:
         with pytest.raises(DomainError) as raised:
             execution.run(

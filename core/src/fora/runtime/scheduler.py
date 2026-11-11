@@ -337,15 +337,6 @@ class Scheduler:
                     "recovery": "Correct Model Settings; if unavailable, stop the application, back up and repair the model section, then restart",
                 }
             )
-        execution_error = self.execution.status()["error"]
-        if execution_error is not None:
-            found.append(
-                {
-                    "code": "execution_unavailable",
-                    "message": str(execution_error),
-                    "recovery": "Correct execution settings",
-                }
-            )
         return found
 
     def agent_status(self, agent_id: int) -> dict[str, Any]:

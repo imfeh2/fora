@@ -53,9 +53,7 @@ def fora(tmp_path: Path) -> Iterator[Fora]:
             "api_key": "stub",
         },
     )
-    execution = ExecutionManager(
-        settings=settings.get_settings("execution"), tolerant=True
-    )
+    execution = ExecutionManager()
 
     def agent_directory_for(member_id: int) -> Path:
         path = tmp_path / "agents" / str(member_id)

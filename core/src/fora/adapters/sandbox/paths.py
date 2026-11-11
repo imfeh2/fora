@@ -3,124 +3,9 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import fora
-from fora.core.error_codes import ErrorCode
-from fora.core.errors import DomainError
-
-
-@dataclass(frozen=True)
-class NormalizedDirectories:
-    accepted: tuple[Path, ...]
-    skipped: tuple[tuple[str, str], ...]
-
-
-def _normalize_one(value: object, *, require_existing: bool, kind: str) -> Path:
-    if not isinstance(value, str) or not value.strip():
-        raise DomainError(
-            ErrorCode.INVALID_DIRECTORY,
-            f"{kind} directories must be non-empty strings",
-        )
-    candidate = Path(value).expanduser()
-    if not candidate.is_absolute():
-        if PurePosixPath(value).is_absolute():
-            raise DomainError(
-                ErrorCode.FOREIGN_DIRECTORY,
-                f"{value} is a POSIX path and cannot be used on this platform",
-            )
-        raise DomainError(
-            ErrorCode.INVALID_DIRECTORY, f"{kind} directories must be absolute paths"
-        )
-    try:
-        resolved = candidate.resolve(strict=require_existing)
-    except (OSError, RuntimeError, ValueError) as error:
-        raise DomainError(
-            ErrorCode.INVALID_DIRECTORY,
-            f"Cannot resolve {kind.lower()} directory: {error}",
-        ) from error
-    if require_existing and not resolved.is_dir():
-        raise DomainError(
-            ErrorCode.INVALID_DIRECTORY,
-            f"{kind} directories must be existing directories",
-        )
-    return resolved
-
-
-def normalize_directories(
-    values: Sequence[str],
-    *,
-    require_existing: bool = False,
-    kind: str = "Writable",
-) -> tuple[Path, ...]:
-    normalized: list[Path] = []
-    seen: set[str] = set()
-    for value in values:
-        resolved = _normalize_one(value, require_existing=require_existing, kind=kind)
-        identity = os.path.normcase(str(resolved))
-        if identity in seen:
-            continue
-        seen.add(identity)
-        normalized.append(resolved)
-    return tuple(normalized)
-
-
-def normalize_tolerantly(
-    values: Sequence[str], *, kind: str = "Writable"
-) -> NormalizedDirectories:
-    accepted: list[Path] = []
-    skipped: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for value in values:
-        try:
-            resolved = _normalize_one(value, require_existing=False, kind=kind)
-        except DomainError as error:
-            skipped.append((str(value), error.code))
-            continue
-        identity = os.path.normcase(str(resolved))
-        if identity in seen:
-            continue
-        seen.add(identity)
-        accepted.append(resolved)
-    return NormalizedDirectories(tuple(accepted), tuple(skipped))
-
-
-LINUX_READS = (
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/lib",
-    "/lib32",
-    "/lib64",
-    "/etc",
-    "/opt",
-    "/tmp",
-    "/var/tmp",
-    "/run",
-)
-MACOS_READS = (
-    "/System",
-    "/usr",
-    "/bin",
-    "/sbin",
-    "/Library",
-    "/Applications",
-    "/opt",
-    "/private",
-    "/etc",
-    "/tmp",
-    "/var",
-    "/dev",
-)
-
-
-def default_read_directories() -> tuple[str, ...]:
-    if sys.platform == "darwin":
-        return MACOS_READS
-    if sys.platform.startswith("linux"):
-        return LINUX_READS
-    return ()
 
 
 def symlinks_on(path: Path) -> tuple[tuple[Path, str], ...]:
@@ -143,15 +28,42 @@ def symlinks_on(path: Path) -> tuple[tuple[Path, str], ...]:
     return tuple(found)
 
 
-def interpreter_links() -> tuple[tuple[Path, str], ...]:
-    return symlinks_on(Path(sys.executable).absolute())
+def sandbox_links() -> tuple[tuple[Path, str], ...]:
+    # 根目录下的系统链接（例如 /bin -> usr/bin）和通往解释器的链接；
+    # 链接本身不暴露内容，指向的位置能不能读仍由授权决定
+    anchor = Path(Path(sys.executable).anchor)
+    rooted = (
+        (entry, os.readlink(entry))
+        for entry in sorted(anchor.iterdir())
+        if entry.is_symlink()
+    )
+    return tuple(
+        dict.fromkeys((*rooted, *symlinks_on(Path(sys.executable).absolute())))
+    )
 
 
-def interpreter_directories() -> tuple[str, ...]:
-    # 沙箱里的辅助进程运行 `python -m fora`，开发安装时 fora 的源码不在解释器目录里
+SYSTEM_LIBRARIES: dict[str, tuple[str, ...]] = {
+    "linux": ("/usr",),
+    "darwin": ("/usr", "/System", "/Library"),
+}
+
+
+def helper_directories() -> tuple[Path, ...]:
+    # 沙箱里读文件的辅助进程运行 `python -m fora`，要用解释器、系统库和 fora 的源码；
+    # 开发安装时 fora 的源码不在解释器目录里，所以单独加上
+    system: tuple[str, ...] = next(
+        (
+            dirs
+            for name, dirs in SYSTEM_LIBRARIES.items()
+            if sys.platform.startswith(name)
+        ),
+        (),
+    )
     return tuple(
         dict.fromkeys(
-            (
+            Path(item).resolve()
+            for item in (
+                *system,
                 sys.prefix,
                 sys.base_prefix,
                 str(Path(sys.executable).resolve().parent.parent),

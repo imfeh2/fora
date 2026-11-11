@@ -73,8 +73,6 @@ class Layout:
     agents: Path | None
     own: Path | None = None
     workspace: Path | None = None
-    writes: tuple[Path, ...] = ()
-    reads: tuple[Path, ...] = ()
     data: Path | None = None
     uploads: Path | None = None
     links: tuple[tuple[Path, str], ...] = ()
@@ -128,16 +126,11 @@ class FileAccess:
         if layout.data is not None and path.is_relative_to(layout.data):
             return Access.HIDDEN
         node = path_node(path)
-        writable = any(path.is_relative_to(root) for root in layout.writes)
-        if writable and self._allows((*FILES_WRITE, *node)):
+        if self._allows((*FILES_WRITE, *node)):
             return Access.WRITE
-        # 可写区域里被排除写入的位置仍然可读，和 Library 里的排除一致
-        if writable and any(
+        # 可写范围里被排除写入的位置仍然可读，和 Library 里的排除一致
+        if self._allows((*FILES_READ, *node)) or any(
             self._allows((*FILES_WRITE, *node[:depth])) for depth in range(len(node))
-        ):
-            return Access.READ
-        if any(path.is_relative_to(root) for root in layout.reads) or self._allows(
-            (*FILES_READ, *node)
         ):
             return Access.READ
         return Access.HIDDEN
@@ -166,7 +159,7 @@ class FileAccess:
 
     def _candidates(self) -> set[Path]:
         layout = self.layout
-        found = {*layout.writes, *layout.reads, layout.library}
+        found = {layout.library}
         found.update(
             item
             for item in (

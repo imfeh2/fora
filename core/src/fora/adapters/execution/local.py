@@ -1,23 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from fora.adapters.execution.editing import edit_file
 from fora.adapters.execution.platforms import create_backend, entrypoint
-from fora.adapters.sandbox.paths import (
-    default_read_directories,
-    interpreter_directories,
-    interpreter_links,
-    normalize_directories,
-    normalize_tolerantly,
-)
+from fora.adapters.sandbox.paths import helper_directories, sandbox_links
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.ports.execution import Access, EditResult, Mount, RunResult, Sandbox
@@ -75,75 +69,35 @@ def _read_file_protocol_error(
 
 
 class LocalExecution:
-    def __init__(
-        self,
-        write_directories: Sequence[str] = (),
-        read_directories: Sequence[str] | None = None,
-        *,
-        enforce: bool = True,
-        tolerant: bool = False,
-    ) -> None:
+    def __init__(self, *, enforce: bool = True) -> None:
         self._backend = create_backend(enforce)
         self._lock = threading.RLock()
         self._processes: set[subprocess.Popen[bytes]] = set()
         self._closed = False
-        self.skipped: tuple[tuple[str, str], ...] = ()
-        self.skipped_reads: tuple[tuple[str, str], ...] = ()
-        listed = [
-            *(
-                default_read_directories()
-                if read_directories is None
-                else read_directories
-            ),
-            *interpreter_directories(),
-        ]
-        if tolerant:
-            result = normalize_tolerantly(write_directories)
-            self._roots = result.accepted
-            self.skipped = result.skipped
-            reads = normalize_tolerantly(listed, kind="Readable")
-            self._reads = reads.accepted
-            self.skipped_reads = reads.skipped
-        else:
-            self._roots = normalize_directories(write_directories)
-            self._reads = normalize_directories(listed, kind="Readable")
-        self._links = tuple(
-            dict.fromkeys(
-                (
-                    *(
-                        (Path(item), os.readlink(item))
-                        for item in listed
-                        if Path(item).is_absolute() and Path(item).is_symlink()
-                    ),
-                    *interpreter_links(),
-                )
-            )
-        )
+        self._links = sandbox_links()
+        self._runtime = helper_directories()
 
     @property
-    def write_directories(self) -> tuple[str, ...]:
-        return tuple(str(item) for item in self._roots)
-
-    @property
-    def read_directories(self) -> tuple[str, ...]:
-        return tuple(str(item) for item in self._reads)
-
-    @property
-    def read_links(self) -> tuple[tuple[Path, str], ...]:
+    def links(self) -> tuple[tuple[Path, str], ...]:
         return self._links
 
-    def apply_configuration(self, candidate: LocalExecution) -> None:
-        with self._lock:
-            self._roots = candidate._roots
-            self._reads = candidate._reads
-            self._links = candidate._links
-            self.skipped = candidate.skipped
-            self.skipped_reads = candidate.skipped_reads
+    def _helper_sandbox(self, sandbox: Sandbox | None) -> Sandbox | None:
+        # 读文件的辅助进程是 Fora 自己的 Python 进程，启动它要用解释器和系统库；
+        # 这些目录只给辅助进程，它只读取已经检查过权限的那个文件
+        if sandbox is None:
+            return None
+        kept = tuple(
+            mount for mount in sandbox.mounts if mount.path not in self._runtime
+        )
+        added = tuple(
+            Mount(path, Access.READ)
+            for path in self._runtime
+            if sandbox.access(path) < Access.READ
+        )
+        return replace(sandbox, mounts=(*kept, *added))
 
     def _default_sandbox(self) -> Sandbox:
-        return Sandbox(
-            Access.READ, tuple(Mount(root, Access.WRITE) for root in self._roots)
-        )
+        return Sandbox(Access.READ)
 
     def resolve_path(self, value: str, *, base: str) -> str:
         if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
@@ -171,7 +125,7 @@ class LocalExecution:
             [*entrypoint(), "--read-file", path, str(max_bytes)],
             cwd=str(Path(sys.executable).resolve().parent),
             timeout=timeout,
-            sandbox=sandbox,
+            sandbox=self._helper_sandbox(sandbox),
         )
         if code == 0:
             if stderr or len(stdout) > max_bytes + 1:
@@ -345,16 +299,9 @@ class LocalExecution:
         path: str,
         edits: Sequence[Mapping[str, object]],
         *,
-        write_directories: Sequence[str] | None = None,
+        write_directories: Sequence[str],
         create: bool = False,
     ) -> EditResult:
         return edit_file(
-            path,
-            edits,
-            directories=list(
-                self.write_directories
-                if write_directories is None
-                else write_directories
-            ),
-            create=create,
+            path, edits, directories=list(write_directories), create=create
         )

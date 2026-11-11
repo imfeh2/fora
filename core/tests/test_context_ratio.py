@@ -161,7 +161,7 @@ def fora(tmp_path: Path) -> Iterator[Fora]:
         store=database,
         history=settings,
         settings=settings,
-        execution=ExecutionManager(settings=None, tolerant=True),
+        execution=ExecutionManager(),
         agent_directory_for=agent_directory_for,
         decode_image=decode_image,
         reading=database._db.read,

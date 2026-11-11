@@ -866,16 +866,7 @@ class AgentTools:
             uploads=real_path(data / "uploads") if data is not None else None,
         )
         if execution is not None:
-            layout = replace(
-                layout,
-                writes=tuple(
-                    real_path(Path(item)) for item in execution.write_directories
-                ),
-                reads=tuple(
-                    real_path(Path(item)) for item in execution.read_directories
-                ),
-                links=execution.read_links,
-            )
+            layout = replace(layout, links=execution.links)
         return FileAccess(layout, self._rights())
 
     def sandbox(self, execution: ExecutionEnvironment) -> Sandbox:

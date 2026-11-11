@@ -12,7 +12,6 @@ import {
 export type SettingsSection =
   | "providers"
   | "models"
-  | "execution"
   | "agent"
   | "langfuse"
   | "voice";
@@ -58,7 +57,6 @@ const LIST_PATH = "/discussions";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "providers",
   "models",
-  "execution",
   "agent",
   "langfuse",
   "voice",

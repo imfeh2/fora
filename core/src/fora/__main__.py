@@ -285,9 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             path.mkdir(parents=True, exist_ok=True)
             return path
 
-        execution = ExecutionManager(
-            settings=agent_store.get_settings("execution"), tolerant=True
-        )
+        execution = ExecutionManager()
         scheduler: Scheduler | None = None
         dispatch_lock = threading.Lock()
 

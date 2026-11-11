@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 
 @dataclass(frozen=True)
@@ -83,16 +83,7 @@ class Sandbox:
 
 class ExecutionEnvironment(Protocol):
     @property
-    def skipped(self) -> tuple[tuple[str, str], ...]: ...
-
-    @property
-    def write_directories(self) -> tuple[str, ...]: ...
-
-    @property
-    def read_directories(self) -> tuple[str, ...]: ...
-
-    @property
-    def read_links(self) -> tuple[tuple[Path, str], ...]: ...
+    def links(self) -> tuple[tuple[Path, str], ...]: ...
 
     def describe_environment(
         self,
@@ -125,18 +116,12 @@ class ExecutionEnvironment(Protocol):
         path: str,
         edits: Sequence[Mapping[str, object]],
         *,
-        write_directories: Sequence[str] | None = None,
+        write_directories: Sequence[str],
         create: bool = False,
     ) -> EditResult: ...
 
 
 class ExecutionControl(Protocol):
     def snapshot(self) -> ExecutionEnvironment: ...
-
-    def status(self) -> dict[str, Any]: ...
-
-    def configure(
-        self, values: dict[str, Any], persist: Callable[[dict[str, object]], None]
-    ) -> dict[str, Any]: ...
 
     def close(self) -> None: ...
