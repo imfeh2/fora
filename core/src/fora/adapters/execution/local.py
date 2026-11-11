@@ -14,6 +14,7 @@ from fora.adapters.execution.platforms import create_backend, entrypoint
 from fora.adapters.sandbox.paths import (
     default_read_directories,
     interpreter_directories,
+    interpreter_links,
     normalize_directories,
     normalize_tolerantly,
 )
@@ -107,9 +108,16 @@ class LocalExecution:
             self._roots = normalize_directories(write_directories)
             self._reads = normalize_directories(listed, kind="Readable")
         self._links = tuple(
-            (Path(item), os.readlink(item))
-            for item in dict.fromkeys(listed)
-            if Path(item).is_absolute() and Path(item).is_symlink()
+            dict.fromkeys(
+                (
+                    *(
+                        (Path(item), os.readlink(item))
+                        for item in listed
+                        if Path(item).is_absolute() and Path(item).is_symlink()
+                    ),
+                    *interpreter_links(),
+                )
+            )
         )
 
     @property

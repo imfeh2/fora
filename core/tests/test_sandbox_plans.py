@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from fora.adapters.execution.local import LocalExecution
+from fora.adapters.sandbox.paths import symlinks_on
 from fora.ports.execution import Access, Mount, Sandbox
 
 pytestmark = pytest.mark.skipif(
@@ -100,3 +101,28 @@ def test_commands_cannot_see_processes_outside_the_sandbox(
     )
 
     assert result.stdout.split() == ["started"], result.stderr
+
+
+def test_a_program_reached_through_chained_links_starts_in_a_hidden_root(
+    tmp_path: Path, execution: LocalExecution
+) -> None:
+    # 和 uv 的布局一样：虚拟环境里的链接指向一个版本目录链接，再指向真实目录
+    real = tmp_path.resolve() / "cpython-3.13.18"
+    real.mkdir()
+    program = real / "tool"
+    program.write_text("#!/bin/sh\necho ran\n")
+    program.chmod(0o755)
+    (tmp_path / "cpython-3.13").symlink_to(real)
+    venv = tmp_path.resolve() / "venv"
+    venv.mkdir()
+    (venv / "tool").symlink_to(tmp_path.resolve() / "cpython-3.13" / "tool")
+    base = plan(Access.HIDDEN, {}, execution)
+    sandbox = Sandbox(
+        Access.HIDDEN,
+        (*base.mounts, Mount(real, Access.READ), Mount(venv, Access.READ)),
+        (*base.links, *symlinks_on(venv / "tool")),
+    )
+
+    result = execution.run([str(venv / "tool")], cwd="/usr", sandbox=sandbox)
+
+    assert result.stdout.strip() == "ran", result.stderr

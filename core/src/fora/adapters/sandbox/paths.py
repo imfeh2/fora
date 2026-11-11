@@ -123,6 +123,30 @@ def default_read_directories() -> tuple[str, ...]:
     return ()
 
 
+def symlinks_on(path: Path) -> tuple[tuple[Path, str], ...]:
+    # 解析路径时经过的每个符号链接；沙箱里要重建它们，否则路径走到一半就断了
+    found: list[tuple[Path, str]] = []
+    current = Path(path.anchor)
+    pending = list(path.parts[1:])
+    while pending:
+        candidate = current / pending.pop(0)
+        if not candidate.is_symlink():
+            current = candidate
+            continue
+        if len(found) > 40:
+            raise OSError(f"Too many symbolic links resolving {path}")
+        target = os.readlink(candidate)
+        found.append((candidate, target))
+        resolved = candidate.parent / target
+        current = Path(resolved.anchor)
+        pending = list(resolved.parts[1:]) + pending
+    return tuple(found)
+
+
+def interpreter_links() -> tuple[tuple[Path, str], ...]:
+    return symlinks_on(Path(sys.executable).absolute())
+
+
 def interpreter_directories() -> tuple[str, ...]:
     # 沙箱里的辅助进程运行 `python -m fora`，开发安装时 fora 的源码不在解释器目录里
     return tuple(
