@@ -43,8 +43,9 @@ def linux_command(
     if sandbox.root is Access.HIDDEN:
         for link, target in sandbox.links:
             command.extend(("--symlink", target, link.as_posix()))
-    # 隐藏目录里面可能还要挂可见的子目录，所以等全部挂载完成后再把它设成只读
-    remounts: list[str] = []
+    # 隐藏目录里面可能还要挂可见的子目录，所以等全部挂载完成后再把它设成只读；
+    # 根目录隐藏时，作为根目录的内存文件系统也一样
+    remounts: list[str] = ["--remount-ro", "/"] if sandbox.root is Access.HIDDEN else []
     for mount in sandbox.ordered():
         rendered = mount.path.as_posix()
         if mount.access is Access.HIDDEN:
