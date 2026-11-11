@@ -917,11 +917,12 @@ class AgentTools:
         cwd: str | None = None,
         timeout: int | None = None,
     ) -> dict[str, Any]:
-        self._require(*TOOLS_RUN)
         execution = self._deps.execution.snapshot()
+        files = self._files(execution)
+        files.rights.check(TOOLS_RUN)
         base = str(self._deps.agent_directory_for(self._actor.member_id))
         cwd = base if cwd is None else execution.resolve_path(cwd, base=base)
-        sandbox = self.sandbox(execution)
+        sandbox = files.sandbox
         require_protected(sandbox)
         try:
             with self._library_updates():
