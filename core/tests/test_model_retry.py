@@ -259,7 +259,7 @@ def test_case_06_continuous_failures_exhaust_ten_minutes_and_can_resume(
     assert 599 <= world.clock.seconds <= 600
     assert world.replies() == []
     assert "status_code: 503" in record.error
-    assert world.scheduler.resume(2)["state"] == "idle"
+    assert world.scheduler.resume(2, can_recover=False)["state"] == "idle"
 
 
 def test_case_07_success_and_two_minute_tool_do_not_consume_retry_budget(
@@ -282,7 +282,7 @@ def test_case_07_success_and_two_minute_tool_do_not_consume_retry_budget(
 def test_case_08_resuming_starts_a_new_turn_with_a_new_budget(world: World) -> None:
     world.script.steps = [failure(503) for _ in range(100)]
     assert world.run().status == "failed"
-    world.scheduler.resume(2)
+    world.scheduler.resume(2, can_recover=False)
     world.human.send_message(world.room, "@Writer Try again.")
     world.script.steps = [failure(503), reply(world.room)]
     world.expect_reply(world.run())
@@ -336,7 +336,7 @@ def test_case_12_resume_does_not_replay_the_stopped_result(world: World) -> None
 
     world.script.steps = [Step(stopped_result)]
     world.run()
-    world.scheduler.resume(2)
+    world.scheduler.resume(2, can_recover=False)
     world.script.steps = [reply(world.room)]
     world.expect_reply(world.run())
     assert DISCARDED not in world.history_text()

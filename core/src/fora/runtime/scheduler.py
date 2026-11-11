@@ -402,7 +402,7 @@ class Scheduler:
             ) from failure
         return self.agent_status(agent_id)
 
-    def resume(self, agent_id: int, can_recover: bool = True) -> dict[str, Any]:
+    def resume(self, agent_id: int, can_recover: bool) -> dict[str, Any]:
         recovered: tuple[int, tuple[str, ...]] | None = None
         with self.member_lock(agent_id):
             self._require_agent(agent_id)
