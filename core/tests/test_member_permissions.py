@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from fora.tools.authorize import Actor, Authorizer
 OWNER = 1
 LEAD = 2
 REVIEWER = 3
-SYSTEM = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"]
+SYSTEM = [] if os.name == "nt" else ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"]
 linux = pytest.mark.skipif(
     sys.platform != "linux", reason="the bubblewrap sandbox runs on Linux"
 )
@@ -287,8 +288,9 @@ def test_the_sandbox_follows_the_grants(world: World) -> None:
     assert sandbox.access(library) is Access.READ
     assert sandbox.access(world.workspace(REVIEWER).resolve()) is Access.HIDDEN
     assert sandbox.access((world.root / "fora.sqlite3").resolve()) is Access.HIDDEN
-    assert sandbox.access(Path("/usr")) is Access.READ
-    assert sandbox.access(Path("/home")) is Access.HIDDEN
+    if SYSTEM:
+        assert sandbox.access(Path("/usr")) is Access.READ
+        assert sandbox.access(Path("/home")) is Access.HIDDEN
 
 
 def test_a_broad_grant_sees_the_whole_machine_but_not_fora_data(world: World) -> None:
@@ -305,6 +307,7 @@ def test_a_broad_grant_sees_the_whole_machine_but_not_fora_data(world: World) ->
     assert sandbox.access(data / "uploads") is Access.READ
 
 
+@linux
 def test_bubblewrap_mounts_shallow_paths_first(tmp_path: Path) -> None:
     project = tmp_path / "project"
     core = project / "core"
@@ -628,7 +631,9 @@ def test_a_broken_execution_setup_still_reports_read_limits() -> None:
 
 
 def test_editing_works_when_the_whole_machine_is_writable(world: World) -> None:
-    world.deps.execution.configure({"write_directories": ["/"]}, lambda _: None)
+    world.deps.execution.configure(
+        {"write_directories": [world.project.anchor]}, lambda _: None
+    )
     world.tools(OWNER).grant_permissions(
         LEAD, [{"sign": "+", "node": ["files", "write"]}]
     )
