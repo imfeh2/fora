@@ -37,7 +37,7 @@ def test_static_files_outside_client_routes_are_unchanged(tmp_path: Path) -> Non
 
 def test_client_routes_keep_the_document_gate(tmp_path: Path) -> None:
     directory = frontend(tmp_path / "webui")
-    response = static_response(directory, "/library/README.md", document_allowed=False)
+    response = static_response(directory, "/library/README.md", origin_allowed=False)
     assert response.status == 403
     assert (
         static_response(directory, "/assets/app.js", origin_allowed=False).status == 403

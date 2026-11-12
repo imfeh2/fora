@@ -25,13 +25,12 @@ from fora.adapters.jsonl.protocol import Dispatcher, RequestScope, encode, parse
 from fora.adapters.media.posters import Posters
 from fora.adapters.websocket.address import (
     HOST,
+    LOOPBACK_NAMES,
     http_origin,
-    matches_public_host,
     parse_authority,
     parse_origin,
     validate_host,
 )
-from fora.adapters.websocket.local_names import REFRESH_INTERVAL, collect_names
 from fora.adapters.websocket.origin_error import origin_error_page
 from fora.core.attachment import MAX_FILE_BYTES, Upload
 from fora.core.error_codes import ErrorCode
@@ -350,7 +349,6 @@ def static_response(
     directory: Path,
     path: str,
     *,
-    document_allowed: bool = True,
     origin_allowed: bool = True,
     entry_url: str | None = None,
 ) -> web.Response:
@@ -370,7 +368,7 @@ def static_response(
     if not target.is_file():
         return failure(503, "Frontend not built")
     document = target.resolve() == (directory / "index.html").resolve()
-    if document and (not document_allowed or not origin_allowed):
+    if document and not origin_allowed:
         if entry_url is not None:
             return web.Response(
                 status=403,
@@ -411,7 +409,6 @@ class WebServer:
         library: Path | None = None,
         posters: Path | None = None,
         host: str = HOST,
-        public_hosts: frozenset[str] = frozenset(),
     ) -> None:
         self._dispatcher = dispatcher
         self._directory = directory
@@ -419,7 +416,6 @@ class WebServer:
         self._library = library
         self._posters = Posters(posters) if posters is not None else None
         self._host = validate_host(host)
-        self._public_hosts = public_hosts
         if not 0 <= port <= 65535:
             raise OverflowError("port must be between 0 and 65535")
         addresses = socket.getaddrinfo(
@@ -462,7 +458,6 @@ class WebServer:
                 middlewares=[self._boundary], client_max_size=CLIENT_MAX_BYTES
             )
             self._thread = threading.Thread(target=self._run, name="fora-web")
-            self._names: frozenset[str] = frozenset()
             self._origins = {
                 parse_origin(origin)
                 for origin in (
@@ -527,61 +522,23 @@ class WebServer:
             raise ValueError("exactly one Host header is required")
         return parse_authority(values[0], scheme)
 
-    def _connection_origin(self, request: web.Request) -> URL | None:
-        transport = request.transport
-        address = transport.get_extra_info("sockname") if transport else None
-        if address is None:
-            return None
-        local = ip_address(address[0])
-        if int(address[1]) != self._port or not (
-            self.wildcard
-            and local.version == self._address.version
-            or local == self._address
-        ):
-            return None
-        return parse_origin(http_origin(str(local), int(address[1])))
-
-    def _allows_local_origin(self, request: web.Request, origin: URL) -> bool:
-        if origin in self._origins:
-            return True
-        if origin.scheme != "http" or origin.port != self._port:
-            return False
-        local = self._connection_origin(request)
-        return (
-            local is not None
-            and origin == self._authority(request)
-            and (origin.raw_host in self._names or self.wildcard and origin == local)
-        )
-
     def _allows_host(self, request: web.Request) -> bool:
         try:
-            authority = self._authority(request)
-            assert authority.raw_host is not None
-            return (
-                not self.loopback
-                or matches_public_host(authority.raw_host, self._public_hosts)
-                or self._allows_local_origin(request, authority)
-            )
+            host = self._authority(request).raw_host
         except ValueError:
             return False
+        return not self.loopback or host in LOOPBACK_NAMES
 
     def _allows_origin(self, request: web.Request, value: str) -> bool:
         try:
             if len(request.headers.getall("Origin", [])) > 1:
                 return False
             origin = parse_origin(value)
-            scheme = origin.scheme if origin.scheme in ("http", "https") else "http"
-            requested = self._authority(request, scheme)
-            if self._allows_local_origin(request, origin):
+            if origin in self._origins:
                 return True
             if origin.scheme not in ("http", "https"):
                 return False
-            assert origin.raw_host is not None
-            return self._connection_origin(request) is not None and (
-                matches_public_host(origin.raw_host, self._public_hosts)
-                or not self.loopback
-                and origin == requested
-            )
+            return origin == self._authority(request, origin.scheme)
         except ValueError:
             return False
 
@@ -666,20 +623,17 @@ class WebServer:
         self._stop = asyncio.Event()
         runner = web.AppRunner(self._app, access_log=None, shutdown_timeout=130)
         try:
-            self._names = await collect_names(self._address)
             await runner.setup()
             site = web.SockSite(runner, self._socket)
             await site.start()
             async with asyncio.TaskGroup() as tasks:
                 cleanup = tasks.create_task(self._cleanup())
-                refresh = tasks.create_task(self._refresh_names())
                 self._ready.set_result(None)
                 try:
                     await self._stop.wait()
                 finally:
                     await site.stop()
                     cleanup.cancel()
-                    refresh.cancel()
                     await asyncio.gather(
                         *(
                             self._close_socket(connection, code=1001)
@@ -705,11 +659,6 @@ class WebServer:
                         raise BaseExceptionGroup("Request shutdown failed", errors)
         finally:
             await runner.cleanup()
-
-    async def _refresh_names(self) -> None:
-        while True:
-            await asyncio.sleep(REFRESH_INTERVAL)
-            self._names = await collect_names(self._address)
 
     async def _cleanup(self) -> None:
         while True:
@@ -802,7 +751,6 @@ class WebServer:
         return await worker(
             partial(
                 static_response,
-                document_allowed=self._allows_host(request),
                 origin_allowed=self._allows_host(request)
                 and (origin is None or self._allows_origin(request, origin)),
                 entry_url=entry_url,

@@ -6,6 +6,7 @@ from ipaddress import ip_address
 from yarl import URL
 
 HOST = "127.0.0.1"
+LOOPBACK_NAMES = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def validate_host(value: str) -> str:
@@ -49,26 +50,6 @@ def normalize_network_host(value: str) -> str:
         return str(ip_address(host))
     except ValueError:
         return normalize_name(value)
-
-
-def public_hosts(values: list[str]) -> frozenset[str]:
-    result = set()
-    for value in values:
-        value = value.strip()
-        if value.startswith("."):
-            result.add("." + normalize_name(value[1:]))
-        else:
-            result.add(normalize_network_host(value))
-    return frozenset(result)
-
-
-def matches_public_host(host: str, allowed: frozenset[str]) -> bool:
-    return any(
-        host == entry
-        or entry.startswith(".")
-        and (host == entry[1:] or host.endswith(entry))
-        for entry in allowed
-    )
 
 
 def parse_authority(value: str, scheme: str = "http") -> URL:

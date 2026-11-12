@@ -38,7 +38,6 @@ a:focus-visible { outline: 2px solid rgb(50 73 148); outline-offset: 2px; }
 <p>Fora did not accept the address this page was opened from, so the page could not load.</p>
 <p>Open Fora at this address:</p>
 <p><a href="ENTRY_URL" rel="noreferrer">ENTRY_URL</a></p>
-<p>To use a domain with this instance, allow it at startup with --public-host (or FORA_PUBLIC_HOSTS).</p>
 </main>
 </body>
 </html>
