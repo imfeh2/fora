@@ -21,6 +21,7 @@ from fora.adapters.files.uploads import decode_image
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.core.blocks import WindowContent
 from fora.runtime.reminder import TurnRequest
 from fora.runtime.scheduler import Scheduler
 from fora.tools import AgentTools, Dependencies
@@ -119,7 +120,7 @@ def _turn_request(agent_id: int) -> TurnRequest:
         agent_name="Main",
         prompt="Use the organization tool.",
         reminder=None,
-        history=(),
+        history=WindowContent(),
         resident="",
         environment=lambda: "environment",
         ephemeral=lambda: "",
@@ -238,7 +239,7 @@ def test_pause_action_on_self_stops_after_tools_finish(world) -> None:
     parts = [
         part
         for message in ModelMessagesTypeAdapter.validate_json(
-            "[" + ",".join(world.history.current_messages(MAIN)) + "]"
+            "[" + ",".join(world.history.current_content(MAIN).messages) + "]"
         )
         for part in message.parts
         if isinstance(part, ToolReturnPart) and part.tool_name == "organization"

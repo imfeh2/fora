@@ -5,6 +5,8 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
+from fora.core.blocks import WindowContent
+
 
 @dataclass(frozen=True)
 class AgentRun:
@@ -146,7 +148,7 @@ class HistoryStore(Protocol):
     ) -> frozenset[tuple[int, int]]: ...
 
     def save_history(
-        self, agent_id: int, sequence: int, messages: Sequence[str]
+        self, agent_id: int, sequence: int, content: WindowContent
     ) -> None: ...
 
     def finish_run(
@@ -155,7 +157,7 @@ class HistoryStore(Protocol):
         sequence: int,
         *,
         status: str,
-        messages: Sequence[str],
+        content: WindowContent,
         usage_json: str | None = None,
         error: str | None = None,
     ) -> None: ...
@@ -188,9 +190,9 @@ class HistoryStore(Protocol):
         error: str,
     ) -> None: ...
 
-    def current_messages(self, agent_id: int) -> tuple[str, ...]: ...
+    def current_content(self, agent_id: int) -> WindowContent: ...
 
-    def window_messages(self, agent_id: int, window_number: int) -> tuple[str, ...]: ...
+    def window_content(self, agent_id: int, window_number: int) -> WindowContent: ...
 
     def last_saved_at(self, agent_id: int, sequence: int) -> str | None: ...
 

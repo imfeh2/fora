@@ -22,6 +22,7 @@ from fora.adapters.sqlite.store import (
     reading,
 )
 from fora.adapters.voice.config import VoiceConfig
+from fora.core.blocks import WindowContent
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import name_key, validate_name
@@ -500,8 +501,9 @@ class SqliteAgentStore:
         )
 
     def _write_messages(
-        self, agent_id: int, sequence: int, messages: Sequence[str]
+        self, agent_id: int, sequence: int, content: WindowContent
     ) -> None:
+        messages = content.messages
         run = first(
             self._db.execute(
                 "SELECT window_number FROM agent_runs WHERE agent_id = ? AND sequence = ?",
@@ -549,10 +551,10 @@ class SqliteAgentStore:
         ).close()
 
     def save_history(
-        self, agent_id: int, sequence: int, messages: Sequence[str]
+        self, agent_id: int, sequence: int, content: WindowContent
     ) -> None:
         with self._db:
-            self._write_messages(agent_id, sequence, messages)
+            self._write_messages(agent_id, sequence, content)
             self._db.execute(
                 "UPDATE agent_runs SET last_saved_at = ? WHERE agent_id = ? AND sequence = ?",
                 (self._now(), agent_id, sequence),
@@ -564,12 +566,12 @@ class SqliteAgentStore:
         sequence: int,
         *,
         status: str,
-        messages: Sequence[str],
+        content: WindowContent,
         usage_json: str | None = None,
         error: str | None = None,
     ) -> None:
         with self._db:
-            self._write_messages(agent_id, sequence, messages)
+            self._write_messages(agent_id, sequence, content)
             self._db.execute(
                 "UPDATE agent_runs SET status = ?, completed_at = ?, last_saved_at = ?,"
                 " usage_json = ?, error = ? WHERE agent_id = ? AND sequence = ?",
@@ -771,19 +773,21 @@ class SqliteAgentStore:
         return WindowState(number, since_sequence, reset_at, reason, overflow_context)
 
     @reading
-    def window_messages(self, agent_id: int, window_number: int) -> tuple[str, ...]:
-        return tuple(
-            str(row["content_json"])
-            for row in self._db.execute(
-                "SELECT content_json FROM agent_messages WHERE agent_id = ?"
-                " AND window_number = ? ORDER BY position",
-                (agent_id, window_number),
+    def window_content(self, agent_id: int, window_number: int) -> WindowContent:
+        return WindowContent(
+            tuple(
+                str(row["content_json"])
+                for row in self._db.execute(
+                    "SELECT content_json FROM agent_messages WHERE agent_id = ?"
+                    " AND window_number = ? ORDER BY position",
+                    (agent_id, window_number),
+                )
             )
         )
 
     @reading
-    def current_messages(self, agent_id: int) -> tuple[str, ...]:
-        return self.window_messages(agent_id, self.window(agent_id).number)
+    def current_content(self, agent_id: int) -> WindowContent:
+        return self.window_content(agent_id, self.window(agent_id).number)
 
     @reading
     def read_run_slice(

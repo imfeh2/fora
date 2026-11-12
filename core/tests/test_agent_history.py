@@ -7,6 +7,7 @@ import pytest
 
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.core.blocks import WindowContent
 from fora.services.history import History
 
 AGENT = 1
@@ -34,6 +35,10 @@ def message(text: str) -> str:
     )
 
 
+def content_of(messages: list[str]) -> WindowContent:
+    return WindowContent(tuple(messages))
+
+
 def stored_rows(store: SqliteAgentStore) -> list[tuple[int, int, str]]:
     return [
         (int(row["position"]), int(row["sequence"]), str(row["content_json"]))
@@ -51,13 +56,15 @@ def test_the_history_grows_linearly(store: SqliteAgentStore) -> None:
         run = store.start_run(AGENT)
         for step in range(5):
             history.append(message(f"turn {turn} step {step} " + "x" * 200))
-            store.save_history(AGENT, run.sequence, history)
-        store.finish_run(AGENT, run.sequence, status="completed", messages=history)
+            store.save_history(AGENT, run.sequence, content_of(history))
+        store.finish_run(
+            AGENT, run.sequence, status="completed", content=content_of(history)
+        )
 
     rows = stored_rows(store)
     assert [content for _, _, content in rows] == history
     assert sum(len(content) for _, _, content in rows) == sum(map(len, history))
-    assert store.current_messages(AGENT) == tuple(history)
+    assert store.current_content(AGENT).messages == tuple(history)
 
 
 def test_a_rewritten_tail_keeps_earlier_turns(store: SqliteAgentStore) -> None:
@@ -66,18 +73,20 @@ def test_a_rewritten_tail_keeps_earlier_turns(store: SqliteAgentStore) -> None:
         AGENT,
         first.sequence,
         status="completed",
-        messages=[message("a"), message("b"), message("pending")],
+        content=content_of([message("a"), message("b"), message("pending")]),
     )
     second = store.start_run(AGENT)
     store.save_history(
         AGENT,
         second.sequence,
-        [message("a"), message("b"), message("settled"), message("c")],
+        content_of([message("a"), message("b"), message("settled"), message("c")]),
     )
     store.save_history(
         AGENT,
         second.sequence,
-        [message("a"), message("b"), message("settled"), message("d"), message("e")],
+        content_of(
+            [message("a"), message("b"), message("settled"), message("d"), message("e")]
+        ),
     )
 
     assert stored_rows(store) == [
@@ -91,10 +100,14 @@ def test_a_rewritten_tail_keeps_earlier_turns(store: SqliteAgentStore) -> None:
 
 def test_a_failed_turn_falls_back_to_its_saved_start(store: SqliteAgentStore) -> None:
     first = store.start_run(AGENT)
-    store.finish_run(AGENT, first.sequence, status="completed", messages=[message("a")])
+    store.finish_run(
+        AGENT, first.sequence, status="completed", content=content_of([message("a")])
+    )
     second = store.start_run(AGENT)
-    store.save_history(AGENT, second.sequence, [message("a"), message("b")])
-    store.finish_run(AGENT, second.sequence, status="failed", messages=[message("a")])
+    store.save_history(AGENT, second.sequence, content_of([message("a"), message("b")]))
+    store.finish_run(
+        AGENT, second.sequence, status="failed", content=content_of([message("a")])
+    )
 
     assert stored_rows(store) == [(0, first.sequence, message("a"))]
 
@@ -102,22 +115,25 @@ def test_a_failed_turn_falls_back_to_its_saved_start(store: SqliteAgentStore) ->
 def test_each_window_keeps_its_own_messages(store: SqliteAgentStore) -> None:
     first = store.start_run(AGENT)
     store.finish_run(
-        AGENT, first.sequence, status="completed", messages=[message("old")]
+        AGENT, first.sequence, status="completed", content=content_of([message("old")])
     )
     window = store.reset_window(AGENT, "prepared")
     second = store.start_run(AGENT)
     store.finish_run(
-        AGENT, second.sequence, status="completed", messages=[message("new")]
+        AGENT, second.sequence, status="completed", content=content_of([message("new")])
     )
 
-    assert store.window_messages(AGENT, window.number - 1) == (message("old"),)
-    assert store.current_messages(AGENT) == (message("new"),)
+    assert store.window_content(AGENT, window.number - 1).messages == (message("old"),)
+    assert store.current_content(AGENT).messages == (message("new"),)
 
 
 def test_a_turn_reads_back_exactly_what_it_wrote(store: SqliteAgentStore) -> None:
     earlier = store.start_run(AGENT)
     store.finish_run(
-        AGENT, earlier.sequence, status="completed", messages=[message("earlier")]
+        AGENT,
+        earlier.sequence,
+        status="completed",
+        content=content_of([message("earlier")]),
     )
     run = store.start_run(AGENT)
     own = [
@@ -129,7 +145,7 @@ def test_a_turn_reads_back_exactly_what_it_wrote(store: SqliteAgentStore) -> Non
         AGENT,
         run.sequence,
         status="completed",
-        messages=[message("earlier"), *own],
+        content=content_of([message("earlier"), *own]),
     )
     expected = "[" + ",".join(own) + "]"
 
@@ -168,7 +184,9 @@ def test_search_finds_the_turn_that_wrote_the_text(store: SqliteAgentStore) -> N
     for text in ("alpha", "needle 100%", "omega"):
         run = store.start_run(AGENT)
         history.append(message(text))
-        store.finish_run(AGENT, run.sequence, status="completed", messages=history)
+        store.finish_run(
+            AGENT, run.sequence, status="completed", content=content_of(history)
+        )
         sequences.append(run.sequence)
 
     assert [run.sequence for run in store.search_runs(AGENT, "needle 100%")] == [
@@ -183,10 +201,14 @@ def test_search_pages_through_finished_turns(store: SqliteAgentStore) -> None:
     for index in range(45):
         run = store.start_run(AGENT)
         history.append(message(f"needle {index}"))
-        store.finish_run(AGENT, run.sequence, status="completed", messages=history)
+        store.finish_run(
+            AGENT, run.sequence, status="completed", content=content_of(history)
+        )
         finished.append(run.sequence)
     running = store.start_run(AGENT)
-    store.save_history(AGENT, running.sequence, [*history, message("needle now")])
+    store.save_history(
+        AGENT, running.sequence, content_of([*history, message("needle now")])
+    )
     search = History(store, AGENT)
 
     pages = []

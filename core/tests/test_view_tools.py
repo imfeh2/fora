@@ -16,6 +16,7 @@ from fora.adapters.files.uploads import DirectoryUploads, decode_image
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.core.blocks import WindowContent
 from fora.runtime.reminder import TurnRequest
 from fora.services.uploads import Uploads
 from fora.tools import AgentTools, Dependencies
@@ -74,7 +75,7 @@ def _turn_request(agent_id: int) -> TurnRequest:
         agent_name="Main",
         prompt="View an image.",
         reminder=None,
-        history=(),
+        history=WindowContent(),
         resident="",
         environment=lambda: "environment",
         ephemeral=lambda: "",

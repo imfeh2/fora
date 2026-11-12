@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from weakref import WeakValueDictionary
 
+from fora.core.blocks import WindowContent
 from fora.core.context_budget import threshold_tokens
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
@@ -57,15 +58,15 @@ class PreparedTurn:
     name: str
     reminder: Reminder | None
     prompt: str
-    history: tuple[str, ...]
+    history: WindowContent
     model_control: ModelRequestControl
 
 
 @dataclass
 class FailedFinalization:
     sequence: int
-    saved_history: tuple[str, ...]
-    messages: tuple[str, ...]
+    saved_history: WindowContent
+    messages: WindowContent
     usage: str | None
     error: str
 
@@ -192,11 +193,11 @@ class Scheduler:
                 runs = self.history.runs(member.id, limit=1)
                 try:
                     self._runner.validate_history(
-                        self.history.current_messages(member.id)
+                        self.history.current_content(member.id)
                     )
                     if runs and runs[0].status == "running":
                         run = runs[0]
-                        messages = self.history.window_messages(
+                        messages = self.history.window_content(
                             member.id, run.window_number
                         )
                         self._runner.validate_history(messages)
@@ -204,7 +205,7 @@ class Scheduler:
                             member.id,
                             run.sequence,
                             status="interrupted",
-                            messages=messages,
+                            content=messages,
                             usage_json=run.usage_json,
                         )
                 except HistoryValidationError:
@@ -394,7 +395,7 @@ class Scheduler:
         return self.agent_status(agent_id)
 
     def resume(self, agent_id: int, can_recover: bool) -> dict[str, Any]:
-        recovered: tuple[int, tuple[str, ...]] | None = None
+        recovered: tuple[int, WindowContent] | None = None
         with self.member_lock(agent_id):
             self._require_agent(agent_id)
             if not can_recover and (
@@ -413,7 +414,7 @@ class Scheduler:
                         agent_id, replace(lifecycle, pause_requested=False)
                     )
                 else:
-                    current = self.history.current_messages(agent_id)
+                    current = self.history.current_content(agent_id)
                     self._runner.validate_history(current)
                     failure = self._failures.get(agent_id)
                     if failure is not None:
@@ -423,7 +424,7 @@ class Scheduler:
                                 ErrorCode.HISTORY_CHANGED,
                                 "The failed Turn identity changed",
                             )
-                        stored = self.history.window_messages(
+                        stored = self.history.window_content(
                             agent_id, runs[0].window_number
                         )
                         messages = (
@@ -436,7 +437,7 @@ class Scheduler:
                             agent_id,
                             failure.sequence,
                             status="interrupted",
-                            messages=messages,
+                            content=messages,
                             usage_json=failure.usage,
                             error=failure.error,
                         )
@@ -445,7 +446,7 @@ class Scheduler:
                         runs = self.history.runs(agent_id, limit=1)
                         if runs and runs[0].status == "running":
                             run = runs[0]
-                            messages = self.history.window_messages(
+                            messages = self.history.window_content(
                                 agent_id, run.window_number
                             )
                             self._runner.validate_history(messages)
@@ -453,7 +454,7 @@ class Scheduler:
                                 agent_id,
                                 run.sequence,
                                 status="interrupted",
-                                messages=messages,
+                                content=messages,
                                 usage_json=run.usage_json,
                                 error=run.error,
                             )
@@ -472,7 +473,7 @@ class Scheduler:
         return self.agent_status(agent_id)
 
     def _confirm_live(
-        self, agent_id: int, sequence: int, messages: tuple[str, ...]
+        self, agent_id: int, sequence: int, messages: WindowContent
     ) -> None:
         turn = next(iter(self.live.capture(agent_id)), None)
         if turn is not None and turn.sequence == sequence and turn.requests:
@@ -654,7 +655,7 @@ class Scheduler:
                     )
                     if reminder is None and not self.preparation_due(agent_id):
                         return None
-                    previous = self.history.current_messages(agent_id)
+                    previous = self.history.current_content(agent_id)
                     self._runner.validate_history(previous)
                     keys = (
                         [
@@ -742,7 +743,7 @@ class Scheduler:
             self.history, run, self.history.window(agent_id).number, progress
         )
 
-        def persist(messages: tuple[str, ...]) -> None:
+        def persist(messages: WindowContent) -> None:
             nonlocal persisted_history
             self.history.save_history(agent_id, run.sequence, messages)
             persisted_history = messages
@@ -794,7 +795,7 @@ class Scheduler:
             usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
             overflow_context = outcome.overflow_context
-            messages = outcome.messages
+            messages = outcome.content
             if outcome.stopped:
                 status = "interrupted"
             elif outcome.error:
@@ -831,7 +832,7 @@ class Scheduler:
                             agent_id,
                             run.sequence,
                             status=status,
-                            messages=messages,
+                            content=messages,
                             usage_json=usage_json,
                             error=error,
                         )
@@ -843,7 +844,7 @@ class Scheduler:
                             agent_id,
                             run.sequence,
                             status=status,
-                            messages=messages,
+                            content=messages,
                             usage_json=usage_json,
                             error=error,
                         )
@@ -932,7 +933,7 @@ class Scheduler:
                             agent_id,
                             run.sequence,
                             status="failed",
-                            messages=persisted_history,
+                            content=persisted_history,
                             usage_json=usage_json,
                             error=error,
                         )
@@ -954,7 +955,7 @@ class Scheduler:
         except Exception as failure:
             with self.member_lock(agent_id):
                 self._blocked[agent_id] = "storage_unavailable"
-                saved = self.history.window_messages(agent_id, run.window_number)
+                saved = self.history.window_content(agent_id, run.window_number)
                 self._failures[agent_id] = FailedFinalization(
                     run.sequence,
                     saved,

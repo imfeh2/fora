@@ -14,6 +14,7 @@ from fora.adapters.files.uploads import decode_image
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.core.blocks import WindowContent
 from fora.runtime.reminder import TurnOutcome, TurnRequest
 from fora.runtime.scheduler import Scheduler
 from fora.tools import Dependencies
@@ -119,7 +120,7 @@ def rejected_turn(fora: Fora, error: Exception) -> TurnOutcome:
         agent_name="Stub",
         prompt="hello",
         reminder=None,
-        history=(),
+        history=WindowContent(),
         resident="MEMORY",
         environment=lambda: None,
         ephemeral=lambda: "",

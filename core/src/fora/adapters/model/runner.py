@@ -120,6 +120,7 @@ from fora.adapters.model.observability import (
 from fora.adapters.model.prompt import SYSTEM_PROMPT
 from fora.adapters.model.retry import RequestRetry, RetryingModel
 from fora.core.attachment import ViewedImage
+from fora.core.blocks import WindowContent
 from fora.core.context_budget import (
     estimate_image_tokens,
     estimate_text_tokens,
@@ -1007,7 +1008,7 @@ class LiveModel(WrapperModel):
 
 
 def live_coverage(
-    history: Sequence[str], turn: LiveTurn
+    history: WindowContent, turn: LiveTurn
 ) -> tuple[LiveRequestCoverage, ...]:
     messages = _decode_history(history)
     identities = {(request.ordinal, request.request_id) for request in turn.requests}
@@ -1032,9 +1033,9 @@ def live_coverage(
 
 class PydanticModelRunner:
     def live_coverage(
-        self, messages: Sequence[str], turn: LiveTurn
+        self, content: WindowContent, turn: LiveTurn
     ) -> tuple[LiveRequestCoverage, ...]:
-        return live_coverage(messages, turn)
+        return live_coverage(content, turn)
 
     def __init__(
         self,
@@ -1443,8 +1444,8 @@ class PydanticModelRunner:
     def check_available(self, agent_id: int) -> None:
         ModelCatalog.restore(self._settings.get_settings("model")).resolve(agent_id)
 
-    def validate_history(self, messages: Sequence[str]) -> None:
-        for message in _decode_history(messages):
+    def validate_history(self, content: WindowContent) -> None:
+        for message in _decode_history(content):
             if isinstance(message, ModelRequest) and message.metadata is not None:
                 metadata = message.metadata.get("fora", {})
                 if not isinstance(metadata, dict):
@@ -1458,7 +1459,7 @@ class PydanticModelRunner:
                 request.agent_id
             )
         except DomainError as failure:
-            return TurnOutcome(messages=request.history, error=str(failure))
+            return TurnOutcome(content=request.history, error=str(failure))
         self.validate_history(request.history)
         with self._lock:
             tracing = ObservabilityConfig.restore(
@@ -1833,7 +1834,7 @@ class PydanticModelRunner:
             }
         )
         return TurnOutcome(
-            messages=messages,
+            content=messages,
             usage_json=usage,
             error=error,
             input_tokens=input_tokens,
@@ -1919,9 +1920,11 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
     return [*messages[:-1], replace(trailing, parts=[*trailing.parts, *parts])]
 
 
-def _decode_history(messages: Sequence[str]) -> list[ModelMessage]:
+def _decode_history(content: WindowContent) -> list[ModelMessage]:
     try:
-        return ModelMessagesTypeAdapter.validate_json("[" + ",".join(messages) + "]")
+        return ModelMessagesTypeAdapter.validate_json(
+            "[" + ",".join(content.messages) + "]"
+        )
     except ValueError as error:
         raise HistoryValidationError("Stored model history is invalid") from error
 
@@ -2068,12 +2071,14 @@ def _merge_requests(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
 
 def _stored_history(
     messages: Sequence[ModelMessage], context_sources: ContextSources | None
-) -> tuple[str, ...]:
+) -> WindowContent:
     merged = _merge_requests(messages)
-    return _encode_messages(
-        context_sources.snapshot(merged, persistent=True)
-        if context_sources is not None
-        else merged
+    return WindowContent(
+        _encode_messages(
+            context_sources.snapshot(merged, persistent=True)
+            if context_sources is not None
+            else merged
+        )
     )
 
 
@@ -2081,7 +2086,7 @@ def _persist_history(
     request: TurnRequest,
     messages: list[ModelMessage],
     context_sources: ContextSources | None = None,
-) -> tuple[str, ...]:
+) -> WindowContent:
     encoded = _stored_history(messages, context_sources)
     try:
         request.persist(encoded)

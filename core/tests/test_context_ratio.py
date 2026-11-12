@@ -28,6 +28,7 @@ from fora.adapters.model.runner import (
 )
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.core.blocks import WindowContent
 from fora.core.context_budget import (
     CONTEXT_WINDOW_FALLBACK,
     IMAGE_TOKENS,
@@ -132,7 +133,7 @@ class ScriptedRunner:
             }
         )
         return TurnOutcome(
-            messages=request.history,
+            content=request.history,
             usage_json=usage,
             input_tokens=10,
         )
@@ -259,7 +260,7 @@ def test_the_recorded_window_is_declared_and_the_scheduler_recomputes(
         agent_name="Stub",
         prompt="hello",
         reminder=None,
-        history=(),
+        history=WindowContent(),
         resident="MEMORY",
         environment=lambda: None,
         ephemeral=lambda: "",

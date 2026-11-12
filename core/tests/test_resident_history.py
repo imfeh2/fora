@@ -13,12 +13,15 @@ from fora.adapters.files.uploads import decode_image
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
+from fora.core.blocks import WindowContent
 from fora.runtime.reminder import TurnRequest
 from fora.runtime.scheduler import Scheduler
 from fora.tools import Dependencies
 
 AGENTS = "Always sign replies with the team name."
 CHANGED = "Never sign replies."
+
+EMPTY = WindowContent()
 
 
 @pytest.fixture
@@ -43,8 +46,8 @@ def settings(tmp_path: Path) -> Iterator[SqliteAgentStore]:
 def run_turns(
     settings: SqliteAgentStore,
     instructions: list[str],
-    history: tuple[str, ...] = (),
-) -> tuple[list[str], tuple[str, ...]]:
+    history: WindowContent = EMPTY,
+) -> tuple[list[str], WindowContent]:
     sent: list[str] = []
 
     def respond(messages, info):
@@ -77,7 +80,7 @@ def run_turns(
         )
         outcome = runner.run(request, None)
         assert outcome.error is None
-        history = outcome.messages
+        history = outcome.content
     return sent, history
 
 
@@ -95,9 +98,9 @@ def test_a_window_that_lost_its_first_metadata_still_gets_the_instructions(
     settings: SqliteAgentStore,
 ) -> None:
     _, history = run_turns(settings, [AGENTS, AGENTS])
-    first = json.loads(history[0])
+    first = json.loads(history.messages[0])
     first.pop("metadata")
-    damaged = (json.dumps(first), *history[1:])
+    damaged = WindowContent((json.dumps(first), *history.messages[1:]))
 
     sent, _ = run_turns(settings, [AGENTS], damaged)
 
@@ -109,7 +112,7 @@ def test_the_saved_history_has_no_adjacent_requests(
 ) -> None:
     _, history = run_turns(settings, [AGENTS] * 3)
 
-    kinds = [json.loads(message)["kind"] for message in history]
+    kinds = [json.loads(message)["kind"] for message in history.messages]
     assert kinds == ["request", "response"] * 3
 
 

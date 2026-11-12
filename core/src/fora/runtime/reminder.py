@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from fora.core.blocks import WindowContent
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.mention import Mention
@@ -274,11 +275,11 @@ class TurnRequest:
     agent_name: str
     prompt: str
     reminder: Reminder | None
-    history: tuple[str, ...]
+    history: WindowContent
     resident: str
     environment: Callable[[], str | None]
     ephemeral: Callable[[], str]
-    persist: Callable[[tuple[str, ...]], None]
+    persist: Callable[[WindowContent], None]
     instructions: str | None = None
     request_recorder: ModelRequestRecorder | None = None
     live_observer: LiveTurnObserver | None = None
@@ -287,7 +288,7 @@ class TurnRequest:
 
 @dataclass(frozen=True)
 class TurnOutcome:
-    messages: tuple[str, ...]
+    content: WindowContent
     usage_json: str | None = None
     error: str | None = None
     input_tokens: int | None = None
@@ -298,10 +299,10 @@ class TurnOutcome:
 
 class ModelRunner(Protocol):
     def live_coverage(
-        self, messages: Sequence[str], turn: LiveTurn
+        self, content: WindowContent, turn: LiveTurn
     ) -> tuple[LiveRequestCoverage, ...]: ...
 
-    def validate_history(self, messages: Sequence[str]) -> None: ...
+    def validate_history(self, content: WindowContent) -> None: ...
 
     def check_available(self, agent_id: int) -> None: ...
 
