@@ -7,6 +7,12 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[manifest]
+members = [
+    "fora",
+    "fora-web",
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -594,7 +600,7 @@ wheels = [
 [[package]]
 name = "fora"
 version = "0.0.22"
-source = { editable = "." }
+source = { editable = "core" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anyio" },
@@ -653,6 +659,17 @@ dev = [
     { name = "types-psutil", specifier = ">=7.2.2.20260827" },
     { name = "types-pyyaml", specifier = ">=6.0.12" },
 ]
+
+[[package]]
+name = "fora-web"
+version = "0.0.22"
+source = { editable = "web" }
+dependencies = [
+    { name = "fora" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "fora", editable = "core" }]
 
 [[package]]
 name = "frozenlist"

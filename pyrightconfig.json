@@ -1,4 +1,4 @@
 {
-  "venvPath": "core",
+  "venvPath": ".",
   "venv": ".venv"
 }

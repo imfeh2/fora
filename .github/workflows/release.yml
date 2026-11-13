@@ -80,7 +80,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
-          cache-dependency-glob: core/uv.lock
+          cache-dependency-glob: uv.lock
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -192,7 +192,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
-          cache-dependency-glob: core/uv.lock
+          cache-dependency-glob: uv.lock
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
