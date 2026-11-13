@@ -17,15 +17,14 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RequestUsage
 
-from fora.adapters.model.blocks import from_blocks, render_block, to_blocks
+from fora.adapters.model.blocks import PartKinds, from_blocks, render_block, to_blocks
 from fora.core.blocks import Block, WindowContent
 from fora.runtime.reminder import HistoryPersistenceError, HistoryValidationError
 
 WINDOW = [
     ModelRequest(
         parts=[UserPromptPart("MEMORY")],
-        instructions="rules",
-        metadata={"fora": {"block": "resident", "cache_key": "k"}},
+        metadata={"fora": {"cache_key": "k"}},
     ),
     ModelResponse(
         parts=[
@@ -58,6 +57,9 @@ WINDOW = [
     ),
     ModelResponse(parts=[]),
 ]
+KINDS = PartKinds()
+KINDS.mark(WINDOW[0].parts[0], "context")
+KINDS.mark(WINDOW[2].parts[2], "environment")
 
 
 STRUCTURED = """run {"argv":["ls"]}
@@ -86,22 +88,22 @@ def parts(block: Block) -> list[tuple[int, int, str]]:
 
 
 def test_a_window_reads_back_exactly_as_it_was_written() -> None:
-    assert encoded(from_blocks(to_blocks(WINDOW))) == encoded(WINDOW)
+    assert encoded(from_blocks(to_blocks(WINDOW, KINDS))) == encoded(WINDOW)
 
 
 def test_each_tool_call_shares_a_block_with_its_result() -> None:
-    content = to_blocks(WINDOW)
+    content = to_blocks(WINDOW, KINDS)
 
     assert [block.kind for block in content.blocks] == [
-        "input",
+        "context",
         "thinking",
         "text",
         "tool",
         "tool",
-        "input",
+        "environment",
         "tool",
         "text",
-        "input",
+        "retry",
     ]
     assert parts(content.blocks[3]) == [(1, 2, "tool-call"), (2, 1, "tool-return")]
     assert parts(content.blocks[4]) == [(1, 3, "tool-call"), (2, 0, "tool-return")]
@@ -111,7 +113,7 @@ def test_each_tool_call_shares_a_block_with_its_result() -> None:
 
 def test_a_call_without_a_result_stays_an_open_block() -> None:
     messages = WINDOW[:2]
-    content = to_blocks(messages)
+    content = to_blocks(messages, KINDS)
 
     assert parts(content.blocks[-1]) == [(1, 3, "tool-call")]
     assert encoded(from_blocks(content)) == encoded(messages)
@@ -132,7 +134,7 @@ def test_repeated_call_ids_pair_in_order() -> None:
             ]
         ),
     ]
-    content = to_blocks(messages)
+    content = to_blocks(messages, KINDS)
 
     assert [parts(block) for block in content.blocks] == [
         [(0, 0, "tool-call"), (1, 0, "tool-return")],
@@ -143,7 +145,10 @@ def test_repeated_call_ids_pair_in_order() -> None:
 
 def test_a_result_without_its_call_is_refused() -> None:
     with pytest.raises(HistoryPersistenceError):
-        to_blocks([ModelRequest(parts=[ToolReturnPart("run", "/", tool_call_id="x")])])
+        to_blocks(
+            [ModelRequest(parts=[ToolReturnPart("run", "/", tool_call_id="x")])],
+            PartKinds(),
+        )
 
 
 def test_a_part_with_no_block_kind_is_refused() -> None:
@@ -153,12 +158,13 @@ def test_a_part_with_no_block_kind_is_refused() -> None:
                 ModelResponse(
                     parts=[FilePart(BinaryContent(b"x", media_type="image/png"))]
                 )
-            ]
+            ],
+            PartKinds(),
         )
 
 
 def test_a_message_missing_a_part_is_invalid() -> None:
-    content = to_blocks(WINDOW)
+    content = to_blocks(WINDOW, KINDS)
     damaged = WindowContent(content.message_heads, content.blocks[:-2])
 
     with pytest.raises(HistoryValidationError):
@@ -185,7 +191,8 @@ def test_a_structured_result_reads_line_by_line() -> None:
                     )
                 ]
             ),
-        ]
+        ],
+        PartKinds(),
     )
 
     assert render_block(content.blocks[0]) == STRUCTURED
@@ -193,6 +200,31 @@ def test_a_structured_result_reads_line_by_line() -> None:
 
 def test_a_retried_call_reads_as_an_error() -> None:
     assert (
-        render_block(to_blocks(WINDOW).blocks[3])
+        render_block(to_blocks(WINDOW, KINDS).blocks[3])
         == 'run {"argv":["ls"]}\nError:\nbad argv'
     )
+
+
+def test_a_prompt_without_a_kind_is_refused() -> None:
+    with pytest.raises(HistoryPersistenceError):
+        to_blocks([ModelRequest(parts=[UserPromptPart("who am I")])], PartKinds())
+
+
+def test_reading_a_window_back_keeps_each_block_kind() -> None:
+    content = to_blocks(WINDOW, KINDS)
+    kinds = PartKinds()
+
+    assert to_blocks(from_blocks(content, kinds), kinds) == content
+
+
+def test_ephemeral_parts_are_never_stored() -> None:
+    kinds = PartKinds()
+    kept = UserPromptPart("woken")
+    nudge = UserPromptPart("reply soon")
+    kinds.mark(kept, "reminder")
+    kinds.mark_ephemeral(nudge)
+
+    content = to_blocks(kinds.persistent([ModelRequest(parts=[kept, nudge])]), kinds)
+
+    assert [block.kind for block in content.blocks] == ["reminder"]
+    assert "reply soon" not in content.blocks[0].parts

@@ -1,10 +1,11 @@
 import json
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 
 from fora.adapters.execution.manager import ExecutionManager
@@ -15,6 +16,7 @@ from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.blocks import WindowContent
+from fora.runtime.instructions import Instructions
 from fora.runtime.reminder import TurnRequest
 from fora.runtime.scheduler import Scheduler
 from fora.tools import Dependencies
@@ -23,6 +25,28 @@ AGENTS = "Always sign replies with the team name."
 CHANGED = "Never sign replies."
 
 EMPTY = WindowContent()
+CHANGES = "Your instructions changed."
+
+
+@dataclass
+class Sent:
+    system: str
+    prompts: list[str]
+
+
+def prompts(messages) -> list[str]:
+    return [
+        part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+    ]
+
+
+def capture(sent: list[Sent], messages) -> None:
+    request = next(m for m in reversed(messages) if isinstance(m, ModelRequest))
+    sent.append(Sent(request.instructions or "", prompts(messages)))
 
 
 @pytest.fixture
@@ -48,12 +72,11 @@ def run_turns(
     settings: SqliteAgentStore,
     instructions: list[str],
     history: WindowContent = EMPTY,
-) -> tuple[list[str], WindowContent]:
-    sent: list[str] = []
+) -> tuple[list[Sent], WindowContent]:
+    sent: list[Sent] = []
 
     def respond(messages, info):
-        request = next(m for m in reversed(messages) if isinstance(m, ModelRequest))
-        sent.append(request.instructions or "")
+        capture(sent, messages)
         return ModelResponse(parts=[TextPart("done")])
 
     async def stream(messages, info):
@@ -77,7 +100,7 @@ def run_turns(
             environment=lambda: "Commands run on linux",
             ephemeral=lambda: "",
             persist=lambda messages: None,
-            instructions=current,
+            instructions=Instructions((("library", current), ("workspace", "")), ()),
         )
         outcome = runner.run(request, None)
         assert outcome.error is None
@@ -85,14 +108,27 @@ def run_turns(
     return sent, history
 
 
-def test_every_turn_sends_the_instructions_read_for_it(
+def test_the_rules_open_the_window_and_only_changes_follow(
     settings: SqliteAgentStore,
 ) -> None:
-    sent, _ = run_turns(settings, [AGENTS, AGENTS, AGENTS, CHANGED])
+    sent, history = run_turns(settings, [AGENTS, AGENTS, AGENTS, CHANGED])
 
     assert len(sent) == 4
-    assert all(AGENTS in instructions for instructions in sent[:3])
-    assert CHANGED in sent[3] and AGENTS not in sent[3]
+    assert len({request.system for request in sent}) == 1
+    assert AGENTS not in sent[0].system
+    assert AGENTS in sent[0].prompts[0] and "MEMORY" in sent[0].prompts[0]
+    assert all(request.prompts[0] == sent[0].prompts[0] for request in sent)
+    assert not any(CHANGES in text for request in sent[:3] for text in request.prompts)
+    assert sent[3].prompts[:-2] == sent[2].prompts
+    assert CHANGES in sent[3].prompts[-2] and CHANGED in sent[3].prompts[-2]
+    assert [block.kind for block in history.blocks if block.kind not in ("text",)] == [
+        "context",
+        "preparation",
+        "preparation",
+        "preparation",
+        "instructions",
+        "preparation",
+    ]
 
 
 def test_a_window_that_lost_its_first_metadata_still_gets_the_instructions(
@@ -107,7 +143,7 @@ def test_a_window_that_lost_its_first_metadata_still_gets_the_instructions(
 
     sent, _ = run_turns(settings, [AGENTS], damaged)
 
-    assert AGENTS in sent[0]
+    assert any(CHANGES in text and AGENTS in text for text in sent[0].prompts[1:])
 
 
 def test_the_saved_history_has_no_adjacent_requests(
@@ -119,7 +155,7 @@ def test_the_saved_history_has_no_adjacent_requests(
     assert kinds == ["request", "response"] * 3
 
 
-def test_the_scheduler_reads_the_rules_and_skills_again_every_turn(
+def test_the_scheduler_sends_rule_and_skill_changes_when_woken(
     tmp_path: Path,
 ) -> None:
     library = tmp_path / "library"
@@ -143,11 +179,10 @@ def test_the_scheduler_reads_the_rules_and_skills_again_every_turn(
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    sent: list[str] = []
+    sent: list[Sent] = []
 
     def respond(messages, info):
-        request = next(m for m in reversed(messages) if isinstance(m, ModelRequest))
-        sent.append(request.instructions or "")
+        capture(sent, messages)
         return ModelResponse(parts=[TextPart("done")])
 
     @asynccontextmanager
@@ -193,6 +228,8 @@ def test_the_scheduler_reads_the_rules_and_skills_again_every_turn(
         database.close()
 
     assert len(sent) == 4
-    assert all(AGENTS in instructions for instructions in sent[:3])
-    assert CHANGED in sent[3] and AGENTS not in sent[3]
-    assert "- task-flow (library): Runs a task." in sent[3]
+    assert AGENTS in sent[0].prompts[0]
+    assert all(request.prompts[0] == sent[0].prompts[0] for request in sent)
+    change = sent[3].prompts[-2]
+    assert CHANGES in change and CHANGED in change
+    assert "- task-flow (library): Runs a task." in change

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    UserPromptPart,
+)
 
 from fora.core.blocks import Block, BlockKind, WindowContent
 from fora.runtime.reminder import HistoryPersistenceError, HistoryValidationError
@@ -12,19 +18,52 @@ from fora.runtime.reminder import HistoryPersistenceError, HistoryValidationErro
 CALLS = frozenset({"tool-call", "builtin-tool-call"})
 RESULTS = frozenset({"tool-return", "builtin-tool-return"})
 OWN_KINDS: dict[str, BlockKind] = {
-    "user-prompt": "input",
-    "system-prompt": "input",
-    "retry-feedback": "input",
+    "retry-feedback": "retry",
     "text": "text",
     "thinking": "thinking",
 }
+
+
+class PartKinds:
+    def __init__(self) -> None:
+        self._kinds: dict[int, tuple[UserPromptPart, BlockKind | None]] = {}
+
+    def mark(self, part: UserPromptPart, kind: BlockKind) -> None:
+        self._kinds[id(part)] = (part, kind)
+
+    def mark_ephemeral(self, part: UserPromptPart) -> None:
+        self._kinds[id(part)] = (part, None)
+
+    def _entry(self, part: Any) -> tuple[bool, BlockKind | None]:
+        saved = self._kinds.get(id(part))
+        if saved is None or saved[0] is not part:
+            return False, None
+        return True, saved[1]
+
+    def kind(self, part: UserPromptPart) -> BlockKind:
+        known, kind = self._entry(part)
+        if not known or kind is None:
+            raise HistoryPersistenceError("A prompt part has no block kind")
+        return kind
+
+    def persistent(self, messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+        result: list[ModelMessage] = []
+        for message in messages:
+            if isinstance(message, ModelRequest):
+                parts = [
+                    part for part in message.parts if self._entry(part) != (True, None)
+                ]
+                if len(parts) != len(message.parts):
+                    message = replace(message, parts=parts)
+            result.append(message)
+        return result
 
 
 def _dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def to_blocks(messages: Sequence[ModelMessage]) -> WindowContent:
+def to_blocks(messages: Sequence[ModelMessage], kinds: PartKinds) -> WindowContent:
     try:
         encoded = ModelMessagesTypeAdapter.dump_json(list(messages))
     except Exception as error:
@@ -32,11 +71,13 @@ def to_blocks(messages: Sequence[ModelMessage]) -> WindowContent:
     heads = []
     blocks: list[tuple[BlockKind, list[Any]]] = []
     waiting: dict[str, list[int]] = {}
-    for position, message in enumerate(json.loads(encoded)):
+    for position, (original, message) in enumerate(
+        zip(messages, json.loads(encoded), strict=True)
+    ):
         parts = message["parts"]
         message["parts"] = len(parts)
         heads.append(_dump(message))
-        for index, part in enumerate(parts):
+        for index, (source, part) in enumerate(zip(original.parts, parts, strict=True)):
             entry = [position, index, part]
             kind = part["part_kind"]
             call_id = part.get("tool_call_id")
@@ -45,6 +86,8 @@ def to_blocks(messages: Sequence[ModelMessage]) -> WindowContent:
                 blocks.append(("tool", [entry]))
             elif kind in RESULTS and waiting.get(call_id):
                 blocks[waiting[call_id].pop(0)][1].append(entry)
+            elif isinstance(source, UserPromptPart):
+                blocks.append((kinds.kind(source), [entry]))
             elif kind in OWN_KINDS:
                 blocks.append((OWN_KINDS[kind], [entry]))
             else:
@@ -56,20 +99,31 @@ def to_blocks(messages: Sequence[ModelMessage]) -> WindowContent:
     )
 
 
-def from_blocks(content: WindowContent) -> list[ModelMessage]:
+def from_blocks(
+    content: WindowContent, kinds: PartKinds | None = None
+) -> list[ModelMessage]:
     try:
         messages = [json.loads(head) for head in content.message_heads]
         placed: list[dict[int, Any]] = [{} for _ in messages]
+        prompts: list[tuple[int, int, BlockKind]] = []
         for block in content.blocks:
             for position, index, part in json.loads(block.parts):
                 if index in placed[position]:
                     raise HistoryValidationError("Two blocks hold the same part")
                 placed[position][index] = part
+                if part["part_kind"] == "user-prompt":
+                    prompts.append((position, index, block.kind))
         for message, parts in zip(messages, placed, strict=True):
             if sorted(parts) != list(range(message["parts"])):
                 raise HistoryValidationError("A message is missing some of its parts")
             message["parts"] = [parts[index] for index in range(len(parts))]
-        return ModelMessagesTypeAdapter.validate_json(_dump(messages))
+        decoded = ModelMessagesTypeAdapter.validate_json(_dump(messages))
+        if kinds is not None:
+            for position, index, kind in prompts:
+                part = decoded[position].parts[index]
+                assert isinstance(part, UserPromptPart)
+                kinds.mark(part, kind)
+        return decoded
     except HistoryValidationError:
         raise
     except (ValueError, TypeError, IndexError) as error:

@@ -18,7 +18,7 @@ from pydantic_ai.models.function import FunctionModel
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
-from fora.adapters.model.blocks import render_block, to_blocks
+from fora.adapters.model.blocks import PartKinds, render_block, to_blocks
 from fora.adapters.model.runner import PydanticModelRunner, _overflow_context
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -38,6 +38,15 @@ PYDANTIC_TOKEN_LIMIT = (
     " Increase the `max_tokens` model setting, or simplify the prompt to result in a"
     " shorter response that will fit within the limit."
 )
+
+
+def prompt_blocks(messages):
+    kinds = PartKinds()
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, UserPromptPart):
+                kinds.mark(part, "reminder")
+    return to_blocks(messages, kinds)
 
 
 @dataclass
@@ -235,7 +244,7 @@ def test_first_turn_of_a_window_is_intentionally_not_reset_again(
 
 
 def test_the_overflow_record_points_at_the_last_tool_block() -> None:
-    content = to_blocks(
+    content = prompt_blocks(
         [
             ModelRequest(parts=[UserPromptPart("start")]),
             ModelResponse(

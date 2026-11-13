@@ -23,6 +23,7 @@ from fora.ports.agent import (
 )
 from fora.ports.execution import ExecutionControl
 from fora.ports.store import OrganizationStore
+from fora.runtime.instructions import read_instructions
 from fora.runtime.live import LiveSnapshots
 from fora.runtime.reminder import (
     PREPARATION_PROMPT,
@@ -33,7 +34,6 @@ from fora.runtime.reminder import (
     TurnRequest,
     build_reminder,
     exchange_nudge,
-    read_instructions,
     render_resident,
     reset_notice,
 )

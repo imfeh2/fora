@@ -13,7 +13,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from fora.adapters.model.blocks import render_block, to_blocks
+from fora.adapters.model.blocks import PartKinds, render_block, to_blocks
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.blocks import Block, WindowContent
@@ -21,6 +21,15 @@ from fora.core.errors import DomainError
 from fora.services.history import LIST_LIMIT, READ_LIMIT, History
 
 AGENT = 1
+
+
+def prompt_blocks(messages):
+    kinds = PartKinds()
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, UserPromptPart):
+                kinds.mark(part, "reminder")
+    return to_blocks(messages, kinds)
 
 
 @pytest.fixture
@@ -47,7 +56,7 @@ def message(text: str) -> str:
 
 def content_of(messages: list[str]) -> WindowContent:
     return WindowContent(
-        tuple(messages), tuple(Block("input", message) for message in messages)
+        tuple(messages), tuple(Block("reminder", message) for message in messages)
     )
 
 
@@ -144,7 +153,7 @@ def test_each_window_keeps_its_own_messages(store: SqliteAgentStore) -> None:
 def finish(store: SqliteAgentStore, messages: list) -> int:
     run = store.start_run(AGENT)
     store.finish_run(
-        AGENT, run.sequence, status="completed", content=to_blocks(messages)
+        AGENT, run.sequence, status="completed", content=prompt_blocks(messages)
     )
     return run.sequence
 
@@ -176,7 +185,7 @@ def test_a_window_lists_and_reads_its_blocks(store: SqliteAgentStore) -> None:
     tool_text = 'run {"argv":["cat"]}\nResult:\n' + output
     assert (listed.window, listed.block_count) == (1, 4)
     assert [(entry.block, entry.kind) for entry in listed.blocks] == [
-        (0, "input"),
+        (0, "reminder"),
         (1, "text"),
         (2, "tool"),
         (3, "text"),
@@ -250,9 +259,9 @@ def test_search_finds_the_block_that_holds_the_text(
     found, next_offset = history(store).search("NEEDLE")
 
     assert [(hit.window, hit.block, hit.kind) for hit in found] == [
-        (2, 0, "input"),
+        (2, 0, "reminder"),
         (1, 3, "text"),
-        (1, 2, "input"),
+        (1, 2, "reminder"),
     ]
     assert found[1].snippet == "answer needle 100%"
     assert next_offset is None
@@ -270,7 +279,7 @@ def test_search_pages_and_skips_the_work_in_progress(
     store.save_history(
         AGENT,
         running.sequence,
-        to_blocks([*messages, ModelRequest(parts=[UserPromptPart("needle now")])]),
+        prompt_blocks([*messages, ModelRequest(parts=[UserPromptPart("needle now")])]),
     )
 
     pages = []

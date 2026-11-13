@@ -104,5 +104,5 @@ def load(tree: FileTree, source: str, name: str) -> dict[str, str]:
 def _missing(name: str) -> DomainError:
     return DomainError(
         ErrorCode.NOT_FOUND,
-        f'No skill named "{name}". Your instructions list the skills you can read.',
+        f'No skill named "{name}". Your context lists the skills you can read.',
     )

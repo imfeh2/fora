@@ -10,6 +10,7 @@ dependencies = [
   "httpx>=0.28.1",
   "ijson==3.5.1",
   "jiter==0.17.0",
+  "markdown-it-py>=4.2.0",
   "numpy>=2.5.3",
   "opentelemetry-exporter-otlp-proto-http>=1.44.0",
   "opentelemetry-sdk>=1.44.0",

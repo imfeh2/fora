@@ -13,7 +13,7 @@ from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.runtime.reminder import read_instructions
+from fora.runtime.instructions import read_instructions, render
 from fora.tools import AgentTools, Dependencies
 from fora.tools.authorize import Actor
 
@@ -189,7 +189,7 @@ def test_an_unknown_name_points_back_to_the_instructions(world) -> None:
         tools.read_skill("no-such-skill")
     assert error.value.code == ErrorCode.NOT_FOUND
     assert 'No skill named "no-such-skill"' in str(error.value)
-    assert "Your instructions list the skills" in str(error.value)
+    assert "Your context lists the skills" in str(error.value)
 
 
 def test_the_instructions_carry_the_rules_and_every_skill(world) -> None:
@@ -199,11 +199,10 @@ def test_the_instructions_carry_the_rules_and_every_skill(world) -> None:
     write_skill(library, "task-flow", "Runs a task.\n  Use when starting one.", "Body.")
     write_skill(workspace, "notes", "Keeps notes.", "Body.")
 
-    instructions = read_instructions(
-        tools, DirectoryTree(library), DirectoryTree(workspace)
+    instructions = render(
+        read_instructions(tools, DirectoryTree(library), DirectoryTree(workspace))
     )
 
-    assert instructions is not None
     assert instructions.index("Shared rule.") < instructions.index("Own rule.")
     assert "- notes (workspace): Keeps notes." in instructions
     assert "- task-flow (library): Runs a task. Use when starting one." in instructions
@@ -213,16 +212,15 @@ def test_the_instructions_carry_the_rules_and_every_skill(world) -> None:
 def test_the_instructions_follow_the_files_on_every_read(world) -> None:
     tools, library, workspace = world
     trees = (DirectoryTree(library), DirectoryTree(workspace))
-    assert read_instructions(tools, *trees) is None
+    assert render(read_instructions(tools, *trees)) == ""
 
     (library / "AGENTS.md").write_text("First rule.\n", encoding="utf-8")
     write_skill(library, "task-flow", "Runs a task.", "Body.")
-    first = read_instructions(tools, *trees)
+    first = render(read_instructions(tools, *trees))
     (library / "AGENTS.md").write_text("Second rule.\n", encoding="utf-8")
     write_skill(library, "review", "Reviews a change.", "Body.")
-    second = read_instructions(tools, *trees)
+    second = render(read_instructions(tools, *trees))
 
-    assert first is not None and second is not None
     assert "First rule." in first and "review" not in first
     assert "Second rule." in second and "- review (library):" in second
 

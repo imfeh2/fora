@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-type BlockKind = Literal["input", "text", "thinking", "tool"]
+type BlockKind = Literal[
+    "context",
+    "reminder",
+    "preparation",
+    "environment",
+    "instructions",
+    "retry",
+    "text",
+    "thinking",
+    "tool",
+]
 
 
 @dataclass(frozen=True)

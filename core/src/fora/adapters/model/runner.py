@@ -67,11 +67,9 @@ from pydantic_ai.exceptions import (
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolResultEvent,
-    InstructionPart,
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    SystemPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -103,14 +101,13 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from fora.adapters.execution.local import DEFAULT_TIMEOUT, MAX_TIMEOUT
-from fora.adapters.model.blocks import from_blocks, render_block, to_blocks
+from fora.adapters.model.blocks import PartKinds, from_blocks, render_block, to_blocks
 from fora.adapters.model.config import (
     AgentModelConfig,
     ModelCatalog,
     ModelConfig,
     model_settings,
 )
-from fora.adapters.model.context_sources import ContextSources
 from fora.adapters.model.observability import (
     Observability,
     ObservabilityConfig,
@@ -136,6 +133,7 @@ from fora.ports.agent import (
     SettingsStore,
 )
 from fora.ports.live import LiveRequestCoverage, LiveTool, LiveTurn, LiveTurnObserver
+from fora.runtime.instructions import changes, render, state
 from fora.runtime.reminder import (
     HistoryPersistenceError,
     HistoryValidationError,
@@ -469,11 +467,10 @@ class LiveModel(WrapperModel):
         resolve: Callable[[], Model],
         ephemeral: Callable[[], str],
         cache_key: str,
-        instructions: str | None = None,
         request_recorder: ModelRequestRecorder | None = None,
         model_snapshot: dict[str, Any] | None = None,
         live_observer: LiveTurnObserver | None = None,
-        context_sources: ContextSources | None = None,
+        kinds: PartKinds | None = None,
         context_ratio_percent: int = 80,
         context_window_override: int | None = None,
         request_retry: RequestRetry | None = None,
@@ -483,13 +480,12 @@ class LiveModel(WrapperModel):
         self._resolve = resolve
         self._ephemeral = ephemeral
         self._cache_key = cache_key
-        self._instructions = instructions
         self._request_recorder = request_recorder
         self._model_snapshot = model_snapshot or {}
         self._live_observer = live_observer
         self._tools: dict[int, LiveTool] = {}
         self._response_version: str | None = None
-        self._context_sources = context_sources
+        self._kinds = kinds
         self._last_request_handle: ModelRequestHandle | None = None
         self._last_response: ModelResponse | None = None
         self.current_request_handle: ModelRequestHandle | None = None
@@ -521,8 +517,8 @@ class LiveModel(WrapperModel):
         last = messages[-1]
         assert isinstance(last, ModelRequest)
         part = UserPromptPart(text)
-        if self._context_sources is not None:
-            self._context_sources.mark(part, "ephemeral")
+        if self._kinds is not None:
+            self._kinds.mark_ephemeral(part)
         return [
             *messages[:-1],
             replace(last, parts=[*last.parts, part]),
@@ -535,25 +531,6 @@ class LiveModel(WrapperModel):
         parameters: ModelRequestParameters,
     ) -> tuple[list[ModelMessage], ModelRequestParameters]:
         outgoing = self._outgoing(messages)
-        if self._instructions is not None and isinstance(wrapped, OpenAIResponsesModel):
-            return (
-                [
-                    ModelRequest(
-                        parts=[
-                            SystemPromptPart(
-                                SYSTEM_PROMPT + "\n\n" + self._instructions
-                            )
-                        ]
-                    ),
-                    *(
-                        replace(message, instructions=None)
-                        if isinstance(message, ModelRequest)
-                        else message
-                        for message in outgoing
-                    ),
-                ],
-                replace(parameters, instruction_parts=[]),
-            )
         return outgoing, parameters
 
     def _caching(
@@ -1327,7 +1304,7 @@ class PydanticModelRunner:
         @tool(
             sequential=True,
             description=(
-                "Read one skill by name. Your instructions list every skill you can "
+                "Read one skill by name. Your context lists every skill you can "
                 "read, with what it covers and whether it lives in the shared Library "
                 "or in your own workspace. The full text is read from disk at the moment "
                 "you call this, so edits take effect immediately. Read a skill before "
@@ -1342,7 +1319,10 @@ class PydanticModelRunner:
             description=(
                 "Look up your own context, including the context windows before a "
                 "reset. Windows are numbered from 1, and each one is a sequence of "
-                "blocks numbered from 0: input, text, thinking, and tool (a call "
+                "blocks numbered from 0. A block's kind is context (what the window "
+                "started with), reminder (what woke you), preparation (the request to "
+                "prepare for a reset), environment, instructions (changes to your "
+                "instructions and skills), retry, text, thinking, or tool (a call "
                 "together with its result). search takes query and returns the "
                 "matching blocks of every window with a snippet, newest first, 20 at "
                 "a time. list returns a window's block count and its blocks from "
@@ -1423,30 +1403,52 @@ class PydanticModelRunner:
                 if previous is not None:
                     previous.shutdown()
             observability = self._observability
-        context_sources = ContextSources(request.agent_id, request.sequence)
+        kinds = PartKinds()
         history = _merge_requests(
-            _settle_tool_calls(
-                context_sources.restore(_decode_history(request.history))
-            )
+            _settle_tool_calls(from_blocks(request.history, kinds))
         )
+        instructions = request.instructions
         new_window = not history
         if new_window:
-            resident = UserPromptPart(request.resident)
-            context_sources.mark(resident, "session_context")
+            resident = UserPromptPart(
+                "\n\n".join(
+                    text
+                    for text in (
+                        render(instructions) if instructions is not None else "",
+                        request.resident,
+                    )
+                    if text
+                )
+            )
+            kinds.mark(resident, "context")
             history.append(
                 ModelRequest(
                     parts=[resident],
                     metadata={
                         "fora": {
-                            "block": "resident",
                             "environment": request.environment() or "",
                             "cache_key": uuid.uuid4().hex,
+                            **(
+                                {"instructions": state(instructions)}
+                                if instructions is not None
+                                else {}
+                            ),
                         }
                     },
                 )
             )
+        elif instructions is not None:
+            changed = changes(_latest(history, "instructions"), instructions)
+            if changed is not None:
+                notice = UserPromptPart(changed)
+                kinds.mark(notice, "instructions")
+                history.append(
+                    ModelRequest(
+                        parts=[notice],
+                        metadata={"fora": {"instructions": state(instructions)}},
+                    )
+                )
         cache_key = _cache_key(history)
-        instructions = request.instructions
         hooks: Hooks[AgentTools] = Hooks()
 
         @hooks.on.tool_execute
@@ -1470,18 +1472,6 @@ class PydanticModelRunner:
         async def durable(
             ctx: RunContext[AgentTools], request_context: ModelRequestContext
         ) -> ModelRequestContext:
-            if instructions is not None:
-                request_context = replace(
-                    request_context,
-                    model_request_parameters=replace(
-                        request_context.model_request_parameters,
-                        instruction_parts=[
-                            InstructionPart(
-                                content=SYSTEM_PROMPT + "\n\n" + instructions
-                            )
-                        ],
-                    ),
-                )
             if ctx.run_step == 1:
                 prompt_parts = [
                     part
@@ -1489,7 +1479,7 @@ class PydanticModelRunner:
                     if isinstance(part, UserPromptPart)
                 ]
                 if len(prompt_parts) == 1:
-                    context_sources.mark(
+                    kinds.mark(
                         prompt_parts[0],
                         "reminder" if request.reminder is not None else "preparation",
                     )
@@ -1500,29 +1490,19 @@ class PydanticModelRunner:
             current = request.environment()
             if current is None:
                 return request_context
-            previous = next(
-                (
-                    message.metadata["fora"].get("environment")
-                    for message in reversed(request_context.messages)
-                    if isinstance(message, ModelRequest)
-                    and message.metadata is not None
-                    and "environment" in message.metadata.get("fora", {})
-                ),
-                None,
-            )
-            if previous == current:
+            if _latest(request_context.messages, "environment") == current:
                 return request_context
             environment_part = UserPromptPart(
                 "The execution environment changed.\n" + current
             )
-            context_sources.mark(environment_part, "environment")
+            kinds.mark(environment_part, "environment")
             return replace(
                 request_context,
                 messages=[
                     *request_context.messages,
                     ModelRequest(
                         parts=[environment_part],
-                        metadata={"fora": {"block": "durable", "environment": current}},
+                        metadata={"fora": {"environment": current}},
                     ),
                 ],
             )
@@ -1547,7 +1527,7 @@ class PydanticModelRunner:
                 live_model._last_response = response
                 live_model.observe_response(response)
             _persist_history(
-                request, _settle_tool_calls([*ctx.messages, response]), context_sources
+                request, _settle_tool_calls([*ctx.messages, response]), kinds
             )
             if live_model is not None:
                 live_model.response_checkpoint(response)
@@ -1644,7 +1624,6 @@ class PydanticModelRunner:
                     lambda: model,
                     request.ephemeral,
                     cache_key,
-                    instructions,
                     request.request_recorder,
                     {
                         "provider_id": config.provider_id,
@@ -1657,7 +1636,7 @@ class PydanticModelRunner:
                         "thinking_budget_tokens": config.thinking_budget_tokens,
                     },
                     request.live_observer,
-                    context_sources,
+                    kinds,
                     context_ratio_percent=parameters.context_window_ratio_percent,
                     context_window_override=parameters.context_window_tokens,
                     request_retry=RequestRetry(
@@ -1692,9 +1671,9 @@ class PydanticModelRunner:
         context_limit_reached = False
         overflow_context = None
         snapshot = (
-            _persist_history(request, history, context_sources)
+            _persist_history(request, history, kinds)
             if new_window
-            else _stored_history(history, context_sources)
+            else _stored_history(history, kinds)
         )
         with capture_run_messages() as captured, active_trace(trace):
             try:
@@ -1710,7 +1689,7 @@ class PydanticModelRunner:
                 )
                 if live_model is not None:
                     live_model.finalize(final_messages)
-                messages = _stored_history(final_messages, context_sources)
+                messages = _stored_history(final_messages, kinds)
                 new_messages = final_messages[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
             except Exception as failure:
@@ -1728,7 +1707,7 @@ class PydanticModelRunner:
                     final_messages = _settle_tool_calls(captured)
                     if live_model is not None:
                         live_model.finalize(final_messages)
-                    messages = _stored_history(final_messages, context_sources)
+                    messages = _stored_history(final_messages, kinds)
                 new_messages = captured[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
                 if reached:
@@ -1747,7 +1726,7 @@ class PydanticModelRunner:
                 final_messages = _settle_tool_calls(result.all_messages())
                 assert live_model is not None
                 live_model.finalize(final_messages)
-                messages = _stored_history(final_messages, context_sources)
+                messages = _stored_history(final_messages, kinds)
                 new_messages = result.new_messages()
                 input_tokens = _last_input_tokens(new_messages)
 
@@ -1993,23 +1972,31 @@ def _merge_requests(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
     return merged
 
 
-def _stored_history(
-    messages: Sequence[ModelMessage], context_sources: ContextSources | None
-) -> WindowContent:
-    merged = _merge_requests(messages)
-    return to_blocks(
-        context_sources.snapshot(merged, persistent=True)
-        if context_sources is not None
-        else merged
+def _latest(messages: Sequence[ModelMessage], key: str) -> Any:
+    return next(
+        (
+            message.metadata["fora"][key]
+            for message in reversed(messages)
+            if isinstance(message, ModelRequest)
+            and message.metadata is not None
+            and key in message.metadata.get("fora", {})
+        ),
+        None,
     )
+
+
+def _stored_history(
+    messages: Sequence[ModelMessage], kinds: PartKinds
+) -> WindowContent:
+    return to_blocks(kinds.persistent(_merge_requests(messages)), kinds)
 
 
 def _persist_history(
     request: TurnRequest,
     messages: list[ModelMessage],
-    context_sources: ContextSources | None = None,
+    kinds: PartKinds,
 ) -> WindowContent:
-    encoded = _stored_history(messages, context_sources)
+    encoded = _stored_history(messages, kinds)
     try:
         request.persist(encoded)
     except Exception as error:

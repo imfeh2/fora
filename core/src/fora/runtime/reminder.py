@@ -12,9 +12,9 @@ from fora.core.errors import DomainError
 from fora.core.mention import Mention
 from fora.core.turn import OVERFLOW_CONTEXT_BYTES, OVERFLOW_NOTICE_BYTES, bounded_text
 from fora.ports.agent import HistoryStore, ModelRequestRecorder, WindowState
-from fora.ports.files import FileTree
 from fora.ports.live import LiveRequestCoverage, LiveTurn, LiveTurnObserver
 from fora.ports.store import OrganizationStore
+from fora.runtime.instructions import Instructions
 from fora.tools import AgentTools
 
 
@@ -186,35 +186,6 @@ def render_resident(
     return "\n\n".join(parts)
 
 
-def read_instructions(
-    tools: AgentTools, library: FileTree, workspace: FileTree
-) -> str | None:
-    parts = []
-    for tree in (library, workspace):
-        try:
-            content, _ = tree.read("AGENTS.md")
-        except DomainError as error:
-            if error.code == "not_found":
-                continue
-            raise DomainError(
-                error.code, f"{tree.root / 'AGENTS.md'}: {error}"
-            ) from error
-        if content.strip():
-            parts.append(content)
-    skills = tools.list_skills()
-    if skills:
-        parts.append(
-            "Skills you can read with the skills tool. Read a skill before starting"
-            " the kind of work it covers:\n"
-            + "\n".join(
-                f"- {skill['name']} ({skill['source']}):"
-                f" {' '.join(skill['description'].split())}"
-                for skill in skills
-            )
-        )
-    return "\n\n".join(parts) if parts else None
-
-
 class HistoryPersistenceError(DomainError):
     def __init__(self, message: str) -> None:
         super().__init__(ErrorCode.HISTORY_PERSISTENCE, message)
@@ -283,7 +254,7 @@ class TurnRequest:
     environment: Callable[[], str | None]
     ephemeral: Callable[[], str]
     persist: Callable[[WindowContent], None]
-    instructions: str | None = None
+    instructions: Instructions | None = None
     request_recorder: ModelRequestRecorder | None = None
     live_observer: LiveTurnObserver | None = None
     model_control: ModelRequestControl = field(default_factory=ModelRequestControl)
