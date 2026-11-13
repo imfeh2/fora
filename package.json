@@ -12,6 +12,7 @@
     "build": "pnpm build:cli && pnpm build:app --debug --no-bundle --ci",
     "build:webui": "pnpm --dir webui build",
     "build:core": "node scripts/build-core.mjs",
+    "build:static": "node scripts/build-static.mjs",
     "build:python": "node scripts/build-python.mjs",
     "build:cli": "cargo build -p fora-cli --bin fora-cli --locked",
     "build:app": "pnpm --dir app exec tauri build",
