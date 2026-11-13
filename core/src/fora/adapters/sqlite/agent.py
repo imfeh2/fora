@@ -33,8 +33,8 @@ from fora.ports.agent import (
     AgentRun,
     ModelRequestHandle,
     RunSummary,
-    TurnBlock,
     TurnEffect,
+    WindowBlock,
     WindowState,
 )
 
@@ -843,25 +843,32 @@ class SqliteAgentStore:
         return self.window_content(agent_id, self.window(agent_id).number)
 
     @reading
-    def run(self, agent_id: int, sequence: int) -> AgentRun | None:
+    def block_count(self, agent_id: int, window: int) -> int:
         row = first(
             self._db.execute(
-                "SELECT * FROM agent_runs WHERE agent_id = ? AND sequence = ?",
-                (agent_id, sequence),
+                "SELECT COUNT(*) AS n FROM agent_blocks"
+                " WHERE agent_id = ? AND window_number = ?",
+                (agent_id, window),
             )
         )
-        return self._run(row) if row is not None else None
+        assert row is not None
+        return int(row["n"])
 
     @reading
-    def turn_blocks(self, agent_id: int, sequence: int) -> tuple[TurnBlock, ...]:
+    def window_blocks(
+        self, agent_id: int, window: int, *, offset: int, limit: int
+    ) -> tuple[WindowBlock, ...]:
         return tuple(
-            TurnBlock(sequence, index, Block(row["kind"], str(row["content_json"])))
-            for index, row in enumerate(
-                self._db.execute(
-                    "SELECT kind, content_json FROM agent_blocks INDEXED BY agent_blocks_run"
-                    " WHERE agent_id = ? AND sequence = ? ORDER BY position",
-                    (agent_id, sequence),
-                )
+            WindowBlock(
+                window,
+                int(row["position"]),
+                Block(row["kind"], str(row["content_json"])),
+            )
+            for row in self._db.execute(
+                "SELECT position, kind, content_json FROM agent_blocks"
+                " WHERE agent_id = ? AND window_number = ? AND position >= ?"
+                " ORDER BY position LIMIT ?",
+                (agent_id, window, offset, limit),
             )
         )
 
@@ -1017,23 +1024,21 @@ class SqliteAgentStore:
     @reading
     def search_blocks(
         self, agent_id: int, query: str, *, limit: int, offset: int
-    ) -> tuple[TurnBlock, ...]:
+    ) -> tuple[WindowBlock, ...]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self._db.execute(
-            "SELECT b.sequence, b.kind, b.content_json, b.position - ("
-            "SELECT MIN(f.position) FROM agent_blocks f INDEXED BY agent_blocks_run"
-            " WHERE f.agent_id = b.agent_id AND f.sequence = b.sequence) AS block_index"
+            "SELECT b.window_number, b.position, b.kind, b.content_json"
             " FROM agent_blocks b JOIN agent_runs r"
             " ON r.agent_id = b.agent_id AND r.sequence = b.sequence"
             " WHERE b.agent_id = ? AND r.status != 'running'"
             " AND b.content_json LIKE ? ESCAPE '\\'"
-            " ORDER BY b.sequence DESC, b.position DESC LIMIT ? OFFSET ?",
+            " ORDER BY b.window_number DESC, b.position DESC LIMIT ? OFFSET ?",
             (agent_id, f"%{escaped}%", limit, offset),
         )
         return tuple(
-            TurnBlock(
-                int(row["sequence"]),
-                int(row["block_index"]),
+            WindowBlock(
+                int(row["window_number"]),
+                int(row["position"]),
                 Block(row["kind"], str(row["content_json"])),
             )
             for row in rows

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from fora.core.blocks import Block, BlockKind
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
-from fora.ports.agent import AgentRun, HistoryStore, TurnBlock
+from fora.ports.agent import HistoryStore, WindowBlock
 
 SEARCH_LIMIT = 20
 LIST_LIMIT = 50
@@ -37,31 +37,32 @@ def _shorten(text: str, length: int) -> str:
 
 @dataclass(frozen=True)
 class BlockHit:
-    sequence: int
-    index: int
+    window: int
+    block: int
     kind: BlockKind
     snippet: str
 
 
 @dataclass(frozen=True)
 class BlockEntry:
-    index: int
+    block: int
     kind: BlockKind
     length: int
     preview: str
 
 
 @dataclass(frozen=True)
-class TurnBlocks:
-    run: AgentRun
+class WindowBlocks:
+    window: int
+    block_count: int
     blocks: tuple[BlockEntry, ...]
     next_offset: int | None
 
 
 @dataclass(frozen=True)
 class BlockText:
-    sequence: int
-    index: int
+    window: int
+    block: int
     kind: BlockKind
     text: str
     offset: int
@@ -86,68 +87,68 @@ class History:
         )
         hits = tuple(
             BlockHit(
-                item.sequence, item.index, item.block.kind, self._snippet(item, query)
+                item.window, item.position, item.block.kind, self._snippet(item, query)
             )
             for item in found[:SEARCH_LIMIT]
         )
         return hits, offset + SEARCH_LIMIT if len(found) > SEARCH_LIMIT else None
 
-    def list(self, sequence: int, offset: int = 0) -> TurnBlocks:
-        _check_number(sequence, "turn")
+    def list(self, window: int | None = None, offset: int = 0) -> WindowBlocks:
+        window = self._window(window)
         _check_number(offset, "offset")
-        run = self._run(sequence)
-        blocks = self._store.turn_blocks(self._agent_id, sequence)
+        count = self._store.block_count(self._agent_id, window)
         entries = []
-        for item in blocks[offset : offset + LIST_LIMIT]:
+        for item in self._store.window_blocks(
+            self._agent_id, window, offset=offset, limit=LIST_LIMIT
+        ):
             text = self._render(item.block)
             entries.append(
                 BlockEntry(
-                    item.index,
+                    item.position,
                     item.block.kind,
                     len(text),
                     _shorten(_line(text), PREVIEW_LENGTH),
                 )
             )
-        return TurnBlocks(
-            run,
-            tuple(entries),
-            offset + LIST_LIMIT if len(blocks) > offset + LIST_LIMIT else None,
-        )
+        end = offset + LIST_LIMIT
+        return WindowBlocks(window, count, tuple(entries), end if end < count else None)
 
-    def read(self, sequence: int, index: int, offset: int = 0) -> BlockText:
-        _check_number(sequence, "turn")
-        _check_number(index, "block")
+    def read(self, block: int, window: int | None = None, offset: int = 0) -> BlockText:
+        window = self._window(window)
+        _check_number(block, "block")
         _check_number(offset, "offset")
-        self._run(sequence)
-        blocks = self._store.turn_blocks(self._agent_id, sequence)
-        if index >= len(blocks):
+        found = self._store.window_blocks(self._agent_id, window, offset=block, limit=1)
+        if not found or found[0].position != block:
             raise DomainError(
-                ErrorCode.NOT_FOUND, f"Turn {sequence} has no block {index}"
+                ErrorCode.NOT_FOUND, f"Window {window} has no block {block}"
             )
-        block = blocks[index].block
-        text = self._render(block)
+        item = found[0]
+        text = self._render(item.block)
         if offset > len(text):
             raise DomainError(
                 ErrorCode.INVALID_OFFSET, "History offset exceeds the block length"
             )
         end = offset + READ_LIMIT
         return BlockText(
-            sequence,
-            index,
-            block.kind,
+            window,
+            block,
+            item.block.kind,
             text[offset:end],
             offset,
             len(text),
             end if end < len(text) else None,
         )
 
-    def _run(self, sequence: int) -> AgentRun:
-        run = self._store.run(self._agent_id, sequence)
-        if run is None:
-            raise DomainError(ErrorCode.NOT_FOUND, f"Turn {sequence} does not exist")
-        return run
+    def _window(self, window: int | None) -> int:
+        current = self._store.window(self._agent_id).number
+        if window is None:
+            return current
+        _check_number(window, "window")
+        if not 1 <= window <= current:
+            raise DomainError(ErrorCode.NOT_FOUND, f"Window {window} does not exist")
+        return window
 
-    def _snippet(self, item: TurnBlock, query: str) -> str:
+    def _snippet(self, item: WindowBlock, query: str) -> str:
         text = _line(self._render(item.block))
         found = text.casefold().find(query.casefold())
         if found < 0:

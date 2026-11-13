@@ -1176,8 +1176,8 @@ class AgentTools:
         return {
             "blocks": [
                 {
-                    "turn": hit.sequence,
-                    "block": hit.index,
+                    "window": hit.window,
+                    "block": hit.block,
                     "kind": hit.kind,
                     "snippet": hit.snippet,
                 }
@@ -1186,34 +1186,35 @@ class AgentTools:
             "next_offset": next_offset,
         }
 
-    def list_history(self, sequence: int, offset: int = 0) -> dict[str, Any]:
-        turn = self._history().list(sequence, offset)
+    def list_history(
+        self, window: int | None = None, offset: int = 0
+    ) -> dict[str, Any]:
+        listed = self._history().list(window, offset)
         return {
-            "turn": turn.run.sequence,
-            "status": turn.run.status,
-            "started_at": turn.run.started_at,
+            "window": listed.window,
+            "block_count": listed.block_count,
             "blocks": [
                 {
-                    "block": entry.index,
+                    "block": entry.block,
                     "kind": entry.kind,
                     "length": entry.length,
                     "preview": entry.preview,
                 }
-                for entry in turn.blocks
+                for entry in listed.blocks
             ],
-            "next_offset": turn.next_offset,
+            "next_offset": listed.next_offset,
         }
 
     def read_history(
-        self, sequence: int, index: int, offset: int = 0
+        self, block: int, window: int | None = None, offset: int = 0
     ) -> dict[str, Any]:
-        block = self._history().read(sequence, index, offset)
+        found = self._history().read(block, window, offset)
         return {
-            "turn": block.sequence,
-            "block": block.index,
-            "kind": block.kind,
-            "text": block.text,
-            "offset": block.offset,
-            "total_length": block.total_length,
-            "next_offset": block.next_offset,
+            "window": found.window,
+            "block": found.block,
+            "kind": found.kind,
+            "text": found.text,
+            "offset": found.offset,
+            "total_length": found.total_length,
+            "next_offset": found.next_offset,
         }

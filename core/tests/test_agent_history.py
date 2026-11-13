@@ -18,7 +18,7 @@ from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.blocks import Block, WindowContent
 from fora.core.errors import DomainError
-from fora.services.history import READ_LIMIT, History
+from fora.services.history import LIST_LIMIT, READ_LIMIT, History
 
 AGENT = 1
 
@@ -153,11 +153,11 @@ def history(store: SqliteAgentStore) -> History:
     return History(store, AGENT, render_block)
 
 
-def test_a_turn_lists_and_reads_its_blocks(store: SqliteAgentStore) -> None:
+def test_a_window_lists_and_reads_its_blocks(store: SqliteAgentStore) -> None:
     earlier = [ModelRequest(parts=[UserPromptPart("earlier")])]
     finish(store, earlier)
     output = "line\n" * 5000
-    turn = finish(
+    finish(
         store,
         [
             *earlier,
@@ -172,66 +172,100 @@ def test_a_turn_lists_and_reads_its_blocks(store: SqliteAgentStore) -> None:
         ],
     )
 
-    listed = history(store).list(turn)
+    listed = history(store).list()
     tool_text = 'run {"argv":["cat"]}\nResult:\n' + output
-    assert [(entry.index, entry.kind) for entry in listed.blocks] == [
-        (0, "text"),
-        (1, "tool"),
-        (2, "text"),
+    assert (listed.window, listed.block_count) == (1, 4)
+    assert [(entry.block, entry.kind) for entry in listed.blocks] == [
+        (0, "input"),
+        (1, "text"),
+        (2, "tool"),
+        (3, "text"),
     ]
-    assert listed.blocks[1].length == len(tool_text)
-    assert listed.blocks[1].preview.startswith('run {"argv":["cat"]} Result: line')
+    assert listed.blocks[2].length == len(tool_text)
+    assert listed.blocks[2].preview.startswith('run {"argv":["cat"]} Result: line')
     assert listed.next_offset is None
 
     pieces = []
     offset: int | None = 0
     while offset is not None:
-        page = history(store).read(turn, 1, offset)
+        page = history(store).read(2, offset=offset)
         pieces.append(page.text)
         offset = page.next_offset
     assert "".join(pieces) == tool_text
     assert len(pieces) == -(-len(tool_text) // READ_LIMIT)
 
 
-def test_a_missing_turn_or_block_is_not_found(store: SqliteAgentStore) -> None:
-    turn = finish(store, [ModelRequest(parts=[UserPromptPart("only")])])
+def test_a_long_window_lists_in_pages(store: SqliteAgentStore) -> None:
+    finish(
+        store,
+        [ModelRequest(parts=[UserPromptPart(f"note {index}")]) for index in range(120)],
+    )
 
-    with pytest.raises(DomainError, match="has no block 1"):
-        history(store).read(turn, 1)
-    with pytest.raises(DomainError, match="does not exist"):
-        history(store).list(turn + 1)
+    pages = []
+    offset: int | None = 0
+    while offset is not None:
+        listed = history(store).list(offset=offset)
+        pages.append([entry.block for entry in listed.blocks])
+        offset = listed.next_offset
+
+    assert [len(page) for page in pages] == [LIST_LIMIT, LIST_LIMIT, 20]
+    assert [block for page in pages for block in page] == list(range(120))
+
+
+def test_an_earlier_window_stays_readable(store: SqliteAgentStore) -> None:
+    finish(store, [ModelRequest(parts=[UserPromptPart("before the reset")])])
+    store.reset_window(AGENT, "prepared")
+    finish(store, [ModelRequest(parts=[UserPromptPart("after the reset")])])
+
+    assert history(store).read(0).text == "after the reset"
+    assert history(store).read(0, window=1).text == "before the reset"
+    assert history(store).list(1).block_count == 1
+
+
+def test_a_missing_window_or_block_is_not_found(store: SqliteAgentStore) -> None:
+    finish(store, [ModelRequest(parts=[UserPromptPart("only")])])
+
+    with pytest.raises(DomainError, match="Window 1 has no block 1"):
+        history(store).read(1)
+    with pytest.raises(DomainError, match="Window 2 does not exist"):
+        history(store).list(2)
+    with pytest.raises(DomainError, match="must be a non-negative integer"):
+        history(store).read(0, window=-1)
 
 
 def test_search_finds_the_block_that_holds_the_text(
     store: SqliteAgentStore,
 ) -> None:
     messages: list = []
-    turns = []
     for text in ("alpha", "needle 100%", "omega"):
         messages = [
             *messages,
             ModelRequest(parts=[UserPromptPart(f"reminder {text}")]),
             ModelResponse(parts=[TextPart(f"answer {text}")]),
         ]
-        turns.append(finish(store, messages))
+        finish(store, messages)
+    store.reset_window(AGENT, "prepared")
+    finish(store, [ModelRequest(parts=[UserPromptPart("needle again")])])
 
-    found, next_offset = history(store).search("NEEDLE 100%")
+    found, next_offset = history(store).search("NEEDLE")
 
-    assert [(hit.sequence, hit.index, hit.kind) for hit in found] == [
-        (turns[1], 1, "text"),
-        (turns[1], 0, "input"),
+    assert [(hit.window, hit.block, hit.kind) for hit in found] == [
+        (2, 0, "input"),
+        (1, 3, "text"),
+        (1, 2, "input"),
     ]
-    assert found[0].snippet == "answer needle 100%"
+    assert found[1].snippet == "answer needle 100%"
     assert next_offset is None
     assert history(store).search("needle 1000") == ((), None)
 
 
-def test_search_pages_through_finished_turns(store: SqliteAgentStore) -> None:
+def test_search_pages_and_skips_the_work_in_progress(
+    store: SqliteAgentStore,
+) -> None:
     messages: list = []
-    finished = []
     for index in range(45):
         messages = [*messages, ModelRequest(parts=[UserPromptPart(f"needle {index}")])]
-        finished.append(finish(store, messages))
+        finish(store, messages)
     running = store.start_run(AGENT)
     store.save_history(
         AGENT,
@@ -243,10 +277,10 @@ def test_search_pages_through_finished_turns(store: SqliteAgentStore) -> None:
     offset: int | None = 0
     while offset is not None:
         found, offset = history(store).search("needle", offset)
-        pages.append([hit.sequence for hit in found])
+        pages.append([hit.block for hit in found])
 
     assert [len(page) for page in pages] == [20, 20, 5]
-    assert [sequence for page in pages for sequence in page] == finished[::-1]
+    assert [block for page in pages for block in page] == list(range(44, -1, -1))
 
 
 def test_request_payloads_are_stored_once(store: SqliteAgentStore) -> None:

@@ -39,9 +39,9 @@ class ModelRequestHandle:
 
 
 @dataclass(frozen=True)
-class TurnBlock:
-    sequence: int
-    index: int
+class WindowBlock:
+    window: int
+    position: int
     block: Block
 
 
@@ -212,13 +212,15 @@ class HistoryStore(Protocol):
 
     def mark_session_start(self) -> int: ...
 
-    def run(self, agent_id: int, sequence: int) -> AgentRun | None: ...
+    def block_count(self, agent_id: int, window: int) -> int: ...
 
-    def turn_blocks(self, agent_id: int, sequence: int) -> tuple[TurnBlock, ...]: ...
+    def window_blocks(
+        self, agent_id: int, window: int, *, offset: int, limit: int
+    ) -> tuple[WindowBlock, ...]: ...
 
     def search_blocks(
         self, agent_id: int, query: str, *, limit: int, offset: int
-    ) -> tuple[TurnBlock, ...]: ...
+    ) -> tuple[WindowBlock, ...]: ...
 
 
 class SettingsStore(Protocol):
