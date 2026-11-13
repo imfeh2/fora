@@ -117,15 +117,12 @@ CREATE TABLE IF NOT EXISTS agent_blocks (
     sequence INTEGER NOT NULL,
     kind TEXT NOT NULL,
     digest BLOB NOT NULL,
-    char_length INTEGER NOT NULL,
     content_json TEXT NOT NULL,
     UNIQUE (agent_id, window_number, position),
     FOREIGN KEY (agent_id, sequence) REFERENCES agent_runs(agent_id, sequence)
 );
 CREATE INDEX IF NOT EXISTS agent_blocks_digest
 ON agent_blocks (agent_id, window_number, position, sequence, digest);
-CREATE INDEX IF NOT EXISTS agent_blocks_run
-ON agent_blocks (agent_id, sequence, position, char_length);
 CREATE TABLE IF NOT EXISTS agent_request_payloads (
     digest BLOB PRIMARY KEY,
     content_json TEXT NOT NULL
@@ -160,6 +157,12 @@ class SqliteAgentStore:
     def __init__(self, db: LockedConnection) -> None:
         self._db = db
         self._db.executescript(SCHEMA)
+        if "char_length" in {
+            row["name"] for row in self._db.execute("PRAGMA table_info(agent_blocks)")
+        }:
+            with self._db:
+                self._db.execute("DROP INDEX agent_blocks_run")
+                self._db.execute("ALTER TABLE agent_blocks DROP COLUMN char_length")
         with self._db:
             self._db.execute(
                 "INSERT OR IGNORE INTO agent_window_events "
@@ -538,11 +541,7 @@ class SqliteAgentStore:
             window_number,
             sequence,
             [
-                {
-                    "kind": block.kind,
-                    "char_length": len(block.parts),
-                    "content_json": block.parts,
-                }
+                {"kind": block.kind, "content_json": block.parts}
                 for block in content.blocks
             ],
         )

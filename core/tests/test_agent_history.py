@@ -318,3 +318,35 @@ def test_a_previous_history_layout_is_refused(tmp_path: Path, table: str) -> Non
 
     with pytest.raises(RuntimeError, match="previous layout"):
         SqliteStore(path)
+
+
+def test_the_unused_block_length_is_dropped(tmp_path: Path) -> None:
+    path = tmp_path / "fora.sqlite3"
+    first = SqliteStore(path)
+    SqliteAgentStore(first._db)
+    first.close()
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "ALTER TABLE agent_blocks ADD COLUMN char_length INTEGER NOT NULL DEFAULT 0"
+        )
+        connection.execute(
+            "CREATE INDEX agent_blocks_run"
+            " ON agent_blocks (agent_id, sequence, position, char_length)"
+        )
+    connection.close()
+
+    database = SqliteStore(path)
+    try:
+        store = SqliteAgentStore(database._db)
+        finish(store, [ModelRequest(parts=[UserPromptPart("kept")])])
+        columns = {
+            row["name"] for row in store._db.execute("PRAGMA table_info(agent_blocks)")
+        }
+        indexes = {
+            row["name"] for row in store._db.execute("PRAGMA index_list(agent_blocks)")
+        }
+        assert "char_length" not in columns
+        assert "agent_blocks_run" not in indexes
+        assert history(store).read(0).text == "kept"
+    finally:
+        database.close()
