@@ -91,13 +91,44 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _scalar(value: Any) -> str:
+    return value if isinstance(value, str) else _dump(value)
+
+
+def _nested(value: Any) -> bool:
+    return (isinstance(value, dict | list) and bool(value)) or (
+        isinstance(value, str) and "\n" in value
+    )
+
+
+def _lines(value: Any, indent: str) -> list[str]:
+    if isinstance(value, str):
+        return [(indent + line).rstrip() for line in value.rstrip("\n").split("\n")]
+    if isinstance(value, dict) and value:
+        items = [(f"{key}:", item) for key, item in value.items()]
+    elif isinstance(value, list) and value:
+        items = [("-", item) for item in value]
+    else:
+        return [indent + _dump(value)]
+    lines = []
+    for label, item in items:
+        if label == "-" and isinstance(item, dict) and item:
+            nested = _lines(item, indent + "  ")
+            lines.append(f"{indent}- {nested[0].lstrip()}")
+            lines.extend(nested[1:])
+        elif _nested(item):
+            lines.append(indent + label)
+            lines.extend(_lines(item, indent + "  "))
+        else:
+            lines.append(f"{indent}{label} {_scalar(item)}".rstrip())
+    return lines
+
+
 def _text(value: Any) -> str:
     value = _plain(value)
     if isinstance(value, str):
         return value
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return "\n".join(value)
-    return _dump(value)
+    return "\n".join(_lines(value, ""))
 
 
 def _arguments(value: Any) -> str:

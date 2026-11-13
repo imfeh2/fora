@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RequestUsage
 
-from fora.adapters.model.blocks import from_blocks, to_blocks
+from fora.adapters.model.blocks import from_blocks, render_block, to_blocks
 from fora.core.blocks import Block, WindowContent
 from fora.runtime.reminder import HistoryPersistenceError, HistoryValidationError
 
@@ -55,6 +55,20 @@ WINDOW = [
     ModelRequest(parts=[RetryPromptPart("answer in text")]),
     ModelResponse(parts=[]),
 ]
+
+
+STRUCTURED = """run {"argv":["ls"]}
+Result:
+exit_code: 0
+stdout:
+  a
+  b
+stderr:
+files:
+  - path: /x
+    tags:
+      - p
+  - y"""
 
 
 def encoded(messages) -> bytes:
@@ -146,3 +160,29 @@ def test_a_message_missing_a_part_is_invalid() -> None:
 
     with pytest.raises(HistoryValidationError):
         from_blocks(damaged)
+
+
+def test_a_structured_result_reads_line_by_line() -> None:
+    content = to_blocks(
+        [
+            ModelResponse(
+                parts=[ToolCallPart("run", {"argv": ["ls"]}, tool_call_id="r")]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        "run",
+                        {
+                            "exit_code": 0,
+                            "stdout": "a\nb\n",
+                            "stderr": "",
+                            "files": [{"path": "/x", "tags": ["p"]}, "y"],
+                        },
+                        tool_call_id="r",
+                    )
+                ]
+            ),
+        ]
+    )
+
+    assert render_block(content.blocks[0]) == STRUCTURED
