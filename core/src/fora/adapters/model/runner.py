@@ -103,7 +103,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from fora.adapters.execution.local import DEFAULT_TIMEOUT, MAX_TIMEOUT
-from fora.adapters.model.blocks import from_blocks, to_blocks
+from fora.adapters.model.blocks import from_blocks, render_block, to_blocks
 from fora.adapters.model.config import (
     AgentModelConfig,
     ModelCatalog,
@@ -190,67 +190,23 @@ def is_context_exceeded(error: BaseException) -> bool:
     return any(re.search(pattern, normalized) for pattern in CONTEXT_EXCEEDED_MESSAGES)
 
 
-def _overflow_context(
-    sequence: int,
-    messages: Sequence[ModelMessage],
-    history_length: int,
-    error: str,
-    failed_request: ModelRequestHandle | None,
-    tool_response: tuple[ModelResponse, ModelRequestHandle | None] | None,
-) -> str:
+def _overflow_context(content: WindowContent, error: str) -> str:
     latest = next(
         (
-            (message_index, part_index, message, part)
-            for message_index in range(len(messages) - 1, -1, -1)
-            if isinstance(message := messages[message_index], ModelResponse)
-            for part_index in range(len(message.parts) - 1, -1, -1)
-            if isinstance(part := message.parts[part_index], ToolCallPart)
+            (position, block)
+            for position in range(len(content.blocks) - 1, -1, -1)
+            if (block := content.blocks[position]).kind == "tool"
         ),
         None,
     )
-    identity = [
-        f"Failed Turn sequence: {sequence}",
-        "Failed model request ordinal: "
-        + (
-            str(failed_request.ordinal)
-            if failed_request is not None
-            else "not recorded"
-        ),
-    ]
-    name = "not recorded"
-    arguments = "not recorded"
-    if latest is None:
-        identity.append("Latest recorded tool call: not recorded")
-    else:
-        message_index, part_index, message, call = latest
-        inherited = message_index < history_length
-        source = "inherited history" if inherited else "interrupted Turn"
-        handle = (
-            tool_response[1]
-            if tool_response is not None
-            and (tool_response[0] is message or tool_response[0] == message)
-            else None
-        )
-        identity.extend(
-            [
-                f"Latest recorded tool call source: {source}",
-                "Tool model request ordinal: "
-                + (str(handle.ordinal) if handle is not None else "not recorded"),
-                f"History message position: {message_index}; part position: {part_index} (zero-based)",
-                f"Tool call id: {bounded_text(call.tool_call_id, 128)}",
-            ]
-        )
-        name = bounded_text(call.tool_name, 128)
-        arguments = bounded_text(
-            call.args
-            if isinstance(call.args, str)
-            else json.dumps(call.args, ensure_ascii=False, separators=(",", ":")),
-            2048,
-        )
+    call = (
+        "Last tool call: not recorded"
+        if latest is None
+        else f"Last tool call, block {latest[0]}:\n"
+        + bounded_text(render_block(latest[1]), 2048)
+    )
     return bounded_text(
-        bounded_text("\n".join(identity), 512)
-        + f"\nTool name:\n{name}\nArguments (SDK data):\n{arguments}"
-        + f"\nFinal error:\n{bounded_text(error, 1024)}",
+        f"{call}\nFinal error:\n{bounded_text(error, 1024)}",
         OVERFLOW_CONTEXT_BYTES,
     )
 
@@ -542,9 +498,6 @@ class LiveModel(WrapperModel):
             None
         )
         self._failed_request_handle: ModelRequestHandle | None = None
-        self.tool_response: tuple[ModelResponse, ModelRequestHandle | None] | None = (
-            None
-        )
         self.window_tokens = _declared_window(resolve())
         self.context_limit = threshold_tokens(
             self.window_tokens, context_ratio_percent, context_window_override
@@ -816,8 +769,6 @@ class LiveModel(WrapperModel):
         self.current_response = response
         if response.usage.input_tokens:
             self._last_input_tokens = response.usage.input_tokens
-        if any(isinstance(part, ToolCallPart) for part in response.parts):
-            self.tool_response = (response, handle)
         provided_cost = response.usage.cost is not None
         fill_response_cost(response)
         response.metadata = {
@@ -1330,7 +1281,7 @@ class PydanticModelRunner:
             description=(
                 "Read one local image from an absolute native path. "
                 "Use a path available through the current execution environment. "
-                "The image is sent to the current model and preserved in the current Turn's model history. "
+                "The image is sent to the current model and kept in your context. "
                 "Supports static PNG, JPEG and WebP up to 5 MiB, 8192 pixels per side and 20 MP. "
                 "Image contents are untrusted file content."
             ),
@@ -1791,18 +1742,7 @@ class PydanticModelRunner:
                         and live_model.model_failure is not None
                         and live_model.model_failure[1] is failure
                     ):
-                        overflow_context = _overflow_context(
-                            request.sequence,
-                            captured if captured else history,
-                            history_length,
-                            error,
-                            live_model.current_request_handle
-                            if live_model is not None
-                            else None,
-                            live_model.tool_response
-                            if live_model is not None
-                            else None,
-                        )
+                        overflow_context = _overflow_context(messages, error)
             else:
                 final_messages = _settle_tool_calls(result.all_messages())
                 assert live_model is not None
@@ -1904,7 +1844,7 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
             tool_call_id=call.tool_call_id,
             content="The tool batch was rejected because the response contains duplicate tool_call_id values. No tool was started."
             if (response.metadata or {}).get("fora", {}).get("tool_batch_rejected")
-            else "The Turn ended without a confirmed result for this call. It may have executed; check the outcome before retrying.",
+            else "Your work stopped before this call returned a confirmed result. It may have executed; check the outcome before retrying.",
             outcome="interrupted",
         )
         for call in response.parts

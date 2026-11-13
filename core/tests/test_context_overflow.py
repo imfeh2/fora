@@ -5,14 +5,21 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import FunctionModel
 
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
-from fora.adapters.model.blocks import render_block
-from fora.adapters.model.runner import PydanticModelRunner
+from fora.adapters.model.blocks import render_block, to_blocks
+from fora.adapters.model.runner import PydanticModelRunner, _overflow_context
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.blocks import WindowContent
@@ -225,3 +232,25 @@ def test_first_turn_of_a_window_is_intentionally_not_reset_again(
     assert window.since_sequence == rejected.sequence
     assert window.reason is None
     assert fora.settings.lifecycle(agent.id).error is not None
+
+
+def test_the_overflow_record_points_at_the_last_tool_block() -> None:
+    content = to_blocks(
+        [
+            ModelRequest(parts=[UserPromptPart("start")]),
+            ModelResponse(
+                parts=[ToolCallPart("run", {"argv": ["ls"]}, tool_call_id="a")]
+            ),
+            ModelRequest(parts=[ToolReturnPart("run", "files", tool_call_id="a")]),
+            ModelResponse(parts=[TextPart("checking")]),
+        ]
+    )
+
+    assert _overflow_context(content, "too long") == (
+        "Last tool call, block 1:\n"
+        'run {"argv":["ls"]}\nResult:\nfiles\n'
+        "Final error:\ntoo long"
+    )
+    assert _overflow_context(WindowContent(), "too long") == (
+        "Last tool call: not recorded\nFinal error:\ntoo long"
+    )

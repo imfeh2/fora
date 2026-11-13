@@ -125,10 +125,11 @@ def exchange_nudge(
 
 
 PREPARATION_PROMPT = (
-    "Your context window is almost full and will be reset when this Turn ends."
+    "Your context window is almost full and will be reset when you stop."
     " Nothing in this window carries over by itself. Write what you will still need"
     " into MEMORY.md or a workspace file, including the current state"
-    " of your in-progress work. Do not start new work. Then end the Turn."
+    " of your in-progress work. Do not start new work. Then finish with a final"
+    " message."
 )
 
 
@@ -138,17 +139,19 @@ def reset_notice(state: WindowState) -> str | None:
     if state.reason == "prepared":
         return (
             f"Your context window was reset at {state.reset_at} after you saved your"
-            " notes. Use the history tool at least once to review your progress and"
-            " tool results from before the previous window ended. Then continue using"
+            f" notes. The previous one is window {state.number - 1}. Use the history"
+            " tool at least once to review your progress and tool results from the"
+            " end of that window. Then continue using"
             " your saved records and the latest discussions. Look up only the history"
             " you need; you do not need to read it all."
         )
     if state.reason == "overflow":
         guidance = (
-            f"Your context window was reset at {state.reset_at} in the middle of a"
-            " Turn because it overflowed, so you could not save notes first. Use the"
-            " history tool to inspect the most recent interrupted turn, the last"
-            " completed operation, and any tool calls that did not return. Confirm"
+            f"Your context window was reset at {state.reset_at} while you were"
+            " working because it overflowed, so you could not save notes first. The"
+            f" previous one is window {state.number - 1}. Use the history tool to"
+            " inspect the last blocks of that window: the last completed operation"
+            " and any tool calls that did not return. Confirm"
             " where to continue from. Look up only the history you need; you do not"
             " need to read it all."
         )
