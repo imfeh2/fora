@@ -74,3 +74,51 @@ def from_blocks(content: WindowContent) -> list[ModelMessage]:
         raise
     except (ValueError, TypeError, IndexError) as error:
         raise HistoryValidationError("Stored model history is invalid") from error
+
+
+MEDIA = frozenset(
+    {"binary", "image-url", "audio-url", "video-url", "document-url", "uploaded-file"}
+)
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("kind") in MEDIA:
+            return f"[{value.get('media_type') or value['kind']}]"
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _text(value: Any) -> str:
+    value = _plain(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return "\n".join(value)
+    return _dump(value)
+
+
+def _arguments(value: Any) -> str:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value
+    return _dump(value)
+
+
+def render_block(block: Block) -> str:
+    lines = []
+    for _, _, part in json.loads(block.parts):
+        kind = part["part_kind"]
+        if kind in CALLS:
+            lines.append(f"{part['tool_name']} {_arguments(part.get('args'))}")
+        elif block.kind == "tool" and kind == "retry-prompt":
+            lines.append("Error:\n" + _text(part["content"]))
+        elif block.kind == "tool":
+            lines.append("Result:\n" + _text(part["content"]))
+        else:
+            lines.append(_text(part["content"]))
+    return "\n".join(lines)

@@ -7,6 +7,7 @@ import pytest
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
+from fora.adapters.model.blocks import render_block
 from fora.adapters.model.prompt import SYSTEM_PROMPT
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -52,6 +53,7 @@ def world(tmp_path: Path):
         execution=ExecutionManager(enforce=False),
         agent_directory_for=agent_directory_for,
         decode_image=decode_image,
+        render_block=render_block,
         library_tree=DirectoryTree(library),
         workspace_tree_for=lambda member_id: DirectoryTree(workspace),
     )

@@ -4,11 +4,21 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
+from fora.adapters.model.blocks import render_block, to_blocks
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
 from fora.core.blocks import Block, WindowContent
-from fora.services.history import History
+from fora.core.errors import DomainError
+from fora.services.history import READ_LIMIT, History
 
 AGENT = 1
 
@@ -131,95 +141,109 @@ def test_each_window_keeps_its_own_messages(store: SqliteAgentStore) -> None:
     assert store.current_content(AGENT) == content_of([message("new")])
 
 
-def test_a_turn_reads_back_exactly_what_it_wrote(store: SqliteAgentStore) -> None:
-    earlier = store.start_run(AGENT)
-    store.finish_run(
-        AGENT,
-        earlier.sequence,
-        status="completed",
-        content=content_of([message("earlier")]),
-    )
+def finish(store: SqliteAgentStore, messages: list) -> int:
     run = store.start_run(AGENT)
-    own = [
-        message('line one\nline "two"\t\\ 中文，标点 🙂'),
-        message("second"),
-        message("third " * 50),
-    ]
     store.finish_run(
-        AGENT,
-        run.sequence,
-        status="completed",
-        content=content_of([message("earlier"), *own]),
+        AGENT, run.sequence, status="completed", content=to_blocks(messages)
     )
-    expected = "[" + ",".join(own) + "]"
-
-    for limit in (1, 7, 64, len(expected) + 10):
-        pieces = []
-        offset = 0
-        while True:
-            page = store.read_run_slice(AGENT, run.sequence, offset, limit)
-            assert page is not None
-            assert page.total_length == len(expected)
-            pieces.append(page.messages)
-            offset = page.offset + len(page.messages)
-            if offset >= page.total_length:
-                break
-        assert "".join(pieces) == expected
-
-    tail = store.read_run_slice(AGENT, run.sequence, None, 20)
-    assert tail is not None
-    assert tail.messages == expected[-20:]
+    return run.sequence
 
 
-def test_a_turn_without_messages_reads_as_an_empty_list(
+def history(store: SqliteAgentStore) -> History:
+    return History(store, AGENT, render_block)
+
+
+def test_a_turn_lists_and_reads_its_blocks(store: SqliteAgentStore) -> None:
+    earlier = [ModelRequest(parts=[UserPromptPart("earlier")])]
+    finish(store, earlier)
+    output = "line\n" * 5000
+    turn = finish(
+        store,
+        [
+            *earlier,
+            ModelResponse(
+                parts=[
+                    TextPart("checking"),
+                    ToolCallPart("run", {"argv": ["cat"]}, tool_call_id="c"),
+                ]
+            ),
+            ModelRequest(parts=[ToolReturnPart("run", output, tool_call_id="c")]),
+            ModelResponse(parts=[TextPart("done")]),
+        ],
+    )
+
+    listed = history(store).list(turn)
+    tool_text = 'run {"argv":["cat"]}\nResult:\n' + output
+    assert [(entry.index, entry.kind) for entry in listed.blocks] == [
+        (0, "text"),
+        (1, "tool"),
+        (2, "text"),
+    ]
+    assert listed.blocks[1].length == len(tool_text)
+    assert listed.blocks[1].preview.startswith('run {"argv":["cat"]} Result: line')
+    assert listed.next_offset is None
+
+    pieces = []
+    offset: int | None = 0
+    while offset is not None:
+        page = history(store).read(turn, 1, offset)
+        pieces.append(page.text)
+        offset = page.next_offset
+    assert "".join(pieces) == tool_text
+    assert len(pieces) == -(-len(tool_text) // READ_LIMIT)
+
+
+def test_a_missing_turn_or_block_is_not_found(store: SqliteAgentStore) -> None:
+    turn = finish(store, [ModelRequest(parts=[UserPromptPart("only")])])
+
+    with pytest.raises(DomainError, match="has no block 1"):
+        history(store).read(turn, 1)
+    with pytest.raises(DomainError, match="does not exist"):
+        history(store).list(turn + 1)
+
+
+def test_search_finds_the_block_that_holds_the_text(
     store: SqliteAgentStore,
 ) -> None:
-    run = store.start_run(AGENT)
-
-    page = store.read_run_slice(AGENT, run.sequence, None, 2048)
-
-    assert page is not None
-    assert (page.messages, page.total_length) == ("[]", 2)
-
-
-def test_search_finds_the_turn_that_wrote_the_text(store: SqliteAgentStore) -> None:
-    history: list[str] = []
-    sequences = []
+    messages: list = []
+    turns = []
     for text in ("alpha", "needle 100%", "omega"):
-        run = store.start_run(AGENT)
-        history.append(message(text))
-        store.finish_run(
-            AGENT, run.sequence, status="completed", content=content_of(history)
-        )
-        sequences.append(run.sequence)
+        messages = [
+            *messages,
+            ModelRequest(parts=[UserPromptPart(f"reminder {text}")]),
+            ModelResponse(parts=[TextPart(f"answer {text}")]),
+        ]
+        turns.append(finish(store, messages))
 
-    assert [run.sequence for run in store.search_runs(AGENT, "needle 100%")] == [
-        sequences[1]
+    found, next_offset = history(store).search("NEEDLE 100%")
+
+    assert [(hit.sequence, hit.index, hit.kind) for hit in found] == [
+        (turns[1], 1, "text"),
+        (turns[1], 0, "input"),
     ]
-    assert store.search_runs(AGENT, "needle 1000") == ()
+    assert found[0].snippet == "answer needle 100%"
+    assert next_offset is None
+    assert history(store).search("needle 1000") == ((), None)
 
 
 def test_search_pages_through_finished_turns(store: SqliteAgentStore) -> None:
-    history: list[str] = []
+    messages: list = []
     finished = []
     for index in range(45):
-        run = store.start_run(AGENT)
-        history.append(message(f"needle {index}"))
-        store.finish_run(
-            AGENT, run.sequence, status="completed", content=content_of(history)
-        )
-        finished.append(run.sequence)
+        messages = [*messages, ModelRequest(parts=[UserPromptPart(f"needle {index}")])]
+        finished.append(finish(store, messages))
     running = store.start_run(AGENT)
     store.save_history(
-        AGENT, running.sequence, content_of([*history, message("needle now")])
+        AGENT,
+        running.sequence,
+        to_blocks([*messages, ModelRequest(parts=[UserPromptPart("needle now")])]),
     )
-    search = History(store, AGENT)
 
     pages = []
     offset: int | None = 0
     while offset is not None:
-        found, offset = search.search("needle", offset)
-        pages.append([run.sequence for run in found])
+        found, offset = history(store).search("needle", offset)
+        pages.append([hit.sequence for hit in found])
 
     assert [len(page) for page in pages] == [20, 20, 5]
     assert [sequence for page in pages for sequence in page] == finished[::-1]
@@ -242,13 +266,20 @@ def test_request_payloads_are_stored_once(store: SqliteAgentStore) -> None:
     assert [row["status"] for row in statuses] == ["completed"] * 3
 
 
-def test_the_previous_history_layout_is_refused(tmp_path: Path) -> None:
-    path = tmp_path / "fora.sqlite3"
-    with sqlite3.connect(path) as connection:
-        connection.execute(
+@pytest.mark.parametrize(
+    "table",
+    [
+        (
             "CREATE TABLE agent_runs (agent_id INTEGER, sequence INTEGER,"
             " messages_json TEXT NOT NULL DEFAULT '[]')"
-        )
+        ),
+        "CREATE TABLE agent_messages (agent_id INTEGER, content_json TEXT)",
+    ],
+)
+def test_a_previous_history_layout_is_refused(tmp_path: Path, table: str) -> None:
+    path = tmp_path / "fora.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(table)
     connection.close()
 
     with pytest.raises(RuntimeError, match="previous layout"):

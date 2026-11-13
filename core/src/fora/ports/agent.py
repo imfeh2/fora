@@ -5,7 +5,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
-from fora.core.blocks import WindowContent
+from fora.core.blocks import Block, WindowContent
 
 
 @dataclass(frozen=True)
@@ -39,14 +39,10 @@ class ModelRequestHandle:
 
 
 @dataclass(frozen=True)
-class HistorySlice:
+class TurnBlock:
     sequence: int
-    status: str
-    started_at: str
-    messages: str
-    offset: int
-    total_length: int
-    last_saved_at: str | None = None
+    index: int
+    block: Block
 
 
 @dataclass(frozen=True)
@@ -216,13 +212,13 @@ class HistoryStore(Protocol):
 
     def mark_session_start(self) -> int: ...
 
-    def search_runs(
-        self, agent_id: int, query: str, *, limit: int = 20, offset: int = 0
-    ) -> tuple[AgentRun, ...]: ...
+    def run(self, agent_id: int, sequence: int) -> AgentRun | None: ...
 
-    def read_run_slice(
-        self, agent_id: int, sequence: int, offset: int | None, limit: int
-    ) -> HistorySlice | None: ...
+    def turn_blocks(self, agent_id: int, sequence: int) -> tuple[TurnBlock, ...]: ...
+
+    def search_blocks(
+        self, agent_id: int, query: str, *, limit: int, offset: int
+    ) -> tuple[TurnBlock, ...]: ...
 
 
 class SettingsStore(Protocol):

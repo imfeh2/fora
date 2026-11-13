@@ -13,6 +13,7 @@ from fora.adapters.execution.local import LocalExecution
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
+from fora.adapters.model.blocks import render_block
 from fora.adapters.sandbox.commands import linux_command, macos_profile
 from fora.adapters.sandbox.paths import helper_directories
 from fora.adapters.sqlite.agent import SqliteAgentStore
@@ -83,6 +84,7 @@ def build(tmp_path: Path, *, enforce: bool) -> Iterator[World]:
         execution=execution,
         agent_directory_for=agent_directory_for,
         decode_image=decode_image,
+        render_block=render_block,
         data_directory=data,
         library_tree=DirectoryTree(data / "library"),
         workspace_tree_for=lambda member_id: DirectoryTree(

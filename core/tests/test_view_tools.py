@@ -13,6 +13,7 @@ from pydantic_ai.models.function import FunctionModel
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import DirectoryUploads, decode_image
+from fora.adapters.model.blocks import render_block
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -57,6 +58,7 @@ def world(tmp_path: Path):
         execution=ExecutionManager(enforce=False),
         agent_directory_for=agent_directory_for,
         decode_image=decode_image,
+        render_block=render_block,
         uploads=Uploads(store, DirectoryUploads(tmp_path / "uploads")),
         library_tree=DirectoryTree(tmp_path / "library"),
         workspace_tree_for=lambda member_id: DirectoryTree(

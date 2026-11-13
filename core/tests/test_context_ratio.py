@@ -20,6 +20,7 @@ from pydantic_ai.usage import RunUsage
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
+from fora.adapters.model.blocks import render_block
 from fora.adapters.model.runner import (
     ContextWindowReached,
     LiveModel,
@@ -165,6 +166,7 @@ def fora(tmp_path: Path) -> Iterator[Fora]:
         execution=ExecutionManager(),
         agent_directory_for=agent_directory_for,
         decode_image=decode_image,
+        render_block=render_block,
         reading=database._db.read,
         library_tree=DirectoryTree(tmp_path / "library"),
         workspace_tree_for=lambda member_id: DirectoryTree(

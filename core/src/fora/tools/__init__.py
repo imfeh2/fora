@@ -30,6 +30,7 @@ from fora.core.attachment import (
     ViewedImage,
     identifier,
 )
+from fora.core.blocks import Block
 from fora.core.discussion import Discussion, Message, validate_body, validate_topic
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
@@ -71,6 +72,7 @@ class Dependencies:
     workspace_tree_for: Callable[[int], FileTree]
     agent_directory_for: Callable[[int], Path]
     decode_image: Callable[[bytes], ImageData]
+    render_block: Callable[[Block], str]
     uploads: Uploads | None = None
     reading: Callable[[], AbstractContextManager[None]] = nullcontext
     data_directory: Path | None = None
@@ -1165,37 +1167,53 @@ class AgentTools:
         )
 
     def _history(self) -> History:
-        return History(self._deps.history, self._actor.member_id)
+        return History(
+            self._deps.history, self._actor.member_id, self._deps.render_block
+        )
 
     def search_history(self, query: str, offset: int = 0) -> dict[str, Any]:
         found, next_offset = self._history().search(query, offset)
         return {
-            "turns": [
+            "blocks": [
                 {
-                    "sequence": item.sequence,
-                    "status": item.status,
-                    "started_at": item.started_at,
+                    "turn": hit.sequence,
+                    "block": hit.index,
+                    "kind": hit.kind,
+                    "snippet": hit.snippet,
                 }
-                for item in found
+                for hit in found
             ],
             "next_offset": next_offset,
         }
 
-    def read_history(self, sequence: int, offset: int | None = None) -> dict[str, Any]:
-        run = self._history().read(sequence, offset)
-        if run is None:
-            raise DomainError(ErrorCode.NOT_FOUND, f"Run {sequence} does not exist")
-        next_offset = (
-            run.offset + len(run.messages)
-            if run.offset + len(run.messages) < run.total_length
-            else None
-        )
+    def list_history(self, sequence: int, offset: int = 0) -> dict[str, Any]:
+        turn = self._history().list(sequence, offset)
         return {
-            "sequence": run.sequence,
-            "status": run.status,
-            "started_at": run.started_at,
-            "messages": run.messages,
-            "offset": run.offset,
-            "total_length": run.total_length,
-            "next_offset": next_offset,
+            "turn": turn.run.sequence,
+            "status": turn.run.status,
+            "started_at": turn.run.started_at,
+            "blocks": [
+                {
+                    "block": entry.index,
+                    "kind": entry.kind,
+                    "length": entry.length,
+                    "preview": entry.preview,
+                }
+                for entry in turn.blocks
+            ],
+            "next_offset": turn.next_offset,
+        }
+
+    def read_history(
+        self, sequence: int, index: int, offset: int = 0
+    ) -> dict[str, Any]:
+        block = self._history().read(sequence, index, offset)
+        return {
+            "turn": block.sequence,
+            "block": block.index,
+            "kind": block.kind,
+            "text": block.text,
+            "offset": block.offset,
+            "total_length": block.total_length,
+            "next_offset": block.next_offset,
         }

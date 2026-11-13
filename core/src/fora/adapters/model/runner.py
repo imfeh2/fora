@@ -1396,19 +1396,21 @@ class PydanticModelRunner:
             sequential=True,
             description=(
                 "Look up your own earlier Turns, including those from before a context "
-                "window reset. search takes query and returns the most recent finished "
-                "Turns whose messages contain that text, newest first, 20 at a time; "
-                "pass the returned next_offset as offset to get older matches. "
-                "read takes sequence and returns the messages that Turn added, as a "
-                "JSON text slice; without offset it returns the end of the Turn, and "
-                "next_offset continues forward."
+                "window reset. A Turn is stored as blocks: input, text, thinking, and "
+                "tool (a call together with its result). search takes query and returns "
+                "the matching blocks of finished Turns with a snippet, newest first, 20 "
+                "at a time. list takes turn and returns that Turn's blocks with their "
+                "kind, length, and first line, 50 at a time. read takes turn and block "
+                "and returns that block's text, 8000 characters at a time. Pass the "
+                "returned next_offset as offset to continue."
             ),
         )
         def history(
             ctx: RunContext[AgentTools],
             action: str,
             query: str | None = None,
-            sequence: int | None = None,
+            turn: int | None = None,
+            block: int | None = None,
             offset: int | None = None,
         ) -> Any:
             tools = ctx.deps
@@ -1418,14 +1420,18 @@ class PydanticModelRunner:
                         _required(query, "query", action), offset or 0
                     )
                 )
+            if action == "list":
+                return _guard(
+                    lambda: tools.list_history(
+                        _required(turn, "turn", action), offset or 0
+                    )
+                )
             if action == "read":
                 return _guard(
-                    lambda: (
-                        tools.read_history(_required(sequence, "sequence", action))
-                        if offset is None
-                        else tools.read_history(
-                            _required(sequence, "sequence", action), offset
-                        )
+                    lambda: tools.read_history(
+                        _required(turn, "turn", action),
+                        _required(block, "block", action),
+                        offset or 0,
                     )
                 )
             raise ToolFailed(f"history has no action {action}")

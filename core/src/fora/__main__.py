@@ -213,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     from fora.adapters.files.uploads import DirectoryUploads, decode_image
     from fora.adapters.jsonl.api import HUMAN_ID, Api
     from fora.adapters.jsonl.protocol import Dispatcher
+    from fora.adapters.model.blocks import render_block
     from fora.adapters.model.runner import PydanticModelRunner
     from fora.adapters.sqlite.agent import SqliteAgentStore
     from fora.adapters.sqlite.permissions import SqlitePermissionStore
@@ -283,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             execution=execution,
             agent_directory_for=agent_directory_for,
             decode_image=decode_image,
+            render_block=render_block,
             uploads=uploads,
             reading=store._db.read,
             data_directory=directory,

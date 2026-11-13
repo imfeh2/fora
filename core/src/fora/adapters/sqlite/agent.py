@@ -31,9 +31,9 @@ from fora.core.turn import OVERFLOW_CONTEXT_BYTES, model_error_signature
 from fora.ports.agent import (
     AgentLifecycle,
     AgentRun,
-    HistorySlice,
     ModelRequestHandle,
     RunSummary,
+    TurnBlock,
     TurnEffect,
     WindowState,
 )
@@ -843,70 +843,26 @@ class SqliteAgentStore:
         return self.window_content(agent_id, self.window(agent_id).number)
 
     @reading
-    def read_run_slice(
-        self, agent_id: int, sequence: int, offset: int | None, limit: int
-    ) -> HistorySlice | None:
-        run = first(
+    def run(self, agent_id: int, sequence: int) -> AgentRun | None:
+        row = first(
             self._db.execute(
-                "SELECT sequence, status, started_at, last_saved_at FROM agent_runs"
-                " WHERE agent_id = ? AND sequence = ?",
+                "SELECT * FROM agent_runs WHERE agent_id = ? AND sequence = ?",
                 (agent_id, sequence),
             )
         )
-        if run is None:
-            return None
-        rows = self._db.execute(
-            "SELECT position, char_length FROM agent_blocks INDEXED BY agent_blocks_run"
-            " WHERE agent_id = ? AND sequence = ? ORDER BY position",
-            (agent_id, sequence),
-        )
-        starts = []
-        cursor = 1
-        for row in rows:
-            starts.append(cursor)
-            cursor += int(row["char_length"]) + 1
-        total_length = cursor if rows else 2
-        start = max(total_length - limit, 0) if offset is None else offset
-        if start > total_length:
-            raise DomainError(
-                ErrorCode.INVALID_OFFSET, "History offset exceeds its length"
+        return self._run(row) if row is not None else None
+
+    @reading
+    def turn_blocks(self, agent_id: int, sequence: int) -> tuple[TurnBlock, ...]:
+        return tuple(
+            TurnBlock(sequence, index, Block(row["kind"], str(row["content_json"])))
+            for index, row in enumerate(
+                self._db.execute(
+                    "SELECT kind, content_json FROM agent_blocks INDEXED BY agent_blocks_run"
+                    " WHERE agent_id = ? AND sequence = ? ORDER BY position",
+                    (agent_id, sequence),
+                )
             )
-        end = min(start + limit, total_length)
-        covered = [
-            index
-            for index, row in enumerate(rows)
-            if starts[index] < end
-            and starts[index] + int(row["char_length"]) + 1 > start
-        ]
-        if covered:
-            contents = self._db.execute(
-                "SELECT content_json FROM agent_blocks INDEXED BY agent_blocks_run"
-                " WHERE agent_id = ? AND sequence = ? AND position BETWEEN ? AND ?"
-                " ORDER BY position",
-                (
-                    agent_id,
-                    sequence,
-                    int(rows[covered[0]]["position"]),
-                    int(rows[covered[-1]]["position"]),
-                ),
-            )
-            text = ",".join(str(row["content_json"]) for row in contents)
-            text += "]" if covered[-1] == len(rows) - 1 else ","
-            text_start = starts[covered[0]]
-            if covered[0] == 0:
-                text = "[" + text
-                text_start = 0
-        else:
-            text = "[]"
-            text_start = 0
-        return HistorySlice(
-            sequence=int(run["sequence"]),
-            status=str(run["status"]),
-            started_at=str(run["started_at"]),
-            messages=text[start - text_start : end - text_start],
-            offset=start,
-            total_length=total_length,
-            last_saved_at=run["last_saved_at"],
         )
 
     @reading
@@ -1059,19 +1015,29 @@ class SqliteAgentStore:
         return len(rows)
 
     @reading
-    def search_runs(
-        self, agent_id: int, query: str, *, limit: int = 20, offset: int = 0
-    ) -> tuple[AgentRun, ...]:
+    def search_blocks(
+        self, agent_id: int, query: str, *, limit: int, offset: int
+    ) -> tuple[TurnBlock, ...]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self._db.execute(
-            "SELECT * FROM agent_runs r WHERE r.agent_id = ? AND r.status != 'running'"
-            " AND EXISTS (SELECT 1 FROM agent_blocks m INDEXED BY agent_blocks_run"
-            " WHERE m.agent_id = r.agent_id AND m.sequence = r.sequence"
-            " AND m.content_json LIKE ? ESCAPE '\\')"
-            " ORDER BY r.sequence DESC LIMIT ? OFFSET ?",
+            "SELECT b.sequence, b.kind, b.content_json, b.position - ("
+            "SELECT MIN(f.position) FROM agent_blocks f INDEXED BY agent_blocks_run"
+            " WHERE f.agent_id = b.agent_id AND f.sequence = b.sequence) AS block_index"
+            " FROM agent_blocks b JOIN agent_runs r"
+            " ON r.agent_id = b.agent_id AND r.sequence = b.sequence"
+            " WHERE b.agent_id = ? AND r.status != 'running'"
+            " AND b.content_json LIKE ? ESCAPE '\\'"
+            " ORDER BY b.sequence DESC, b.position DESC LIMIT ? OFFSET ?",
             (agent_id, f"%{escaped}%", limit, offset),
         )
-        return tuple(self._run(row) for row in rows)
+        return tuple(
+            TurnBlock(
+                int(row["sequence"]),
+                int(row["block_index"]),
+                Block(row["kind"], str(row["content_json"])),
+            )
+            for row in rows
+        )
 
     @reading
     def get_settings(self, section: str) -> dict[str, object] | None:

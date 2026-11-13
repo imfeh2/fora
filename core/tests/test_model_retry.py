@@ -27,7 +27,7 @@ from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
 from fora.adapters.model import retry as retry_module
 from fora.adapters.model import runner as runner_module
-from fora.adapters.model.blocks import from_blocks
+from fora.adapters.model.blocks import from_blocks, render_block
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -150,6 +150,7 @@ def world(tmp_path: Path, monkeypatch) -> Iterator[World]:
         execution=execution,
         agent_directory_for=agent_directory,
         decode_image=decode_image,
+        render_block=render_block,
         reading=store._db.read,
         library_tree=DirectoryTree(tmp_path / "library"),
         workspace_tree_for=lambda member_id: DirectoryTree(
