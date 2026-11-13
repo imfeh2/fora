@@ -71,7 +71,6 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    RetryPromptPart,
     SystemPromptPart,
     ToolCallPart,
     ToolReturnPart,
@@ -639,10 +638,7 @@ class LiveModel(WrapperModel):
             message
             for message in messages[response_index + 1 :]
             if isinstance(message, ModelRequest)
-            and any(
-                isinstance(part, ToolReturnPart | RetryPromptPart)
-                for part in message.parts
-            )
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
         ]
         if not related:
             return
@@ -747,14 +743,12 @@ class LiveModel(WrapperModel):
         part = event.part
         status: Literal["completed", "failed", "cancelled"] = (
             "failed"
-            if isinstance(part, RetryPromptPart)
-            or isinstance(part, ToolReturnPart)
-            and part.outcome in ("failed", "denied")
+            if part.outcome in ("failed", "denied", "retried")
             else "cancelled"
-            if isinstance(part, ToolReturnPart) and part.outcome == "interrupted"
+            if part.outcome == "interrupted"
             else "completed"
         )
-        result_parts: list[ToolReturnPart | RetryPromptPart | UserPromptPart] = [part]
+        result_parts: list[ToolReturnPart | UserPromptPart] = [part]
         if event.content is not None:
             result_parts.append(UserPromptPart(event.content))
         self._publish_tool(
@@ -1906,7 +1900,7 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
     answered = {
         part.tool_call_id
         for part in (trailing.parts if trailing is not None else ())
-        if isinstance(part, ToolReturnPart | RetryPromptPart)
+        if isinstance(part, ToolReturnPart)
     }
     parts = [
         ToolReturnPart(
@@ -2050,11 +2044,7 @@ def _merge_requests(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
             )
         ):
             parts = [*last.parts, *message.parts]
-            parts.sort(
-                key=lambda part: (
-                    0 if isinstance(part, ToolReturnPart | RetryPromptPart) else 1
-                )
-            )
+            parts.sort(key=lambda part: 0 if isinstance(part, ToolReturnPart) else 1)
             merged[-1] = replace(
                 last,
                 parts=parts,

@@ -507,7 +507,9 @@ def test_case_14_all_providers_recover_with_the_same_reply(
 
     def provider(**kwargs):
         return providers[api_type](
-            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(request)),
+            http_client=httpx2.AsyncClient(
+                transport=httpx2.MockTransport(request), timeout=None
+            ),
             **kwargs,
         )
 

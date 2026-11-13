@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 from pydantic_ai.messages import (
     ModelResponse,
-    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -86,8 +85,7 @@ def _responder(
             part
             for message in messages
             for part in message.parts
-            if isinstance(part, (ToolReturnPart, RetryPromptPart))
-            and part.tool_name == "organization"
+            if isinstance(part, ToolReturnPart) and part.tool_name == "organization"
         ]
         if answers:
             seen.append(answers[-1])

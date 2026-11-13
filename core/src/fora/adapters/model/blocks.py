@@ -10,11 +10,11 @@ from fora.core.blocks import Block, BlockKind, WindowContent
 from fora.runtime.reminder import HistoryPersistenceError, HistoryValidationError
 
 CALLS = frozenset({"tool-call", "builtin-tool-call"})
-RESULTS = frozenset({"tool-return", "retry-prompt", "builtin-tool-return"})
+RESULTS = frozenset({"tool-return", "builtin-tool-return"})
 OWN_KINDS: dict[str, BlockKind] = {
     "user-prompt": "input",
     "system-prompt": "input",
-    "retry-prompt": "input",
+    "retry-feedback": "input",
     "text": "text",
     "thinking": "thinking",
 }
@@ -146,10 +146,9 @@ def render_block(block: Block) -> str:
         kind = part["part_kind"]
         if kind in CALLS:
             lines.append(f"{part['tool_name']} {_arguments(part.get('args'))}")
-        elif block.kind == "tool" and kind == "retry-prompt":
-            lines.append("Error:\n" + _text(part["content"]))
         elif block.kind == "tool":
-            lines.append("Result:\n" + _text(part["content"]))
+            label = "Result" if part.get("outcome", "success") == "success" else "Error"
+            lines.append(f"{label}:\n" + _text(part["content"]))
         else:
             lines.append(_text(part["content"]))
     return "\n".join(lines)

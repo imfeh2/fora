@@ -7,7 +7,8 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
-    RetryPromptPart,
+    RetryFeedbackPart,
+    RetryInfo,
     TextPart,
     ThinkingPart,
     ToolCallPart,
@@ -45,14 +46,16 @@ WINDOW = [
                 [{"path": "/x.png"}, BinaryContent(b"\x89PNG", media_type="image/png")],
                 tool_call_id="b",
             ),
-            RetryPromptPart("bad argv", tool_name="run", tool_call_id="a"),
+            ToolReturnPart("run", "bad argv", tool_call_id="a", outcome="retried"),
             UserPromptPart("The execution environment changed."),
         ]
     ),
     ModelResponse(parts=[ToolCallPart("run", {"argv": ["pwd"]}, tool_call_id="a")]),
     ModelRequest(parts=[ToolReturnPart("run", "/", tool_call_id="a")]),
     ModelResponse(parts=[TextPart("done")]),
-    ModelRequest(parts=[RetryPromptPart("answer in text")]),
+    ModelRequest(
+        parts=[RetryFeedbackPart("answer in text", retry=RetryInfo("no_output"))]
+    ),
     ModelResponse(parts=[]),
 ]
 
@@ -100,7 +103,7 @@ def test_each_tool_call_shares_a_block_with_its_result() -> None:
         "text",
         "input",
     ]
-    assert parts(content.blocks[3]) == [(1, 2, "tool-call"), (2, 1, "retry-prompt")]
+    assert parts(content.blocks[3]) == [(1, 2, "tool-call"), (2, 1, "tool-return")]
     assert parts(content.blocks[4]) == [(1, 3, "tool-call"), (2, 0, "tool-return")]
     assert parts(content.blocks[6]) == [(3, 0, "tool-call"), (4, 0, "tool-return")]
     assert len(content.message_heads) == len(WINDOW)
@@ -186,3 +189,10 @@ def test_a_structured_result_reads_line_by_line() -> None:
     )
 
     assert render_block(content.blocks[0]) == STRUCTURED
+
+
+def test_a_retried_call_reads_as_an_error() -> None:
+    assert (
+        render_block(to_blocks(WINDOW).blocks[3])
+        == 'run {"argv":["ls"]}\nError:\nbad argv'
+    )
