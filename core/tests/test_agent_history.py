@@ -7,7 +7,7 @@ import pytest
 
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
-from fora.core.blocks import WindowContent
+from fora.core.blocks import Block, WindowContent
 from fora.services.history import History
 
 AGENT = 1
@@ -36,14 +36,16 @@ def message(text: str) -> str:
 
 
 def content_of(messages: list[str]) -> WindowContent:
-    return WindowContent(tuple(messages))
+    return WindowContent(
+        tuple(messages), tuple(Block("input", message) for message in messages)
+    )
 
 
 def stored_rows(store: SqliteAgentStore) -> list[tuple[int, int, str]]:
     return [
         (int(row["position"]), int(row["sequence"]), str(row["content_json"]))
         for row in store._db.execute(
-            "SELECT position, sequence, content_json FROM agent_messages"
+            "SELECT position, sequence, content_json FROM agent_blocks"
             " WHERE agent_id = ? ORDER BY window_number, position",
             (AGENT,),
         )
@@ -64,7 +66,7 @@ def test_the_history_grows_linearly(store: SqliteAgentStore) -> None:
     rows = stored_rows(store)
     assert [content for _, _, content in rows] == history
     assert sum(len(content) for _, _, content in rows) == sum(map(len, history))
-    assert store.current_content(AGENT).messages == tuple(history)
+    assert store.current_content(AGENT) == content_of(history)
 
 
 def test_a_rewritten_tail_keeps_earlier_turns(store: SqliteAgentStore) -> None:
@@ -123,8 +125,10 @@ def test_each_window_keeps_its_own_messages(store: SqliteAgentStore) -> None:
         AGENT, second.sequence, status="completed", content=content_of([message("new")])
     )
 
-    assert store.window_content(AGENT, window.number - 1).messages == (message("old"),)
-    assert store.current_content(AGENT).messages == (message("new"),)
+    assert store.window_content(AGENT, window.number - 1) == content_of(
+        [message("old")]
+    )
+    assert store.current_content(AGENT) == content_of([message("new")])
 
 
 def test_a_turn_reads_back_exactly_what_it_wrote(store: SqliteAgentStore) -> None:

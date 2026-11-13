@@ -22,7 +22,7 @@ from fora.adapters.sqlite.store import (
     reading,
 )
 from fora.adapters.voice.config import VoiceConfig
-from fora.core.blocks import WindowContent
+from fora.core.blocks import Block, WindowContent
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.member import name_key, validate_name
@@ -98,21 +98,34 @@ CREATE TABLE IF NOT EXISTS run_effects (
     created_at TEXT NOT NULL,
     PRIMARY KEY (agent_id, sequence, ordinal)
 );
-CREATE TABLE IF NOT EXISTS agent_messages (
+CREATE TABLE IF NOT EXISTS agent_message_heads (
     agent_id INTEGER NOT NULL,
     window_number INTEGER NOT NULL,
     position INTEGER NOT NULL,
     sequence INTEGER NOT NULL,
+    digest BLOB NOT NULL,
+    content_json TEXT NOT NULL,
+    UNIQUE (agent_id, window_number, position),
+    FOREIGN KEY (agent_id, sequence) REFERENCES agent_runs(agent_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS agent_message_heads_digest
+ON agent_message_heads (agent_id, window_number, position, sequence, digest);
+CREATE TABLE IF NOT EXISTS agent_blocks (
+    agent_id INTEGER NOT NULL,
+    window_number INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    kind TEXT NOT NULL,
     digest BLOB NOT NULL,
     char_length INTEGER NOT NULL,
     content_json TEXT NOT NULL,
     UNIQUE (agent_id, window_number, position),
     FOREIGN KEY (agent_id, sequence) REFERENCES agent_runs(agent_id, sequence)
 );
-CREATE INDEX IF NOT EXISTS agent_messages_digest
-ON agent_messages (agent_id, window_number, position, sequence, digest);
-CREATE INDEX IF NOT EXISTS agent_messages_run
-ON agent_messages (agent_id, sequence, position, char_length);
+CREATE INDEX IF NOT EXISTS agent_blocks_digest
+ON agent_blocks (agent_id, window_number, position, sequence, digest);
+CREATE INDEX IF NOT EXISTS agent_blocks_run
+ON agent_blocks (agent_id, sequence, position, char_length);
 CREATE TABLE IF NOT EXISTS agent_request_payloads (
     digest BLOB PRIMARY KEY,
     content_json TEXT NOT NULL
@@ -500,10 +513,9 @@ class SqliteAgentStore:
             pending_revision=revision,
         )
 
-    def _write_messages(
+    def _write_window(
         self, agent_id: int, sequence: int, content: WindowContent
     ) -> None:
-        messages = content.messages
         run = first(
             self._db.execute(
                 "SELECT window_number FROM agent_runs WHERE agent_id = ? AND sequence = ?",
@@ -513,27 +525,61 @@ class SqliteAgentStore:
         if run is None:
             raise DomainError(ErrorCode.NOT_FOUND, f"Turn {sequence} does not exist")
         window_number = int(run["window_number"])
+        self._write_rows(
+            "agent_message_heads",
+            agent_id,
+            window_number,
+            sequence,
+            [{"content_json": head} for head in content.message_heads],
+        )
+        self._write_rows(
+            "agent_blocks",
+            agent_id,
+            window_number,
+            sequence,
+            [
+                {
+                    "kind": block.kind,
+                    "char_length": len(block.parts),
+                    "content_json": block.parts,
+                }
+                for block in content.blocks
+            ],
+        )
+
+    def _write_rows(
+        self,
+        table: str,
+        agent_id: int,
+        window_number: int,
+        sequence: int,
+        rows: Sequence[dict[str, object]],
+    ) -> None:
         stored = self._db.execute(
-            "SELECT sequence, digest FROM agent_messages INDEXED BY agent_messages_digest"
+            f"SELECT sequence, digest FROM {table} INDEXED BY {table}_digest"
             " WHERE agent_id = ? AND window_number = ? ORDER BY position",
             (agent_id, window_number),
         )
-        digests = [digest(message) for message in messages]
+        digests = [digest(str(row["content_json"])) for row in rows]
         kept = 0
         for row, value in zip(stored, digests, strict=False):
             if row["digest"] != value:
                 break
             kept += 1
-        if kept == len(stored) == len(messages):
+        if kept == len(stored) == len(rows):
             return
         self._db.execute(
-            "DELETE FROM agent_messages WHERE agent_id = ? AND window_number = ?"
+            f"DELETE FROM {table} WHERE agent_id = ? AND window_number = ?"
             " AND position >= ?",
             (agent_id, window_number, kept),
         )
+        if kept == len(rows):
+            return
+        columns = list(rows[0])
         self._db.executemany(
-            "INSERT INTO agent_messages (agent_id, window_number, position, sequence,"
-            " digest, char_length, content_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO {table} (agent_id, window_number, position, sequence,"
+            f" digest, {', '.join(columns)})"
+            f" VALUES (?, ?, ?, ?, ?{', ?' * len(columns)})",
             [
                 (
                     agent_id,
@@ -543,10 +589,9 @@ class SqliteAgentStore:
                     if position < len(stored)
                     else sequence,
                     digests[position],
-                    len(messages[position]),
-                    messages[position],
+                    *(rows[position][column] for column in columns),
                 )
-                for position in range(kept, len(messages))
+                for position in range(kept, len(rows))
             ],
         ).close()
 
@@ -554,7 +599,7 @@ class SqliteAgentStore:
         self, agent_id: int, sequence: int, content: WindowContent
     ) -> None:
         with self._db:
-            self._write_messages(agent_id, sequence, content)
+            self._write_window(agent_id, sequence, content)
             self._db.execute(
                 "UPDATE agent_runs SET last_saved_at = ? WHERE agent_id = ? AND sequence = ?",
                 (self._now(), agent_id, sequence),
@@ -571,7 +616,7 @@ class SqliteAgentStore:
         error: str | None = None,
     ) -> None:
         with self._db:
-            self._write_messages(agent_id, sequence, content)
+            self._write_window(agent_id, sequence, content)
             self._db.execute(
                 "UPDATE agent_runs SET status = ?, completed_at = ?, last_saved_at = ?,"
                 " usage_json = ?, error = ? WHERE agent_id = ? AND sequence = ?",
@@ -778,11 +823,19 @@ class SqliteAgentStore:
             tuple(
                 str(row["content_json"])
                 for row in self._db.execute(
-                    "SELECT content_json FROM agent_messages WHERE agent_id = ?"
+                    "SELECT content_json FROM agent_message_heads WHERE agent_id = ?"
                     " AND window_number = ? ORDER BY position",
                     (agent_id, window_number),
                 )
-            )
+            ),
+            tuple(
+                Block(row["kind"], str(row["content_json"]))
+                for row in self._db.execute(
+                    "SELECT kind, content_json FROM agent_blocks WHERE agent_id = ?"
+                    " AND window_number = ? ORDER BY position",
+                    (agent_id, window_number),
+                )
+            ),
         )
 
     @reading
@@ -803,7 +856,7 @@ class SqliteAgentStore:
         if run is None:
             return None
         rows = self._db.execute(
-            "SELECT position, char_length FROM agent_messages INDEXED BY agent_messages_run"
+            "SELECT position, char_length FROM agent_blocks INDEXED BY agent_blocks_run"
             " WHERE agent_id = ? AND sequence = ? ORDER BY position",
             (agent_id, sequence),
         )
@@ -827,7 +880,7 @@ class SqliteAgentStore:
         ]
         if covered:
             contents = self._db.execute(
-                "SELECT content_json FROM agent_messages INDEXED BY agent_messages_run"
+                "SELECT content_json FROM agent_blocks INDEXED BY agent_blocks_run"
                 " WHERE agent_id = ? AND sequence = ? AND position BETWEEN ? AND ?"
                 " ORDER BY position",
                 (
@@ -1012,7 +1065,7 @@ class SqliteAgentStore:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         rows = self._db.execute(
             "SELECT * FROM agent_runs r WHERE r.agent_id = ? AND r.status != 'running'"
-            " AND EXISTS (SELECT 1 FROM agent_messages m INDEXED BY agent_messages_run"
+            " AND EXISTS (SELECT 1 FROM agent_blocks m INDEXED BY agent_blocks_run"
             " WHERE m.agent_id = r.agent_id AND m.sequence = r.sequence"
             " AND m.content_json LIKE ? ESCAPE '\\')"
             " ORDER BY r.sequence DESC LIMIT ? OFFSET ?",

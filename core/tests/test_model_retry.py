@@ -27,6 +27,7 @@ from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
 from fora.adapters.model import retry as retry_module
 from fora.adapters.model import runner as runner_module
+from fora.adapters.model.blocks import from_blocks
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -110,7 +111,9 @@ class World:
         ]
 
     def history_text(self) -> str:
-        return "[" + ",".join(self.history.current_content(2).messages) + "]"
+        return ModelMessagesTypeAdapter.dump_json(
+            from_blocks(self.history.current_content(2))
+        ).decode()
 
     def expect_reply(self, record) -> None:
         assert record.status == "completed", record.error

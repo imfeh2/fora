@@ -104,6 +104,7 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from fora.adapters.execution.local import DEFAULT_TIMEOUT, MAX_TIMEOUT
+from fora.adapters.model.blocks import from_blocks, to_blocks
 from fora.adapters.model.config import (
     AgentModelConfig,
     ModelCatalog,
@@ -1921,12 +1922,7 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
 
 
 def _decode_history(content: WindowContent) -> list[ModelMessage]:
-    try:
-        return ModelMessagesTypeAdapter.validate_json(
-            "[" + ",".join(content.messages) + "]"
-        )
-    except ValueError as error:
-        raise HistoryValidationError("Stored model history is invalid") from error
+    return from_blocks(content)
 
 
 def _content_version(value: Any) -> str:
@@ -2016,10 +2012,6 @@ def _encode_request_parameters(parameters: ModelRequestParameters) -> str:
     return TypeAdapter(ModelRequestParameters).dump_json(parameters).decode("utf-8")
 
 
-def _encode_messages(messages: Sequence[ModelMessage]) -> tuple[str, ...]:
-    return tuple(_encode_history([message])[1:-1] for message in messages)
-
-
 def _encode_history(messages: Sequence[ModelMessage]) -> str:
     try:
         return ModelMessagesTypeAdapter.dump_json(list(messages)).decode("utf-8")
@@ -2073,12 +2065,10 @@ def _stored_history(
     messages: Sequence[ModelMessage], context_sources: ContextSources | None
 ) -> WindowContent:
     merged = _merge_requests(messages)
-    return WindowContent(
-        _encode_messages(
-            context_sources.snapshot(merged, persistent=True)
-            if context_sources is not None
-            else merged
-        )
+    return to_blocks(
+        context_sources.snapshot(merged, persistent=True)
+        if context_sources is not None
+        else merged
     )
 
 

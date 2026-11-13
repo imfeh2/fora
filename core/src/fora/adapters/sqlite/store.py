@@ -517,7 +517,9 @@ class SqliteStore:
             self._db = LockedConnection(connection, self._path)
             if "messages_json" in {
                 row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
-            }:
+            } or self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_messages'"
+            ):
                 raise RuntimeError(
                     f"{self._path} stores Agent history in the previous layout;"
                     " convert it before starting Fora"

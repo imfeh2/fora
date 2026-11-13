@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 from pydantic_ai.messages import (
-    ModelMessagesTypeAdapter,
     ModelResponse,
     RetryPromptPart,
     TextPart,
@@ -18,6 +17,7 @@ from pydantic_ai.models.function import FunctionModel
 from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
+from fora.adapters.model.blocks import from_blocks
 from fora.adapters.model.runner import PydanticModelRunner
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.store import SqliteStore
@@ -238,9 +238,7 @@ def test_pause_action_on_self_stops_after_tools_finish(world) -> None:
     assert record.error is None
     parts = [
         part
-        for message in ModelMessagesTypeAdapter.validate_json(
-            "[" + ",".join(world.history.current_content(MAIN).messages) + "]"
-        )
+        for message in from_blocks(world.history.current_content(MAIN))
         for part in message.parts
         if isinstance(part, ToolReturnPart) and part.tool_name == "organization"
     ]

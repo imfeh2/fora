@@ -98,9 +98,11 @@ def test_a_window_that_lost_its_first_metadata_still_gets_the_instructions(
     settings: SqliteAgentStore,
 ) -> None:
     _, history = run_turns(settings, [AGENTS, AGENTS])
-    first = json.loads(history.messages[0])
+    first = json.loads(history.message_heads[0])
     first.pop("metadata")
-    damaged = WindowContent((json.dumps(first), *history.messages[1:]))
+    damaged = WindowContent(
+        (json.dumps(first), *history.message_heads[1:]), history.blocks
+    )
 
     sent, _ = run_turns(settings, [AGENTS], damaged)
 
@@ -112,7 +114,7 @@ def test_the_saved_history_has_no_adjacent_requests(
 ) -> None:
     _, history = run_turns(settings, [AGENTS] * 3)
 
-    kinds = [json.loads(message)["kind"] for message in history.messages]
+    kinds = [json.loads(message)["kind"] for message in history.message_heads]
     assert kinds == ["request", "response"] * 3
 
 
