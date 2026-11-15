@@ -517,26 +517,29 @@ def test_files_are_read_through_the_sandbox_of_a_member_without_grants(
     assert execution.read_file(str(note), 100, sandbox=sandbox) == b"Mine.\n"
 
 
-def test_commands_refuse_to_run_while_a_protected_path_is_missing(
-    world: World,
+@linux
+def test_a_rule_on_a_missing_path_applies_once_the_path_exists(
+    sandboxed: World,
 ) -> None:
-    world.tools(OWNER).grant_permissions(
+    sandboxed.tools(OWNER).grant_permissions(
         LEAD,
         [
-            {"sign": "+", "node": ["tools", "run"]},
-            {"sign": "+", "node": ["library", "write"]},
-            {"sign": "-", "node": ["library", "write", "AGENTS.md"]},
+            {"sign": "+", "node": []},
+            {"sign": "-", "node": ["library", "write", "review"]},
         ],
     )
+    lead = sandboxed.tools(LEAD)
+    library = sandboxed.root / "library"
 
-    with pytest.raises(DomainError) as error:
-        world.tools(LEAD).run(["true"])
+    created = lead.run(
+        ["sh", "-c", f"mkdir {library}/review && touch {library}/review/a"]
+    )
+    blocked = lead.run(["touch", f"{library}/review/b"])
 
-    assert error.value.code == ErrorCode.SANDBOX_UNAVAILABLE
-    assert "AGENTS.md" in str(error.value)
-    assert not (world.root / "library" / "AGENTS.md").exists()
-    world.tools(OWNER).write_library("AGENTS.md", "Rules.\n")
-    assert world.tools(LEAD).run(["true"])["exit_code"] == 0
+    assert created["exit_code"] == 0
+    assert (library / "review" / "a").exists()
+    assert blocked["exit_code"] != 0
+    assert not (library / "review" / "b").exists()
 
 
 @linux
@@ -723,6 +726,8 @@ def test_attachments_are_readable_only_in_the_member_s_discussions(
     joined = owner.create_discussion("Joined", [LEAD])["id"]
     other = owner.create_discussion("Other", [REVIEWER])["id"]
     uploads = world.root.resolve() / "uploads"
+    for discussion in (joined, other):
+        (uploads / str(discussion)).mkdir(parents=True)
 
     sandbox = world.tools(LEAD).sandbox(world.deps.execution.snapshot())
 

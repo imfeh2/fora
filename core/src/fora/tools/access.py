@@ -200,7 +200,9 @@ class FileAccess:
         root_access = self.access(root)
         states: dict[Path, Access] = {root: root_access}
         mounts: list[Mount] = []
-        candidates = {real_path(path) for path in self._candidates()}
+        candidates = {
+            path for path in map(real_path, self._candidates()) if path.exists()
+        }
         for path in sorted(
             candidates - {root},
             key=lambda item: (len(item.parts), str(item)),
@@ -214,13 +216,3 @@ class FileAccess:
             if state != inherited:
                 mounts.append(Mount(path, state))
         return Sandbox(root_access, tuple(mounts), self.layout.links, root)
-
-
-def require_protected(sandbox: Sandbox) -> None:
-    missing = [str(path) for path in sandbox.protected() if not path.exists()]
-    if missing:
-        raise DomainError(
-            ErrorCode.SANDBOX_UNAVAILABLE,
-            "Commands cannot run until these paths you may not change exist: "
-            f"{', '.join(missing)}. Ask a Member who may write there to create them.",
-        )

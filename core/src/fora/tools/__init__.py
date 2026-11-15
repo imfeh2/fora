@@ -55,7 +55,6 @@ from fora.tools.access import (
     Layout,
     real_node,
     real_path,
-    require_protected,
 )
 from fora.tools.authorize import Actor, Authorizer, Rights
 from fora.tools.discussion_read import DiscussionReader, integer, read_position
@@ -955,7 +954,6 @@ class AgentTools:
         base = str(self._deps.agent_directory_for(self._actor.member_id))
         cwd = base if cwd is None else execution.resolve_path(cwd, base=base)
         sandbox = files.sandbox
-        require_protected(sandbox)
         try:
             with self._library_updates():
                 result = execution.run(
