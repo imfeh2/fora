@@ -55,7 +55,9 @@ jobs:
 
       - name: Enable sandbox support
         if: runner.os == 'Linux'
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
