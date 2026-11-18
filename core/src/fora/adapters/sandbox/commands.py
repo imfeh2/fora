@@ -11,6 +11,7 @@ from fora.ports.execution import Access, Mount, Sandbox
 
 BUBBLEWRAP_CANDIDATES = ("/usr/bin/bwrap", "/bin/bwrap")
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+SANDBOX_MARKER = "FORA_SANDBOX"
 
 
 def bubblewrap_executable() -> str:
@@ -41,9 +42,10 @@ def linux_command(
         command.extend(("--bind", "/", "/"))
     elif sandbox.root is Access.READ:
         command.extend(("--ro-bind", "/", "/"))
-    command.extend(
-        ("--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid")
-    )
+    command.extend(("--dev", "/dev", "--proc", "/proc", "--unshare-user"))
+    if os.environ.get(SANDBOX_MARKER) != "1":
+        command.append("--unshare-pid")
+    command.extend(("--setenv", SANDBOX_MARKER, "1"))
     if sandbox.root is Access.HIDDEN:
         for link, target in sandbox.links:
             command.extend(("--symlink", target, link.as_posix()))

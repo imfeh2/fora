@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from fora.adapters.execution.local import LocalExecution
+from fora.adapters.sandbox.commands import SANDBOX_MARKER
 from fora.adapters.sandbox.paths import symlinks_on
 from fora.ports.execution import Access, Mount, Sandbox
 
@@ -89,6 +90,10 @@ def test_commands_see_exactly_what_the_plan_allows(
         assert (path / "new").exists() is (state is Access.WRITE)
 
 
+@pytest.mark.skipif(
+    os.environ.get(SANDBOX_MARKER) == "1",
+    reason="inside a sandbox, commands share the enclosing process namespace",
+)
 @pytest.mark.parametrize("root", STATES, ids=lambda root: f"root-{root.name.lower()}")
 def test_commands_cannot_see_processes_outside_the_sandbox(
     execution: LocalExecution, root: Access
@@ -124,3 +129,33 @@ def test_a_program_reached_through_chained_links_starts_in_a_hidden_root(
     result = execution.run([str(venv / "tool")], cwd="/usr", sandbox=sandbox)
 
     assert result.stdout.strip() == "ran", result.stderr
+
+
+@pytest.mark.parametrize("root", STATES, ids=lambda root: f"root-{root.name.lower()}")
+def test_a_sandboxed_command_can_start_another_sandbox(
+    execution: LocalExecution, root: Access
+) -> None:
+    script = (
+        "import subprocess, sys\n"
+        "from fora.adapters.sandbox.commands import linux_command\n"
+        "from fora.ports.execution import Access, Sandbox\n"
+        "command = linux_command(['echo', 'inner'], '/usr', Sandbox(Access.READ, ()))\n"
+        "result = subprocess.run(command, capture_output=True, text=True)\n"
+        "sys.stdout.write(result.stdout + result.stderr)\n"
+    )
+    base = plan(root, {}, execution)
+    readable = {
+        Path("/tmp"),
+        Path(sys.base_prefix),
+        Path(sys.prefix),
+        *map(Path, filter(None, sys.path)),
+    }
+    sandbox = Sandbox(
+        base.root,
+        (*base.mounts, *(Mount(path.resolve(), Access.READ) for path in readable)),
+        (*base.links, *symlinks_on(Path(sys.executable))),
+    )
+
+    result = execution.run([sys.executable, "-c", script], cwd="/usr", sandbox=sandbox)
+
+    assert result.stdout.split() == ["inner"], result.stderr
