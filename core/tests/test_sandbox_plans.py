@@ -4,6 +4,7 @@ import itertools
 import os
 import signal
 import sys
+import time
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -187,3 +188,60 @@ def test_a_hostpid_command_shares_host_processes_and_leaves_background_ones_runn
         os.kill(int(pid), 0)
     finally:
         os.kill(int(pid), signal.SIGKILL)
+
+
+def test_a_background_process_outlives_its_command_and_other_commands_see_it(
+    execution: LocalExecution,
+) -> None:
+    sandbox = plan(Access.READ, {}, execution)
+    started = execution.run(
+        ["sh", "-c", "setsid sleep 60 </dev/null >/dev/null 2>&1 & echo $!"],
+        cwd="/usr",
+        sandbox=sandbox,
+    )
+    pid = started.stdout.strip()
+
+    seen = execution.run(
+        ["sh", "-c", f"test -e /proc/{pid} && echo alive; kill {pid}"],
+        cwd="/usr",
+        sandbox=sandbox,
+    )
+
+    assert seen.stdout.split() == ["alive"], seen.stderr
+
+
+def _running(marker: str) -> bool:
+    for entry in Path("/proc").iterdir():
+        try:
+            if marker in (entry / "cmdline").read_bytes().decode(errors="replace"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _settles(marker: str, running: bool) -> bool:
+    deadline = time.monotonic() + 5
+    while _running(marker) is not running and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return _running(marker) is running
+
+
+@pytest.mark.skipif(
+    os.environ.get(SANDBOX_MARKER) == "1",
+    reason="inside a sandbox, commands share the enclosing process namespace",
+)
+def test_closing_the_execution_environment_ends_background_processes() -> None:
+    environment = LocalExecution()
+    marker = f"{os.getpid() % 10000 + 50000}"
+    try:
+        environment.run(
+            ["sh", "-c", f"setsid sleep {marker} </dev/null >/dev/null 2>&1 &"],
+            cwd="/usr",
+            sandbox=plan(Access.READ, {}, environment),
+        )
+        assert _settles(f"sleep\0{marker}", running=True)
+    finally:
+        environment.close()
+
+    assert _settles(f"sleep\0{marker}", running=False)

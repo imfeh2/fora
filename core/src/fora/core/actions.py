@@ -69,10 +69,9 @@ BUILTIN: tuple[Action, ...] = (
     Action(
         TOOLS_HOSTPID,
         None,
-        "Let commands share the host's processes: background processes keep "
-        "running after their command exits, and commands can see and signal "
-        "every process of the same user, Fora included. Only Linux keeps "
-        "commands apart without it.",
+        "Let commands share the host's processes: they can see and signal "
+        "every process of the same user, Fora included. Without it, Linux "
+        "commands share processes only with other Members' commands.",
     ),
     Action(DISCUSSION_CREATE, None, "Create Discussions."),
     Action(DISCUSSION_MEMBERS, "discussion", "Change who belongs to a Discussion."),

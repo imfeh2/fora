@@ -10,6 +10,7 @@ from fora.core.errors import DomainError
 from fora.ports.execution import Access, Mount, Sandbox
 
 BUBBLEWRAP_CANDIDATES = ("/usr/bin/bwrap", "/bin/bwrap")
+NSENTER_CANDIDATES = ("/usr/bin/nsenter", "/bin/nsenter")
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 SANDBOX_MARKER = "FORA_SANDBOX"
 
@@ -27,6 +28,41 @@ def bubblewrap_executable() -> str:
     return str(Path(found).resolve())
 
 
+def nsenter_executable() -> str:
+    for candidate in NSENTER_CANDIDATES:
+        if Path(candidate).is_file():
+            return candidate
+    found = shutil.which("nsenter")
+    if found is None:
+        raise DomainError(
+            ErrorCode.SANDBOX_UNAVAILABLE,
+            "nsenter is required to keep commands apart from the host's processes",
+        )
+    return str(Path(found).resolve())
+
+
+def namespace_command(info_fd: int) -> list[str]:
+    return [
+        bubblewrap_executable(),
+        "--bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--unshare-user",
+        "--unshare-pid",
+        "--as-pid-1",
+        "--info-fd",
+        str(info_fd),
+        "--",
+        "sh",
+        "-c",
+        "echo ready && cat",
+    ]
+
+
 def linux_command(
     argv: Sequence[str],
     cwd: Path | str,
@@ -34,17 +70,30 @@ def linux_command(
     *,
     bwrap: str | None = None,
     root: bool | None = None,
+    namespace: int | None = None,
 ) -> list[str]:
     if root is None:
         root = hasattr(os, "geteuid") and os.geteuid() == 0
-    command = [bwrap or bubblewrap_executable(), "--die-with-parent"]
+    command = (
+        [
+            nsenter_executable(),
+            "--target",
+            str(namespace),
+            "--user",
+            "--pid",
+            "--mount",
+            "--preserve-credentials",
+            "--",
+        ]
+        if namespace is not None
+        else []
+    )
+    command.extend((bwrap or bubblewrap_executable(), "--die-with-parent"))
     if sandbox.root is Access.WRITE:
         command.extend(("--bind", "/", "/"))
     elif sandbox.root is Access.READ:
         command.extend(("--ro-bind", "/", "/"))
     command.extend(("--dev", "/dev", "--proc", "/proc", "--unshare-user"))
-    if not sandbox.hostpid and os.environ.get(SANDBOX_MARKER) != "1":
-        command.append("--unshare-pid")
     command.extend(("--setenv", SANDBOX_MARKER, "1"))
     if sandbox.root is Access.HIDDEN:
         for link, target in sandbox.links:

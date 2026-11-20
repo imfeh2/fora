@@ -182,8 +182,9 @@ class LocalExecution:
             )
         if self._backend.isolates_processes and not plan.hostpid:
             text += (
-                "\nEvery process a command starts ends when the command exits, "
-                "background ones included; tools:hostpid keeps them running."
+                "\nCommands of every Member share one set of processes, apart "
+                "from the host's. Background processes keep running after their "
+                "command exits, until Fora stops."
             )
         return text
 

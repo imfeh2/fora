@@ -697,6 +697,10 @@ def test_commands_share_host_processes_only_with_hostpid(sandboxed: World) -> No
 
 
 @linux
+@pytest.mark.skipif(
+    os.environ.get(SANDBOX_MARKER) == "1",
+    reason="inside a sandbox, commands share the enclosing process namespace",
+)
 def test_the_environment_says_when_background_processes_end(
     sandboxed: World,
 ) -> None:
@@ -704,7 +708,7 @@ def test_the_environment_says_when_background_processes_end(
         LEAD, [{"sign": "+", "node": ["tools", "run"]}, *system_reads()]
     )
     execution = sandboxed.deps.execution.snapshot()
-    note = "tools:hostpid keeps them running"
+    note = "until Fora stops"
 
     before = execution.describe_environment(
         (), sandboxed.tools(LEAD).sandbox(execution)
@@ -716,6 +720,37 @@ def test_the_environment_says_when_background_processes_end(
 
     assert note in before
     assert note not in after
+
+
+@linux
+def test_a_command_cannot_write_through_another_members_process(
+    sandboxed: World,
+) -> None:
+    review = sandboxed.project / "review"
+    review.mkdir()
+    base = [{"sign": "+", "node": ["tools", "run"]}, *system_reads()]
+    sandboxed.tools(OWNER).grant_permissions(
+        REVIEWER, [*base, path_entry("+", "write", review)]
+    )
+    sandboxed.tools(OWNER).grant_permissions(LEAD, base)
+    started = sandboxed.tools(REVIEWER).run(
+        ["sh", "-c", "setsid sleep 60 </dev/null >/dev/null 2>&1 & echo $!"]
+    )
+    pid = started["stdout"].strip()
+
+    result = sandboxed.tools(LEAD).run(
+        [
+            "sh",
+            "-c",
+            (
+                f"touch /proc/{pid}/root{review}/forged 2>/dev/null; "
+                f"test -e /proc/{pid} && echo sees; kill {pid} && echo stopped"
+            ),
+        ]
+    )
+
+    assert result["stdout"].split() == ["sees", "stopped"], result["stderr"]
+    assert not (review / "forged").exists()
 
 
 def test_viewing_a_hidden_file_is_refused(world: World) -> None:
