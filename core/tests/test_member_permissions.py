@@ -14,7 +14,7 @@ from fora.adapters.execution.manager import ExecutionManager
 from fora.adapters.files.tree import DirectoryTree
 from fora.adapters.files.uploads import decode_image
 from fora.adapters.model.blocks import render_block
-from fora.adapters.sandbox.commands import linux_command, macos_profile
+from fora.adapters.sandbox.commands import SANDBOX_MARKER, linux_command, macos_profile
 from fora.adapters.sandbox.paths import helper_directories
 from fora.adapters.sqlite.agent import SqliteAgentStore
 from fora.adapters.sqlite.permissions import SqlitePermissionStore
@@ -672,6 +672,50 @@ def test_sandboxed_helpers_can_import_fora() -> None:
     source = Path(fora.__file__).resolve().parent.parent
 
     assert source in helper_directories()
+
+
+@linux
+@pytest.mark.skipif(
+    os.environ.get(SANDBOX_MARKER) == "1",
+    reason="inside a sandbox, commands share the enclosing process namespace",
+)
+def test_commands_share_host_processes_only_with_hostpid(sandboxed: World) -> None:
+    sandboxed.tools(OWNER).grant_permissions(
+        LEAD, [{"sign": "+", "node": ["tools", "run"]}, *system_reads()]
+    )
+    lead = sandboxed.tools(LEAD)
+    script = ["sh", "-c", f"test -e /proc/{os.getpid()} && echo host"]
+
+    before = lead.run(script)["stdout"].split()
+    sandboxed.tools(OWNER).grant_permissions(
+        LEAD, [{"sign": "+", "node": ["tools", "hostpid"]}]
+    )
+    after = lead.run(script)["stdout"].split()
+
+    assert before == []
+    assert after == ["host"]
+
+
+@linux
+def test_the_environment_says_when_background_processes_end(
+    sandboxed: World,
+) -> None:
+    sandboxed.tools(OWNER).grant_permissions(
+        LEAD, [{"sign": "+", "node": ["tools", "run"]}, *system_reads()]
+    )
+    execution = sandboxed.deps.execution.snapshot()
+    note = "tools:hostpid keeps them running"
+
+    before = execution.describe_environment(
+        (), sandboxed.tools(LEAD).sandbox(execution)
+    )
+    sandboxed.tools(OWNER).grant_permissions(
+        LEAD, [{"sign": "+", "node": ["tools", "hostpid"]}]
+    )
+    after = execution.describe_environment((), sandboxed.tools(LEAD).sandbox(execution))
+
+    assert note in before
+    assert note not in after
 
 
 def test_viewing_a_hidden_file_is_refused(world: World) -> None:

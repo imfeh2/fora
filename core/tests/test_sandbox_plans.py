@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import itertools
 import os
+import signal
 import sys
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -159,3 +161,29 @@ def test_a_sandboxed_command_can_start_another_sandbox(
     result = execution.run([sys.executable, "-c", script], cwd="/usr", sandbox=sandbox)
 
     assert result.stdout.split() == ["inner"], result.stderr
+
+
+@pytest.mark.parametrize("root", STATES, ids=lambda root: f"root-{root.name.lower()}")
+def test_a_hostpid_command_shares_host_processes_and_leaves_background_ones_running(
+    execution: LocalExecution, root: Access
+) -> None:
+    shared = replace(plan(root, {}, execution), hostpid=True)
+    result = execution.run(
+        [
+            "sh",
+            "-c",
+            (
+                f"test -e /proc/{os.getpid()} && echo host; "
+                "setsid sleep 60 </dev/null >/dev/null 2>&1 & echo $!"
+            ),
+        ],
+        cwd="/usr",
+        sandbox=shared,
+    )
+
+    host, pid = result.stdout.split()
+    try:
+        assert host == "host", result.stderr
+        os.kill(int(pid), 0)
+    finally:
+        os.kill(int(pid), signal.SIGKILL)

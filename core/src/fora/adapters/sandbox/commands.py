@@ -43,7 +43,7 @@ def linux_command(
     elif sandbox.root is Access.READ:
         command.extend(("--ro-bind", "/", "/"))
     command.extend(("--dev", "/dev", "--proc", "/proc", "--unshare-user"))
-    if os.environ.get(SANDBOX_MARKER) != "1":
+    if not sandbox.hostpid and os.environ.get(SANDBOX_MARKER) != "1":
         command.append("--unshare-pid")
     command.extend(("--setenv", SANDBOX_MARKER, "1"))
     if sandbox.root is Access.HIDDEN:

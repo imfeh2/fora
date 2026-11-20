@@ -180,6 +180,11 @@ class LocalExecution:
             text += "\nReadable directories (nothing else exists):\n" + "\n".join(
                 f"- {item}" for item in readable
             )
+        if self._backend.isolates_processes and not plan.hostpid:
+            text += (
+                "\nEvery process a command starts ends when the command exits, "
+                "background ones included; tools:hostpid keeps them running."
+            )
         return text
 
     def _resolve_cwd(self, cwd: str | None) -> Path:

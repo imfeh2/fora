@@ -64,6 +64,10 @@ class ExecutionBackend:
         self._enforce = enforce
         self.name = sys.platform
 
+    @property
+    def isolates_processes(self) -> bool:
+        return False
+
     def wrap(self, argv: Sequence[str], cwd: Path, sandbox: Sandbox) -> list[str]:
         raise DomainError(
             ErrorCode.SANDBOX_UNAVAILABLE,
@@ -118,6 +122,10 @@ class ExecutionBackend:
 
 class LinuxBackend(ExecutionBackend):
     restricts_reads = True
+
+    @property
+    def isolates_processes(self) -> bool:
+        return self._enforce
 
     def wrap(self, argv: Sequence[str], cwd: Path, sandbox: Sandbox) -> list[str]:
         return linux_command(argv, cwd, sandbox)

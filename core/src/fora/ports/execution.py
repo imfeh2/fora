@@ -40,6 +40,7 @@ class Sandbox:
     mounts: tuple[Mount, ...] = ()
     links: tuple[tuple[Path, str], ...] = ()
     anchor: Path = Path("/")
+    hostpid: bool = False
 
     def writable(self) -> tuple[Path, ...]:
         rooted = (self.anchor,) if self.root is Access.WRITE else ()

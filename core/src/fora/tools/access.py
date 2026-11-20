@@ -5,7 +5,13 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
-from fora.core.actions import FILES_READ, FILES_WRITE, LIBRARY_WRITE, WORKSPACE_READ
+from fora.core.actions import (
+    FILES_READ,
+    FILES_WRITE,
+    LIBRARY_WRITE,
+    TOOLS_HOSTPID,
+    WORKSPACE_READ,
+)
 from fora.core.error_codes import ErrorCode
 from fora.core.errors import DomainError
 from fora.core.permissions import Node
@@ -215,4 +221,10 @@ class FileAccess:
             states[path] = state
             if state != inherited:
                 mounts.append(Mount(path, state))
-        return Sandbox(root_access, tuple(mounts), self.layout.links, root)
+        return Sandbox(
+            root_access,
+            tuple(mounts),
+            self.layout.links,
+            root,
+            hostpid=self.rights.allows(TOOLS_HOSTPID),
+        )

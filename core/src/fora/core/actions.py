@@ -27,6 +27,7 @@ FILES_WRITE: Node = ("files", "write")
 LIBRARY_WRITE: Node = ("library", "write")
 WORKSPACE_READ: Node = ("workspace", "read")
 TOOLS_RUN: Node = ("tools", "run")
+TOOLS_HOSTPID: Node = ("tools", "hostpid")
 DISCUSSION_CREATE: Node = ("discussion", "create")
 DISCUSSION_MEMBERS: Node = ("discussion", "members")
 DISCUSSION_ARCHIVE: Node = ("discussion", "archive")
@@ -64,6 +65,14 @@ BUILTIN: tuple[Action, ...] = (
         None,
         "Run commands. Commands can write only where the Member's write "
         "permissions allow.",
+    ),
+    Action(
+        TOOLS_HOSTPID,
+        None,
+        "Let commands share the host's processes: background processes keep "
+        "running after their command exits, and commands can see and signal "
+        "every process of the same user, Fora included. Only Linux keeps "
+        "commands apart without it.",
     ),
     Action(DISCUSSION_CREATE, None, "Create Discussions."),
     Action(DISCUSSION_MEMBERS, "discussion", "Change who belongs to a Discussion."),
