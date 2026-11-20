@@ -52,12 +52,7 @@ def read_file(path: str, max_bytes: int) -> int:
         elif info.st_size > max_bytes:
             failure = "file_too_large"
         else:
-            flags = os.O_RDONLY
-            if os.name == "nt":
-                flags |= getattr(os, "O_BINARY", 0)
-            else:
-                flags |= getattr(os, "O_NONBLOCK", 0)
-            descriptor = os.open(path, flags)
+            descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
             opened = os.fstat(descriptor)
             if not stat.S_ISREG(opened.st_mode):
                 failure = "not_regular_file"

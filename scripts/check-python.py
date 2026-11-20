@@ -100,10 +100,8 @@ def assert_answered(frames: list[dict[str, Any]]) -> None:
 def check_commands() -> None:
     scripts = Path(sys.executable).parent
     for name in ("fora", "fora-web"):
-        executable = scripts / f"{name}.exe"
-        path = executable if executable.exists() else scripts / name
         completed = subprocess.run(
-            [str(path), "--help"],
+            [str(scripts / name), "--help"],
             capture_output=True,
             text=True,
             timeout=TIMEOUT,

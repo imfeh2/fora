@@ -29,7 +29,7 @@ from fora.tools.authorize import Actor, Authorizer
 OWNER = 1
 LEAD = 2
 REVIEWER = 3
-SYSTEM = [] if os.name == "nt" else ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"]
+SYSTEM = ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"]
 linux = pytest.mark.skipif(
     sys.platform != "linux", reason="the bubblewrap sandbox runs on Linux"
 )

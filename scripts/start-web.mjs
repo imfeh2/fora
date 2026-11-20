@@ -2,8 +2,6 @@ import { resolve } from "node:path";
 import { root, run } from "./process.mjs";
 
 const environment = resolve(root, "dist", "web-environment");
-const scripts = process.platform === "win32" ? "Scripts" : "bin";
-const extension = process.platform === "win32" ? ".exe" : "";
 
 run("pnpm", ["build:static"]);
 run(
@@ -20,7 +18,4 @@ run(
   ],
   { env: { ...process.env, UV_PROJECT_ENVIRONMENT: environment } },
 );
-run(
-  resolve(environment, scripts, `fora-web${extension}`),
-  process.argv.slice(2),
-);
+run(resolve(environment, "bin", "fora-web"), process.argv.slice(2));

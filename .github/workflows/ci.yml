@@ -27,8 +27,6 @@ jobs:
         include:
           - name: Linux x64
             os: ubuntu-latest
-          - name: Windows x64
-            os: windows-latest
           - name: macOS arm64
             os: macos-15
           - name: macOS x64
@@ -82,7 +80,6 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install actionlint
-        shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/actionlint"
           curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash -o "$RUNNER_TEMP/download-actionlint.bash"

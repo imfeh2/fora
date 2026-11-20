@@ -43,11 +43,7 @@ pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher
         }
     } else {
         Launcher {
-            program: resources.join(if cfg!(windows) {
-                "core/fora.exe"
-            } else {
-                "core/fora"
-            }),
+            program: resources.join("core/fora"),
             args: Vec::new(),
             env,
         }
@@ -121,12 +117,6 @@ fn spawn_with_timeout(
         .stderr(Stdio::piped());
     if let Some(directory) = log.directory() {
         command.env("FORA_DATA_DIR", directory);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = command.spawn().map_err(|error| {
         let message = format!("Failed to start Fora: {error}");
@@ -253,7 +243,6 @@ fn read_stdout(
     }
 }
 
-#[cfg(unix)]
 fn executable_status(path: &Path) -> String {
     use std::os::unix::fs::PermissionsExt;
     format!(
@@ -261,23 +250,6 @@ fn executable_status(path: &Path) -> String {
         path.metadata()
             .map(|value| value.is_file() && value.permissions().mode() & 0o111 != 0)
     )
-}
-
-#[cfg(windows)]
-fn executable_status(path: &Path) -> String {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::GetBinaryTypeW;
-    let path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let mut kind = 0;
-    if unsafe { GetBinaryTypeW(path.as_ptr(), &mut kind) } != 0 {
-        format!("binary_type={kind}; CreateProcess checks execute access")
-    } else {
-        format!("binary_check_error={}", std::io::Error::last_os_error())
-    }
 }
 
 pub(crate) fn monitor_kernel(child: Arc<Mutex<Option<KernelProcess>>>, log: Arc<AppLog>) {

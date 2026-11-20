@@ -7,8 +7,6 @@ const bundled = resolve(root, "app", "core");
 const dist = resolve(core, "dist");
 const work = resolve(core, "build");
 
-const extension = process.platform === "win32" ? ".exe" : "";
-
 run(
   "uv",
   [
@@ -32,5 +30,5 @@ run(
 rmSync(bundled, { force: true, recursive: true });
 cpSync(resolve(dist, "fora"), bundled, { recursive: true });
 
-const executable = resolve(bundled, `fora${extension}`);
+const executable = resolve(bundled, "fora");
 process.stdout.write(`${executable}\n`);

@@ -139,12 +139,7 @@ mod tests {
     #[test]
     fn bundled_launcher_runs_the_packaged_kernel() {
         let launcher = launcher(false, Path::new("repo/core"), Path::new("resources"));
-        let expected = if cfg!(windows) {
-            "core/fora.exe"
-        } else {
-            "core/fora"
-        };
-        assert_eq!(launcher.program, Path::new("resources").join(expected));
+        assert_eq!(launcher.program, Path::new("resources").join("core/fora"));
         assert!(launcher.args.is_empty());
     }
 

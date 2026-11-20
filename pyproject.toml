@@ -1,2 +1,5 @@
+[tool.uv]
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
+
 [tool.uv.workspace]
 members = ["core", "web"]

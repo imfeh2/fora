@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 
 from fora.adapters.execution.editing import edit_file
 from fora.adapters.execution.platforms import create_backend, entrypoint
@@ -97,7 +97,7 @@ class LocalExecution:
         return Sandbox(Access.READ)
 
     def resolve_path(self, value: str, *, base: str) -> str:
-        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+        if PurePosixPath(value).is_absolute():
             return value
         return str(Path(base) / value)
 
@@ -135,15 +135,12 @@ class LocalExecution:
     def close(self, *, deadline: float | None = None) -> None:
         deadline = time.monotonic() + 5 if deadline is None else deadline
         self._closed = True
-        if self._backend.manages_cleanup:
-            self._backend.close(deadline=deadline)
-            return
         with self._lock:
             errors: list[Exception] = []
             for process in self._processes:
                 try:
                     self._backend.terminate(process)
-                except (OSError, subprocess.TimeoutExpired, ExceptionGroup) as error:
+                except OSError as error:
                     errors.append(error)
             try:
                 self._backend.close(deadline=deadline)

@@ -183,9 +183,3 @@ def macos_profile(sandbox: Sandbox) -> tuple[str, list[str]]:
 def macos_command(argv: Sequence[str], sandbox: Sandbox) -> list[str]:
     profile, parameters = macos_profile(sandbox)
     return [SANDBOX_EXEC, "-p", profile, *parameters, "--", *argv]
-
-
-def windows_command(
-    sid: str, argv: Sequence[str], entrypoint: Sequence[str]
-) -> list[str]:
-    return [*entrypoint, "--windows-write-sandbox", sid, "--", *argv]

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-import sys
 import warnings
 from io import BytesIO
 from pathlib import Path
@@ -105,12 +104,11 @@ class DirectoryUploads:
                 image = decode_image(source.read(MAX_IMAGE_BYTES + 1))
             media_type, width, height = image.media_type, image.width, image.height
         os.replace(temporary, stored)
-        if sys.platform != "win32":
-            descriptor = os.open(Path(stored).parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+        descriptor = os.open(Path(stored).parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
         return Attachment(
             upload.id,
             upload.discussion_id,

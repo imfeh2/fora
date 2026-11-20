@@ -50,9 +50,6 @@ jobs:
           - name: Linux x64
             os: ubuntu-latest
             platform: linux-x64
-          - name: Windows x64
-            os: windows-latest
-            platform: windows-x64
           - name: macOS arm64
             os: macos-15
             platform: macos-arm64
@@ -129,9 +126,6 @@ jobs:
           - name: Linux x64
             os: ubuntu-latest
             platform: linux-x64
-          - name: Windows x64
-            os: windows-latest
-            platform: windows-x64
           - name: macOS arm64
             os: macos-15
             platform: macos-arm64
@@ -156,12 +150,10 @@ jobs:
         run: cargo build -p fora-cli --bin fora-cli --release --locked
 
       - name: Prepare CLI
-        env:
-          CLI_EXTENSION: ${{ runner.os == 'Windows' && '.exe' || '' }}
         run: |
           mkdir -p release
-          cp "target/release/fora-cli${CLI_EXTENSION}" \
-            "release/fora-cli-${GITHUB_REF_NAME}-${{ matrix.platform }}${CLI_EXTENSION}"
+          cp target/release/fora-cli \
+            "release/fora-cli-${GITHUB_REF_NAME}-${{ matrix.platform }}"
 
       - name: Upload CLI
         env:
